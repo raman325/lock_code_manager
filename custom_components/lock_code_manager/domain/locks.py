@@ -17,6 +17,7 @@ from homeassistant.helpers.target import (
     async_extract_referenced_entity_ids,
 )
 
+from ..const import DOMAIN
 from ..providers import BaseLock, resolve_provider_class_for_entity
 from .exceptions import UnclaimedLockError
 from .queries import iter_loaded_lcm_entries
@@ -29,10 +30,10 @@ def async_create_lock_instance(
     hass: HomeAssistant,
     dev_reg: dr.DeviceRegistry,
     ent_reg: er.EntityRegistry,
-    config_entry: ConfigEntry,
+    config_entry: ConfigEntry | None,
     lock_entity_id: str,
 ) -> BaseLock:
-    """Generate lock from config entry."""
+    """Build the provider for ``lock_entity_id``; ``config_entry`` names it in logs."""
     lock_entry = ent_reg.async_get(lock_entity_id)
     assert lock_entry
     lock_config_entry = hass.config_entries.async_get_entry(lock_entry.config_entry_id)
@@ -46,9 +47,8 @@ def async_create_lock_instance(
         )
     lock = lock_cls(hass, dev_reg, ent_reg, lock_config_entry, lock_entry)
     _LOGGER.debug(
-        "%s (%s): Created lock instance %s",
-        config_entry.entry_id,
-        config_entry.title,
+        "%s: Created lock instance %s",
+        config_entry.entry_id if config_entry else DOMAIN,
         lock,
     )
     return lock

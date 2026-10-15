@@ -27,6 +27,7 @@ from typing import Literal
 
 from homeassistant.config_entries import ConfigEntry
 
+from ..const import PENDING_WRITE_TTL
 from ..domain.credentials import (
     Credential,
     CredentialRef,
@@ -64,6 +65,9 @@ class SchlageLock(BaseLock):
     coordinator sees ``SlotCredential.unreadable()`` for occupied slots
     and ``SlotCredential.empty()`` for cleared slots.
     """
+
+    # The cloud reads back the table from before a write for a while (#1083).
+    read_lag = PENDING_WRITE_TTL
 
     # Guards the initial auto-tag pass: skips re-tagging on reconnects so a
     # drifted device list cannot produce double-tag / rename storms. Reset

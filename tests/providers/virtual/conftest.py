@@ -19,6 +19,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 from ...common import user_subentries
@@ -56,7 +57,7 @@ async def virtual_lock(hass: HomeAssistant) -> VirtualLock:
         None,
         lock_entity,
     )
-    await lock.async_setup_internal(config_entry)
+    await lock.async_setup_internal(config_entry, _Coordinator(ProviderPort(lock)))
     return lock
 
 
@@ -95,7 +96,7 @@ async def virtual_lock_with_slots(hass: HomeAssistant) -> VirtualLock:
         None,
         lock_entity,
     )
-    await lock.async_setup_internal(config_entry)
+    await lock.async_setup_internal(config_entry, _Coordinator(ProviderPort(lock)))
     return lock
 
 

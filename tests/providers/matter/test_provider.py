@@ -19,6 +19,7 @@ from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
@@ -287,13 +288,14 @@ async def test_setup_internal_unsupported_lock(
     """
     mock_get_lock_info = AsyncMock(return_value={"supports_user_management": False})
     with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
-        await matter_lock.async_setup_internal(simple_lcm_config_entry)
+        await matter_lock.async_setup_internal(
+            simple_lcm_config_entry, _Coordinator(ProviderPort(matter_lock))
+        )
 
     assert matter_lock._setup_succeeded is False
     assert matter_lock.coordinator is not None
     assert matter_lock._setup_complete.is_set()
 
-    await matter_lock.coordinator.async_shutdown()
     await matter_lock.async_unload(False)
 
 
@@ -310,12 +312,13 @@ async def test_setup_internal_no_pin_support(
         }
     )
     with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
-        await matter_lock.async_setup_internal(simple_lcm_config_entry)
+        await matter_lock.async_setup_internal(
+            simple_lcm_config_entry, _Coordinator(ProviderPort(matter_lock))
+        )
 
     assert matter_lock._setup_succeeded is False
     assert matter_lock.coordinator is not None
 
-    await matter_lock.coordinator.async_shutdown()
     await matter_lock.async_unload(False)
 
 
@@ -527,7 +530,9 @@ async def test_setup_internal_client_unavailable(
     ``matter_lock_simple`` has no device, so the owning client never
     resolves -- the natural client-unavailable state.
     """
-    await matter_lock_simple.async_setup_internal(simple_lcm_config_entry)
+    await matter_lock_simple.async_setup_internal(
+        simple_lcm_config_entry, _Coordinator(ProviderPort(matter_lock_simple))
+    )
     assert matter_lock_simple._capabilities_cache is None
 
 
@@ -539,12 +544,13 @@ async def test_setup_internal_caps_service_validation_error(
     """ServiceValidationError from get_lock_info logs and continues."""
     mock_get_lock_info = AsyncMock(side_effect=ServiceValidationError("bad input"))
     with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
-        await matter_lock.async_setup_internal(simple_lcm_config_entry)
+        await matter_lock.async_setup_internal(
+            simple_lcm_config_entry, _Coordinator(ProviderPort(matter_lock))
+        )
     assert matter_lock._capabilities_cache is None
     # A failed setup is retried: let it go before the test ends.
     await matter_lock.async_unload(False)
     assert matter_lock.coordinator is not None
-    await matter_lock.coordinator.async_shutdown()
 
 
 async def test_setup_internal_caps_communication_error(
@@ -558,12 +564,13 @@ async def test_setup_internal_caps_communication_error(
         # async_get_capabilities maps HomeAssistantError → LockDisconnected;
         # async_setup_internal catches that and logs a warning so the
         # coordinator can be created and retry once the lock comes online.
-        await matter_lock.async_setup_internal(simple_lcm_config_entry)
+        await matter_lock.async_setup_internal(
+            simple_lcm_config_entry, _Coordinator(ProviderPort(matter_lock))
+        )
     assert matter_lock._capabilities_cache is None
     # A failed setup is retried: let it go before the test ends.
     await matter_lock.async_unload(False)
     assert matter_lock.coordinator is not None
-    await matter_lock.coordinator.async_shutdown()
 
 
 async def test_require_client_and_node_no_client(

@@ -7,14 +7,12 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import ATTR_CODE
-from .domain.coordinator import LockUsercodeUpdateCoordinator
-from .domain.credentials import pin_address
+from .core.slot import Holds, Seen, Status
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.queries import subentry_id_for_slot
-from .entity import BaseLockCodeManagerCodeSlotPerLockEntity
+from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, LockWorkerView
 from .providers import BaseLock
 
 
@@ -30,13 +28,10 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ) -> None:
         """Add code slot sensor entities for slot."""
-        coordinator = lock.coordinator
-        if coordinator is None:
-            return
         async_add_entities(
             [
                 LockCodeManagerCodeSlotSensorEntity(
-                    hass, ent_reg, config_entry, lock, coordinator, slot_num
+                    hass, ent_reg, config_entry, lock, slot_num
                 )
             ],
             True,
@@ -52,11 +47,16 @@ async def async_setup_entry(
 
 
 class LockCodeManagerCodeSlotSensorEntity(
+    LockWorkerView,
     BaseLockCodeManagerCodeSlotPerLockEntity,
     SensorEntity,
-    CoordinatorEntity[LockUsercodeUpdateCoordinator],
 ):
-    """Code slot sensor entity for lock code manager."""
+    """
+    What the lock holds in the slot: a PIN, or nothing.
+
+    A lock that hides its codes shows the configured PIN once the write is
+    trusted (the slot is in sync), and unknown until then.
+    """
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
@@ -66,46 +66,36 @@ class LockCodeManagerCodeSlotSensorEntity(
         ent_reg: er.EntityRegistry,
         config_entry: LockCodeManagerConfigEntry,
         lock: BaseLock,
-        coordinator: LockUsercodeUpdateCoordinator,
         slot_num: int,
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
             self, hass, ent_reg, config_entry, lock, slot_num, ATTR_CODE
         )
-        CoordinatorEntity.__init__(self, coordinator)
 
     @property
     def native_value(self) -> str | None:
-        """Return native value."""
-        credential = self.coordinator.credential(pin_address(int(self.slot_num)))
-        if credential is None:
+        """Return what the lock holds, as far as it is known."""
+        if (slot := self._core_slot()) is None:
             return None
-        if credential.is_empty:
+        if isinstance(slot.seen, Holds):
+            return slot.seen.pin
+        if slot.seen is Seen.EMPTY:
             return ""
-        if credential.is_readable:
-            return credential.readable_pin
-        # Unreadable code: fall back to the configured PIN so the sensor still
-        # exposes the slot's intended value to consumers like the sync layer.
-        # This sensor's own entry owns the slot, even on a lock whose
-        # coordinator another entry created.
-        return self.coordinator.desired_credential(
-            pin_address(int(self.slot_num)), owner=self.config_entry
-        ).readable_pin
+        if self._core_status() is Status.IN_SYNC:
+            return slot.want
+        return None
 
     @property
     def available(self) -> bool:
-        """Return whether sensor is available or not."""
-        return BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self) and (
-            self.coordinator.has_credential(pin_address(int(self.slot_num)))
+        """Return whether the lock has said anything about the slot yet."""
+        return (
+            BaseLockCodeManagerCodeSlotPerLockEntity._is_available(self)
+            and (slot := self._core_slot()) is not None
+            and slot.seen is not None
         )
 
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)
-        await CoordinatorEntity.async_added_to_hass(self)
-
-        if self.native_value is None:
-            self.hass.async_create_task(
-                self.async_update(), f"Force update {self.entity_id}"
-            )
+        self._watch_lock()

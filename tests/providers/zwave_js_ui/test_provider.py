@@ -11,6 +11,7 @@ import pytest
 
 from homeassistant.core import HomeAssistant
 
+from custom_components.lock_code_manager.core.adapter import _Coordinator
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
@@ -388,7 +389,7 @@ class TestAsyncSetCredential:
     ) -> None:
         """The wire shape is ``set(slot, Enabled, pin)`` and success is confirmed."""
         lock = zui_gateway_resolved
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
         zui_api_responder.set_result("sendCommand", None)
 
         assert await _set_credential(lock, 4) is WriteResult.CONFIRMED
@@ -408,7 +409,7 @@ class TestAsyncSetCredential:
     ) -> None:
         """A refusal must not leave the coordinator believing the write landed."""
         lock = zui_gateway_resolved
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
         zui_api_responder.set_result(
             "sendCommand", None, success=False, message=ZUI_NO_ACK_MESSAGE
         )
@@ -426,7 +427,7 @@ class TestAsyncSetCredential:
     ) -> None:
         """An unanswered write is a lost connection, and it too pushes nothing."""
         lock = zui_gateway_resolved
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
         zui_api_responder.set_handler("sendCommand", lambda _base, _request: None)
 
         with (
@@ -449,7 +450,7 @@ class TestAsyncDeleteCredential:
     ) -> None:
         """The wire shape is ``clear(slot)`` and the slot is pushed empty."""
         lock = zui_gateway_resolved
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
         zui_api_responder.set_result("sendCommand", None)
 
         assert await _delete_credential(lock, 7) is True
@@ -469,7 +470,7 @@ class TestAsyncDeleteCredential:
     ) -> None:
         """A refused clear must not report the slot empty."""
         lock = zui_gateway_resolved
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
         zui_api_responder.set_result(
             "sendCommand", None, success=False, message=ZUI_NO_ACK_MESSAGE
         )

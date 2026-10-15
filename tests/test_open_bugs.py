@@ -4,12 +4,12 @@ Open bugs, each pinned by a strict xfail at the seam.
 Each test states the behavior the issue asks for, driven and checked only
 through Home Assistant and the mock lock. While the bug is open the test
 fails; a fix makes it pass, and the strict marker then fails the run until
-the marker is removed.
+the marker is removed. A test whose marker is gone guards its fix from here
+on.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 import itertools
 import re
 from typing import Any
@@ -40,10 +40,10 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
 )
+from custom_components.lock_code_manager.core.slot import LIMIT
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.providers._base import (
@@ -72,21 +72,8 @@ from .common import (
     in_sync_entity_id,
     lcm_issue_ids,
     mock_lock,
-    short_stop_grace,
     when_mock_lock_built,
 )
-
-
-@pytest.fixture
-def short_grace() -> Iterator[None]:
-    """
-    Shorten the stop grace for the whole test, teardown included.
-
-    Adding users reloads the entry, and each unload waits out the grace on
-    the real clock. Requested first, this is torn down last.
-    """
-    with short_stop_grace():
-        yield
 
 
 async def _async_setup_two_slots(
@@ -126,10 +113,6 @@ async def _async_setup_two_slots(
     return entry
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1622: a release clear the lock acknowledges but ignores is never checked",
-)
 async def test_a_deleted_users_code_does_not_stay_on_the_lock_unreported(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -154,10 +137,6 @@ async def test_a_deleted_users_code_does_not_stay_on_the_lock_unreported(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1642: a refused write does not count toward the lock's pacing",
-)
 @pytest.mark.paced
 async def test_the_operation_after_a_refused_write_is_paced(
     hass: HomeAssistant,
@@ -173,7 +152,9 @@ async def test_the_operation_after_a_refused_write_is_paced(
 
     await async_set_slot_pin(hass, entry, 1, "1111")
     await async_set_slot_pin(hass, entry, 2, "2222")
-    await async_advance_sync_ticks(hass, freezer, 4, settle=False)
+    # Each exchange waits out the delay after the one before it, so the
+    # refused write, the next one and a read-back take a few delays.
+    await async_advance_sync_ticks(hass, freezer, 8, settle=False)
 
     gaps = [b - a for a, b in itertools.pairwise(lock.run_times)]
     # Unloaded before asserting: the unload waits out the pacing on the
@@ -182,13 +163,12 @@ async def test_the_operation_after_a_refused_write_is_paced(
     await async_advance_clock(hass, freezer, 10 * MIN_OPERATION_DELAY, settle=False)
     assert unload.done()
     assert len(gaps) >= 2
-    assert min(gaps) >= MIN_OPERATION_DELAY
+    # The worker times the delay on the real monotonic clock and sleeps on
+    # the frozen loop's, so a gap comes up short by the real time it took to
+    # compute it: microseconds, not a skipped delay.
+    assert min(gaps) >= MIN_OPERATION_DELAY - 0.01
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1643: strikes against a PIN no longer wanted count against the new one",
-)
 async def test_a_pin_changed_while_a_write_is_pending_starts_with_no_strikes(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -216,10 +196,6 @@ async def test_a_pin_changed_while_a_write_is_pending_starts_with_no_strikes(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1644: writes that hang every time never escalate while reads succeed",
-)
 async def test_a_write_that_hangs_every_time_is_reported(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -240,10 +216,6 @@ async def test_a_write_that_hangs_every_time_is_reported(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1644: writes failing as disconnected never escalate while reads succeed",
-)
 async def test_writes_failing_as_disconnected_are_reported(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -262,13 +234,6 @@ async def test_writes_failing_as_disconnected_are_reported(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open: a clear the lock acknowledges but ignores is sent again every "
-        "tick, never charged and never reported"
-    ),
-)
 async def test_a_clear_the_lock_keeps_ignoring_is_reported(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -288,17 +253,10 @@ async def test_a_clear_the_lock_keeps_ignoring_is_reported(
     )
     lock.clear_faults()
     await hass.config_entries.async_unload(entry.entry_id)
-    assert len(clears) <= MAX_SYNC_ATTEMPTS + 1
+    assert len(clears) <= LIMIT + 1
     assert issue is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open: strikes against a PIN survive the slot being turned off, so the "
-        "slot can suspend for a rejected code before its clear is sent"
-    ),
-)
 async def test_a_slot_turned_off_after_failed_writes_is_cleared(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -309,7 +267,7 @@ async def test_a_slot_turned_off_after_failed_writes_is_cleared(
     lock = mock_lock(entry)
     lock.fail("set", 1)
     await async_set_slot_pin(hass, entry, 1, "4321")
-    await async_advance_sync_ticks(hass, freezer, MAX_SYNC_ATTEMPTS)
+    await async_advance_sync_ticks(hass, freezer, LIMIT)
 
     await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
     await async_advance_sync_ticks(hass, freezer, 4)
@@ -324,13 +282,6 @@ async def test_a_slot_turned_off_after_failed_writes_is_cleared(
     assert issue is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open: two entries already managing one slot (from before #1626) fight "
-        "over it and nothing reports the overlap"
-    ),
-)
 async def test_an_existing_slot_overlap_is_reported_not_fought_over(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -369,12 +320,11 @@ async def test_an_existing_slot_overlap_is_reported_not_fought_over(
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "open (#1536 residual): adding users through the user subentry flow "
+        "open (#1536): adding users through the user subentry flow "
         "waits on the lock read with no progress step"
     ),
 )
 async def test_adding_users_shows_progress_while_the_lock_is_read(
-    short_grace: None,
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
@@ -542,7 +492,7 @@ async def test_an_overlap_error_names_the_users_in_the_way(
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "open: adding a lock in the options flow never reads it, so codes "
+        "open (#1684): adding a lock in the options flow never reads it, so codes "
         "already on it are overwritten"
     ),
 )
@@ -570,10 +520,6 @@ async def test_adding_a_lock_keeps_the_codes_already_on_it(
     assert result.get("errors") or codes == {1: "1234", 2: "5678"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="open: refreshing a lock no loaded entry manages succeeds silently",
-)
 async def test_refreshing_a_lock_nothing_manages_says_so(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -662,14 +608,6 @@ async def _async_unload_all(hass: HomeAssistant) -> None:
             pytest.fail(f"teardown: {entry.title} did not unload")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "open: an entry setting up beside one still unloading talks to the "
-        "lock past the write in flight"
-    ),
-)
 async def test_an_entry_set_up_beside_one_unloading_waits_for_its_write(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
@@ -700,14 +638,6 @@ async def test_an_entry_set_up_beside_one_unloading_waits_for_its_write(
     assert reached == 0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "open: the migration's unmanaged-code sweep reads a lock past the "
-        "write in flight"
-    ),
-)
 async def test_the_unmanaged_code_sweep_waits_for_a_write_in_flight(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,

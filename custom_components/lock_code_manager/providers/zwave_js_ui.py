@@ -348,6 +348,9 @@ def _raise_on_supervision_fail(operation: str, code_slot: int, result: Any) -> N
 class ZWaveJSUILock(BaseMqttLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
+    # The gateway queues a dead node's commands like the driver does (#139).
+    check_available_before_exchange = True
+
     _api_base: str | None = field(init=False, default=None)
     # Key into the shared scan store, set only when this lock's binding came
     # from a scan. An availability-bound lock has nothing to invalidate for
@@ -401,9 +404,9 @@ class ZWaveJSUILock(BaseMqttLock):
         constant it disabled polling for a lock that had no push either,
         leaving it with no data path at all.
 
-        The coordinator reads this once, when it is constructed, and that
-        happens after ``async_setup``; the answer comes from Home Assistant's
-        MQTT discovery data, which is already loaded by then.
+        The port reads it when it starts the poll, and again once a later
+        setup finds push (it is never taken away); the answer comes from Home
+        Assistant's MQTT discovery data.
         """
         return self._prefix_and_node_topic() is not None
 

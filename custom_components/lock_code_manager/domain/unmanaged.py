@@ -34,6 +34,7 @@ from homeassistant.helpers import (
 )
 
 from ..const import CONF_LOCKS, DOMAIN
+from .lock_runtime import lock_registry
 from .locks import async_create_lock_instance, borrowed_lock_instance
 from .queries import slots_configured_on
 
@@ -74,7 +75,12 @@ async def async_sweep_unmanaged_codes(
                     hass, dev_reg, ent_reg, config_entry, lock_entity_id
                 )
             ) as lock:
-                credentials = await lock.async_get_usercodes()
+                if (worker := lock_registry(hass).worker(lock_entity_id)) is None:
+                    credentials = await lock.async_get_usercodes()
+                else:
+                    # In the lock's turn: the entry holding it may have a
+                    # write in flight there.
+                    credentials = await worker.turn(lock.async_get_usercodes)
         except Exception:
             _LOGGER.warning(
                 "Could not read %s while checking for codes this integration does "

@@ -16,6 +16,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 
@@ -24,7 +25,10 @@ from .const import (
     ATTR_SLOT_FIELD,
     DOMAIN,
 )
+from .core.slot import Slot, Status
+from .core.worker import LockWorker
 from .domain.config import build_slot_device_identifier, build_slot_unique_id
+from .domain.lock_runtime import lock_registry, signal_lock_changed
 from .domain.models import LockCodeManagerConfigEntry
 from .domain.names import fallback_name
 from .domain.queries import get_entry_config
@@ -372,3 +376,63 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
+
+
+class LockWorkerView:
+    """
+    A per-lock slot entity reading what the lock's worker knows of the slot.
+
+    It writes its state whenever the worker reports a change on the lock.
+    """
+
+    hass: HomeAssistant
+    lock: BaseLock
+    slot_num: int
+
+    config_entry: ConfigEntry
+
+    def _core_worker(self) -> LockWorker | None:
+        """
+        Return the lock's worker if it syncs this slot for this entry.
+
+        A slot another entry already manages on the lock is that entry's:
+        its state is not this entry's user's (their code is not there).
+        """
+        registry = lock_registry(self.hass)
+        lock_entity_id = self.lock.lock.entity_id
+        if registry.owner(lock_entity_id, int(self.slot_num)) not in (
+            None,
+            self.config_entry.entry_id,
+        ):
+            return None
+        return registry.worker(lock_entity_id)
+
+    def _core_slot(self) -> Slot | None:
+        """Return the worker's view of this slot, if the lock's worker has it."""
+        if (worker := self._core_worker()) is None:
+            return None
+        return worker.slots.get(int(self.slot_num))
+
+    def _core_status(self) -> Status | None:
+        """Return the slot's sync status, or None if the worker does not have it."""
+        worker = self._core_worker()
+        if worker is None or int(self.slot_num) not in worker.slots:
+            return None
+        return worker.status(int(self.slot_num))[0]
+
+    def _core_syncing(self) -> bool:
+        """Return whether a sync of this slot is queued or running."""
+        worker = self._core_worker()
+        return worker is not None and worker.syncing(int(self.slot_num))
+
+    @callback
+    def _watch_lock(self) -> None:
+        """Write state on every change the lock's worker reports."""
+        assert isinstance(self, Entity)
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_lock_changed(self.lock.lock.entity_id),
+                self.async_write_ha_state,
+            )
+        )

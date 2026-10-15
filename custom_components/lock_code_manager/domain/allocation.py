@@ -19,9 +19,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from ..const import MAX_SEARCHED_SLOT
+from ..core.slot import Seen
 from ..providers import resolve_provider_class_for_entity
 from .credentials import CredentialType
 from .exceptions import LockCodeManagerError
+from .lock_runtime import lock_registry
 from .locks import borrowed_lock_instance
 from .occupancy import LockOccupancy, Occupancy
 from .queries import slots_configured_on
@@ -264,9 +266,7 @@ async def async_read_occupancy(
                 # -- one per index on some providers -- on an answer that
                 # nothing reads.
                 try:
-                    occupied = await lock_instance.async_internal_get_occupied_indices(
-                        indices
-                    )
+                    occupied = await _async_occupied(hass, lock_entity_id, indices)
                 except Exception:
                     _LOGGER.warning(
                         "Failed to read the contents of %s; treating them as unknown",
@@ -523,3 +523,21 @@ async def async_allocate_for(
     # one before widening to it -- and allocation only issues numbers
     # inside the window.
     return frozenset(unavailable)
+
+
+async def _async_occupied(
+    hass: HomeAssistant, lock_entity_id: str, indices: Collection[int]
+) -> frozenset[int]:
+    """
+    Return which of ``indices`` the lock holds, read in its worker's turn.
+
+    An index whose value could not be read still counts: it holds something,
+    and over-reserving costs a user a slot number, while under-reserving
+    costs them the code on their door. Silence says nothing, so it does not.
+    """
+    readings = await lock_registry(hass).read_once(lock_entity_id, indices)
+    return frozenset(
+        slot
+        for slot, reading in readings.items()
+        if reading is not Seen.EMPTY and reading is not Seen.SILENT
+    )

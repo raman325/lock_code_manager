@@ -27,6 +27,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.core.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.domain.credentials import (
     Credential,
     CredentialRef,
@@ -297,7 +298,9 @@ async def test_setup_registers_event_listener(
 
     assert len(zwave_js_lock._listeners) == 0
 
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     assert len(zwave_js_lock._listeners) == 1
 
@@ -318,7 +321,9 @@ async def test_unload_cleans_up_push_subscription(
         domain=DOMAIN, data={CONF_LOCKS: []}, subentries_data=user_subentries({})
     )
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.subscribe_push_updates()
     assert zwave_js_lock._push_unsubs
@@ -693,7 +698,7 @@ async def test_async_get_usercodes_skips_uc_occupancy_without_user_code_cc(
     assert codes[2] == SlotCredential.empty()
 
 
-async def test_async_internal_set_usercode_calls_primitives(
+async def test_async_set_usercode_calls_primitives(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
@@ -701,7 +706,7 @@ async def test_async_internal_set_usercode_calls_primitives(
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test that async_internal_set_usercode drives the base User->Credential orchestration.
+    Test that async_set_usercode drives the base User->Credential orchestration.
 
     With supports_native_users=True and the connection up, the base class runs
     async_set_user (to create or update the user) then async_set_credential (to write
@@ -718,9 +723,7 @@ async def test_async_internal_set_usercode_calls_primitives(
     zwave_js_lock._min_operation_delay = 0.0
     mock_access_control.get_user_cached.return_value = None
 
-    await zwave_js_lock.async_internal_set_usercode(
-        1, "5678", name="alice", source="sync"
-    )
+    await zwave_js_lock.async_set_usercode(1, "5678", name="alice", source="sync")
 
     mock_lock_helpers["async_set_user"].assert_called_once()
     mock_lock_helpers["async_set_credential"].assert_called_once()
@@ -732,7 +735,7 @@ async def test_async_internal_set_usercode_calls_primitives(
     assert call_args.kwargs["credential_slot"] == 1
 
 
-async def test_async_internal_clear_usercode_calls_delete_primitives(
+async def test_async_clear_usercode_calls_delete_primitives(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
@@ -740,7 +743,7 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
     zwave_integration: MockConfigEntry,
 ) -> None:
     """
-    Test that async_internal_clear_usercode deletes only the credential.
+    Test that async_clear_usercode deletes only the credential.
 
     With supports_native_users=True the base class resolves the credential
     owner from async_get_users and calls async_delete_credential. The user
@@ -774,7 +777,7 @@ async def test_async_internal_clear_usercode_calls_delete_primitives(
         ),
     ]
 
-    await zwave_js_lock.async_internal_clear_usercode(1, source="sync")
+    await zwave_js_lock.async_clear_usercode(1)
 
     mock_lock_helpers["async_delete_credential"].assert_called_once()
     mock_lock_helpers["async_delete_user"].assert_not_called()

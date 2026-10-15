@@ -23,7 +23,7 @@ from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DO
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
-from ...common import user_subentries
+from ...common import lock_workers_busy, user_subentries
 
 ZUI_PREFIX = "zwave"
 ZUI_HOME_HEX = "0xd4ee5a7a"
@@ -501,6 +501,28 @@ async def zui_lock_with_device(hass: HomeAssistant) -> ZWaveJSUILock:
     return ZWaveJSUILock(hass, dev_reg, ent_reg, mqtt_entry, lock_entity)
 
 
+async def async_settle_zui_workers(hass: HomeAssistant, budget: float = 10.0) -> None:
+    """
+    Settle Home Assistant, waiting in real time for the lock workers.
+
+    A gateway nobody answers costs each read its (shortened) api timeout in
+    real time, which ``async_block_till_done`` does not wait out: it only
+    waits for tasks, and the worker's exchange is a timer away from done.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
+    while True:
+        try:
+            await hass.async_block_till_done()
+        except pytest.fail.Exception:
+            if loop.time() >= deadline:
+                raise
+        else:
+            return
+        while lock_workers_busy(hass) and loop.time() < deadline:
+            await asyncio.sleep(0.02)
+
+
 @pytest.fixture
 async def lcm_config_entry(
     hass: HomeAssistant,
@@ -528,7 +550,7 @@ async def lcm_config_entry(
     )
     lcm_entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(lcm_entry.entry_id)
-    await hass.async_block_till_done()
+    await async_settle_zui_workers(hass)
 
     yield lcm_entry
 

@@ -22,30 +22,6 @@ if TYPE_CHECKING:
     from .slot_coordinator import SlotEntityCoordinator
 
 
-class SyncState(StrEnum):
-    """
-    State machine for slot sync reconciliation.
-
-    LOADING: initial state, waiting for entity states to resolve.
-    IN_SYNC: desired state matches actual state on the lock.
-    OUT_OF_SYNC: mismatch detected, pending sync on next tick.
-    SYNCING: sync operation in progress.
-    PENDING_CONFIRMATION: an optimistic (ambiguous-but-treated-as-completed)
-        write was issued and we are waiting for the lock to confirm it (a push
-        event or hard-refresh read). The tick does not re-write while waiting;
-        confirmation -> IN_SYNC, timeout -> re-sync.
-    SUSPENDED: circuit breaker tripped or unexpected error; awaiting
-        coordinator recovery (suspended flag cleared).
-    """
-
-    LOADING = "loading"
-    IN_SYNC = "in_sync"
-    OUT_OF_SYNC = "out_of_sync"
-    SYNCING = "syncing"
-    PENDING_CONFIRMATION = "pending_confirmation"
-    SUSPENDED = "suspended"
-
-
 class SlotCode(StrEnum):
     """
     Serialization labels for non-string credential states.

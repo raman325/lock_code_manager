@@ -29,6 +29,11 @@ BACKOFF_AFTER = 3
 BACKOFF_MIN = 60.0
 BACKOFF_MAX = 1800.0
 OFFLINE_AFTER = 12
+# How long a slot waits before trying again after its first, then its second,
+# failed try: a lock refusing writes for a while (a Matter lock still coming
+# up, #1257) does not spend every try in seconds. A real failure is still
+# held after its tries, a few minutes on.
+RETRY_AFTER = (30.0, 120.0)
 
 
 class ErrorKind(StrEnum):
@@ -57,6 +62,7 @@ class LockError(Exception):
         super().__init__(message or kind.value)
         self.kind = kind
         self.sent = sent
+        self.message = message
 
 
 class LockPort(Protocol):
@@ -73,8 +79,13 @@ class LockPort(Protocol):
         """
         ...
 
-    async def write(self, slot: int, pin: str | None) -> None:
-        """Put ``pin`` in ``slot``, or clear it for None; raise ``LockError``."""
+    async def write(self, slot: int, pin: str | None) -> bool | None:
+        """
+        Put ``pin`` in ``slot``, or clear it for None; raise ``LockError``.
+
+        False when the lock answered that there was nothing to change -- a
+        clear that found nothing: that says nothing about what the slot holds.
+        """
         ...
 
 
@@ -87,6 +98,8 @@ class _Job:
     # When a push was taken in: dropped if its slot was written since.
     seq: int = 0
     done: asyncio.Future[Any] | None = None
+    # A turn's exchange, made by someone else's provider.
+    call: Callable[[], Awaitable[Any]] | None = None
 
 
 def _resolve(
@@ -129,6 +142,10 @@ class LockWorker:
         self._stopping = False
         self._stopped = asyncio.Event()
         self._queued: set[int] = set()
+        # The slot whose sync is running now.
+        self._syncing: int | None = None
+        # Slots waiting out their pause before trying again.
+        self._waits: dict[int, asyncio.Task[None]] = {}
         self._seq = 0
         self._sent = 0
         self._written: dict[int, int] = {}
@@ -158,6 +175,7 @@ class LockWorker:
 
     def want(self, slot: int, pin: Want, *, release: bool = False) -> None:
         """Say what ``slot`` should hold; a release clear when ``release``."""
+        self._stop_waiting(slot)
         if (current := self.slots.get(slot)) is None:
             self.slots[slot] = Slot(pin, release=release)
         else:
@@ -171,18 +189,41 @@ class LockWorker:
 
     def forget(self, slot: int) -> None:
         """Stop tracking ``slot`` without touching what the lock holds."""
+        self._stop_waiting(slot)
         self.slots.pop(slot, None)
 
     def resume(self, slot: int) -> None:
         """Lift ``slot``'s hold: the user acknowledged its repair."""
         if (current := self.slots.get(slot)) is not None:
+            self._stop_waiting(slot)
             current.resume()
+            # Polls left it out while it was held: read it before deciding.
+            current.seen = None
             self.request_sync((slot,))
 
     def status(self, slot: int) -> tuple[Status, Repair | None]:
         """Return ``slot``'s sync status and the repair it raises, if any."""
         current = self.slots[slot]
         return current.status(self.salt), current.hold
+
+    def wake(self) -> None:
+        """
+        Probe now if backing off: something says the lock may be back.
+
+        The provider's integration reconnecting, say. Only the probe's
+        answer, as always, decides whether the lock is there.
+        """
+        if self._down_until is None or self._stopping:
+            return
+        self._down_until = self.clock()
+        if self._retry is not None and not self._retry.done():
+            self._retry.cancel()
+        self._retry = None
+        self._schedule_probe()
+
+    def syncing(self, slot: int) -> bool:
+        """Return whether a sync of ``slot`` is queued or running."""
+        return slot in self._queued or slot == self._syncing
 
     @property
     def started(self) -> bool:
@@ -193,6 +234,11 @@ class LockWorker:
     def reachable(self) -> bool:
         """Return whether the lock is answering (not backing off)."""
         return self._down_until is None
+
+    @property
+    def answered(self) -> bool:
+        """Return whether the lock has answered this worker at all."""
+        return self._answers > 0
 
     @property
     def offline(self) -> bool:
@@ -228,13 +274,41 @@ class LockWorker:
         """
         self._put(_Job("push", slot=slot, reading=reading, seq=self._next()))
 
-    async def read(self, slots: Collection[int] | None = None) -> dict[int, Reading]:
-        """Read ``slots`` (every tracked one by default), in the lock's turn."""
+    async def read(
+        self, slots: Collection[int] | None = None, *, probe: bool = False
+    ) -> dict[int, Reading]:
+        """
+        Read ``slots`` in the lock's turn: by default every tracked slot not held.
+
+        A held slot's reading counts for nothing until it is resumed, which
+        reads it again -- and a lock that fails a read over one slot it
+        ignores would otherwise fail every poll of the rest. ``probe`` when
+        someone says the lock may be back (the hard refresh service): the
+        read goes even while backing off, and an answer brings the lock back.
+        """
         if self._stopping:
             raise LockError(ErrorKind.NO_ANSWER, sent=False, message="stopped")
         done: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
-        wanted = tuple(self.slots if slots is None else slots)
-        self._put(_Job("read", slots=wanted, done=done))
+        wanted = tuple(
+            (n for n, slot in self.slots.items() if slot.hold is None)
+            if slots is None
+            else slots
+        )
+        self._put(_Job("probe" if probe else "read", slots=wanted, done=done))
+        return await done
+
+    async def turn(self, call: Callable[[], Awaitable[Any]]) -> Any:
+        """
+        Run ``call`` against the lock in its turn, as one exchange; return its result.
+
+        For a question about the lock asked through a provider of its own (the
+        migration's unmanaged-code sweep): nothing else talks to the lock
+        meanwhile, and its answer counts like any other.
+        """
+        if self._stopping:
+            raise LockError(ErrorKind.NO_ANSWER, sent=False, message="stopped")
+        done: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+        self._put(_Job("turn", call=call, done=done))
         return await done
 
     async def settled(self) -> None:
@@ -276,6 +350,11 @@ class LockWorker:
             if self._retry is not None:
                 self._retry.cancel()
                 await asyncio.gather(self._retry, return_exceptions=True)
+            if waits := list(self._waits.values()):
+                for waiting in waits:
+                    waiting.cancel()
+                await asyncio.gather(*waits, return_exceptions=True)
+                self._waits.clear()
         finally:
             # Even if this caller was cancelled: nothing is left running or
             # queued (a cancelled task never reaches the end-of-queue marker),
@@ -345,8 +424,16 @@ class LockWorker:
             return
         if job.kind == "slot":
             assert job.slot is not None
-            await self._sync(job.slot)
+            self._syncing = job.slot
+            try:
+                await self._sync(job.slot)
+            finally:
+                self._syncing = None
             self._again(job.slot)
+            return
+        if job.kind == "turn":
+            assert job.call is not None
+            _resolve(job.done, await self._exchange(job.call))
             return
         # A probe left unanswered schedules the next one through _no_answer.
         _resolve(job.done, await self._read(job.slots))
@@ -393,6 +480,9 @@ class LockWorker:
                 await self._write(number, slot)
         except LockError as err:
             _LOGGER.debug("Sync of slot %s failed: %s", number, err)
+            if err.kind is ErrorKind.SLOT_REFUSED and slot.epoch == epoch:
+                # A read refused for the slot (past the lock's capacity).
+                slot.refused(value=False, why=err.message)
         if slot.epoch == epoch and self._failed(slot):
             if self._bug:
                 slot.tried()
@@ -446,24 +536,29 @@ class LockWorker:
         self._unsure[number] = (slot, slot.epoch)
         try:
             # Reports taken in before the write is sent are older than it.
-            await self._exchange(lambda: self.port.write(number, pin), mark=number)
+            changed = await self._exchange(
+                lambda: self.port.write(number, pin), mark=number
+            )
         except LockError as err:
             if not current():
                 return
             if err.kind is ErrorKind.ALREADY_SO:
                 slot.wrote_want(self.salt)
+                slot.released = slot.release
             elif err.kind is ErrorKind.VALUE_REFUSED:
-                slot.refused(value=True)
+                slot.refused(value=True, why=err.message)
                 if pin is not None:
                     self.on_disable(number)
                 return
             elif err.kind is ErrorKind.SLOT_REFUSED:
-                slot.refused(value=False)
+                slot.refused(value=False, why=err.message)
                 return
         else:
             if not current():
                 return
-            slot.wrote_want(self.salt)
+            slot.released = slot.release
+            if changed is not False:
+                slot.wrote_want(self.salt)
         if self._down_until is None:
             await self._read((number,), follow=False)
 
@@ -515,8 +610,25 @@ class LockWorker:
         fails at once, and an answer queues every slot again.)
         """
         slot = self.slots.get(number)
-        if slot is not None and self._failed(slot):
+        if slot is None or not self._failed(slot):
+            return
+        delay = RETRY_AFTER[min(slot.tries, len(RETRY_AFTER)) - 1] if slot.tries else 0
+        if delay <= 0:
             self.request_sync((number,))
+            return
+        # Charged a try: wait a while before the next, unless already waiting.
+        if (waiting := self._waits.get(number)) is not None and not waiting.done():
+            return
+        self._waits[number] = asyncio.create_task(self._retry_later(number, delay))
+
+    async def _retry_later(self, number: int, delay: float) -> None:
+        await self.sleep(delay)
+        self._waits.pop(number, None)
+        self.request_sync((number,))
+
+    def _stop_waiting(self, number: int) -> None:
+        if (waiting := self._waits.pop(number, None)) is not None:
+            waiting.cancel()
 
     async def _exchange(
         self,
@@ -554,11 +666,10 @@ class LockWorker:
             elif err.sent:
                 self._answer()
                 self._pay()
-            else:
-                # The integration refusing: the slot's, like a bug.
-                self._bug = True
-                if self._down_until is not None:
-                    self._no_answer()
+            elif self._down_until is not None:
+                # The integration refusing, unsent: the slot is held for it,
+                # and it says nothing of the lock being back.
+                self._no_answer()
             raise
         except asyncio.CancelledError:
             if (task := asyncio.current_task()) is not None and task.cancelling():
@@ -598,7 +709,12 @@ class LockWorker:
         self._no_answers = 0
         self._down_until = None
         if was_down:
-            # Back: every slot dropped while backing off is synced again.
+            # Back -- maybe by a probe from outside (the hard refresh): the
+            # old backoff's timer would hold up the next outage's probes.
+            if self._retry is not None and not self._retry.done():
+                self._retry.cancel()
+            self._retry = None
+            # Every slot dropped while backing off is synced again.
             self.request_sync()
 
     def _due(self) -> list[tuple[int, Slot]]:

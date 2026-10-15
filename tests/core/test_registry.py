@@ -445,3 +445,247 @@ async def test_a_cancelled_shutdown_does_not_cancel_an_unload(setup) -> None:
     assert await releasing is None
     with pytest.raises(RuntimeError):
         await holding
+
+
+# Preparing and cleaning up -------------------------------------------------------
+
+
+class Hooks:
+    """Record what the registry asks of the lock around its worker."""
+
+    def __init__(self, locks: Locks) -> None:
+        """Watch ``locks``' reads too, so their order is known."""
+        self.calls: list[str] = []
+        self.gate = asyncio.Event()
+        self.gate.set()
+        self.raises = False
+        self._locks = locks
+
+    async def prepare(self, lock: str, worker: LockWorker) -> None:
+        """Prepare the lock, once the gate is open."""
+        self.calls.append(f"prepare {lock}")
+        await self.gate.wait()
+        if self.raises:
+            raise RuntimeError("setup broke")
+        self.calls.append(f"prepared {lock}")
+
+    async def cleanup(self, lock: str, worker: LockWorker) -> None:
+        """Clean the lock up."""
+        assert worker._stopped.is_set()
+        self.calls.append(f"cleanup {lock}")
+
+
+def _hooked(**fakes: FakeLock) -> tuple[LockRegistry, Locks, Hooks]:
+    locks = Locks(**fakes)
+    hooks = Hooks(locks)
+    registry = LockRegistry(
+        locks.make, grace=0.1, prepare=hooks.prepare, cleanup=hooks.cleanup
+    )
+    return registry, locks, hooks
+
+
+async def test_a_lock_is_prepared_before_its_first_read() -> None:
+    """The provider is set up before anything asks the lock."""
+    registry, locks, hooks = _hooked(front=FakeLock())
+    hooks.gate.clear()
+    holding = asyncio.ensure_future(registry.hold("front", "a", {1: "1111"}))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert locks.reads == []
+
+    hooks.gate.set()
+    worker = await holding
+    await _settle(worker)
+    await registry.stop()
+
+    assert locks.reads[0] == (1,)
+    assert hooks.calls == ["prepare front", "prepared front", "cleanup front"]
+
+
+async def test_entries_joining_while_it_is_prepared_share_the_first_read() -> None:
+    """Every slot wanted before the worker starts is read in one exchange."""
+    registry, locks, hooks = _hooked(front=FakeLock())
+    hooks.gate.clear()
+    first = asyncio.ensure_future(registry.hold("front", "a", {1: "1111"}))
+    await asyncio.sleep(0)
+    second = await registry.hold("front", "b", {2: "2222"})
+    hooks.gate.set()
+    worker = await first
+    await _settle(worker)
+    await registry.stop()
+
+    assert worker is second
+    assert locks.reads[0] == (1, 2)
+    assert hooks.calls.count("prepare front") == 1
+
+
+async def test_a_one_off_read_does_not_prepare_the_lock() -> None:
+    """Setup renames codes on some locks: a config flow's read must not run it."""
+    registry, _, hooks = _hooked(front=FakeLock({3: "3333"}))
+
+    assert await registry.read_once("front", [3]) == {3: Holds("3333")}
+    # Cleaned up all the same: reading can leave a subscription behind.
+    assert hooks.calls == ["cleanup front"]
+
+
+async def test_an_entry_joining_a_one_off_reads_worker_prepares_it() -> None:
+    """The worker was started unprepared; the first entry to hold it prepares it."""
+    lock = FakeLock({3: "3333"})
+    registry, locks, hooks = _hooked(front=lock)
+    gate = asyncio.Event()
+    original = lock.read
+
+    async def _slow(slots):
+        await gate.wait()
+        return await original(slots)
+
+    lock.read = _slow  # type: ignore[method-assign]
+    reading = asyncio.ensure_future(registry.read_once("front", [3]))
+    await asyncio.sleep(0)
+    await registry.hold("front", "a", {1: "1111"})
+    gate.set()
+    lock.read = original  # type: ignore[method-assign]
+    await reading
+    await registry.stop()
+
+    assert hooks.calls == ["prepare front", "prepared front", "cleanup front"]
+    assert len(locks.built) == 1
+
+
+async def test_a_lock_that_fails_to_prepare_still_gets_its_worker() -> None:
+    """Degraded, not dropped: the worker runs, and the failure is logged."""
+    registry, locks, hooks = _hooked(front=FakeLock())
+    hooks.raises = True
+    worker = await registry.hold("front", "a", {1: "1111"})
+    await _settle(worker)
+
+    assert locks.running("front") == [worker]
+    await registry.stop()
+    assert hooks.calls[-1] == "cleanup front"
+
+
+async def test_a_lock_retired_while_it_is_prepared_is_never_started() -> None:
+    """Shutdown during setup: no worker starts after it, and cleanup waits."""
+    registry, locks, hooks = _hooked(front=FakeLock())
+    hooks.gate.clear()
+    holding = asyncio.ensure_future(registry.hold("front", "a", {1: "1111"}))
+    await asyncio.sleep(0)
+    stopping = asyncio.ensure_future(registry.stop())
+    await asyncio.sleep(0)
+    hooks.gate.set()
+    worker = await holding
+    await stopping
+
+    assert not worker.started
+    assert locks.reads == []
+    assert hooks.calls == ["prepare front", "prepared front", "cleanup front"]
+
+
+async def test_a_new_hold_waits_for_the_old_locks_cleanup() -> None:
+    """The provider is unloaded before a new one is set up for the same lock."""
+    registry, _, hooks = _hooked(front=FakeLock())
+    await registry.hold("front", "a", {1: "1111"})
+    await registry.release("front", "a")
+    await registry.hold("front", "b", {1: "1111"})
+    await registry.stop()
+
+    assert hooks.calls == [
+        "prepare front",
+        "prepared front",
+        "cleanup front",
+        "prepare front",
+        "prepared front",
+        "cleanup front",
+    ]
+
+
+async def test_the_caller_that_built_it_cancelled_still_starts_the_worker() -> None:
+    """Another entry may hold it by then: it must not be left unstarted."""
+    registry, locks, hooks = _hooked(front=FakeLock())
+    hooks.gate.clear()
+    first = asyncio.ensure_future(registry.hold("front", "a", {1: "1111"}))
+    await asyncio.sleep(0)
+    second = await registry.hold("front", "b", {2: "2222"})
+    first.cancel()
+    await asyncio.gather(first, return_exceptions=True)
+    hooks.gate.set()
+    await _settle(second)
+
+    assert second.started
+    assert locks.running("front") == [second]
+    await registry.stop()
+
+
+# One-off writes --------------------------------------------------------------------
+
+
+async def test_a_one_off_write_goes_on_after_the_call_and_then_stops() -> None:
+    """An unmanaged code written from the card: ownerless, then the worker stops."""
+    lock = FakeLock(unreachable=True)
+    registry, locks, hooks = _hooked(front=lock)
+    await registry.write_once("front", 5, "5555")
+    [worker] = locks.running("front")
+    await _settle(worker)
+    assert locks.running("front") == [worker]  # the write is still owed
+
+    lock.unreachable = False
+    async with asyncio.timeout(SETTLE_LIMIT):
+        while locks.running("front"):
+            await asyncio.sleep(0)
+
+    assert lock.codes == {5: "5555"}
+    # A write needs the lock set up, unlike a read.
+    assert hooks.calls[0] == "prepare front"
+
+
+async def test_a_one_off_write_to_an_owned_slot_is_refused(setup) -> None:
+    """Only a slot no entry owns can be written from outside."""
+    registry, _ = setup(front=FakeLock())
+    worker = await registry.hold("front", "a", {1: "1111"})
+
+    with pytest.raises(SlotTaken):
+        await registry.write_once("front", 1, "9999")
+    assert worker.slots[1].want == "1111"
+
+
+async def test_the_worker_in_service_is_the_one_held(setup) -> None:
+    """Looked up by lock: the held worker, and none once it has stopped."""
+    registry, _ = setup(front=FakeLock())
+    worker = await registry.hold("front", "a", {1: "1111"})
+
+    assert registry.worker("front") is worker
+    assert registry.worker("back") is None
+    await registry.release("front", "a")
+    assert registry.worker("front") is None
+
+
+async def test_a_one_off_write_asked_again_is_tried_again() -> None:
+    """
+    An unmanaged clear held after its tries, asked for again by the user.
+
+    On a lock an entry holds, the held one-off slot stays in the worker; the
+    same request again changes no target, so nothing resumes it: the call
+    answers "held" at once and the lock is never asked, for ever.
+    """
+    lock = FakeLock(codes={1: "1111", 7: "7777"}, refuse_clear={7})
+    locks = Locks(front=lock)
+    registry = LockRegistry(locks.make, grace=0.1)
+    worker = await registry.hold("front", "a", {1: "1111"})
+    try:
+        await _check_retry(registry, worker, lock, _settle)
+    finally:
+        await registry.stop()
+
+
+async def _check_retry(registry, worker, lock, _settle) -> None:
+    await _settle(worker)
+    await registry.write_once("front", 7, None)
+    await _settle(worker)
+    assert worker.status(7) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+
+    # The user fixes the lock and presses "clear" again.
+    lock.refuse_clear = set()
+    await registry.write_once("front", 7, None)
+    await _settle(worker)
+
+    assert 7 not in lock.codes

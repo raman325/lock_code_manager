@@ -9,7 +9,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from ..const import (
@@ -19,6 +19,7 @@ from ..const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
+from ..core.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
 from .config import EntryConfig, async_write_entry_config
 from .credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
@@ -26,6 +27,7 @@ from .events import (
     CredentialOperation,
     async_fire_credential_used,
 )
+from .lock_runtime import async_write_once
 from .locks import get_managed_lock
 from .names import identity, name_error, normalize_name
 from .queries import get_entry_config, get_loaded_config_entry
@@ -80,22 +82,43 @@ async def _async_write_and_settle(
 async def async_set_usercode(
     hass: HomeAssistant, lock_entity_id: str, code_slot: int, usercode: str
 ) -> None:
-    """Set a usercode on a lock slot."""
+    """Put a code in a slot no entry manages, through the lock's worker."""
     usercode = usercode.strip()
     if not usercode:
         raise ServiceValidationError(
             "Usercode must not be empty; use the clear operation instead"
         )
-    lock = get_managed_lock(hass, lock_entity_id)
-    await lock.async_internal_set_usercode(code_slot, usercode)
+    await _async_write_unmanaged(hass, lock_entity_id, code_slot, usercode)
 
 
 async def async_clear_usercode(
     hass: HomeAssistant, lock_entity_id: str, code_slot: int
 ) -> None:
-    """Clear a usercode from a lock slot."""
-    lock = get_managed_lock(hass, lock_entity_id)
-    await lock.async_internal_clear_usercode(code_slot)
+    """Clear a slot no entry manages, through the lock's worker."""
+    await _async_write_unmanaged(hass, lock_entity_id, code_slot, None)
+
+
+async def _async_write_unmanaged(
+    hass: HomeAssistant, lock_entity_id: str, code_slot: int, usercode: str | None
+) -> None:
+    """
+    Write a slot no entry manages, once, and wait for it.
+
+    A lock that is not answering keeps the write and makes it when it is
+    back; one that refuses it, or will not take it after its tries, fails.
+    """
+    get_managed_lock(hass, lock_entity_id)  # a lock this integration manages
+    try:
+        done = await async_write_once(hass, lock_entity_id, code_slot, usercode)
+    except SlotTaken as err:
+        raise ServiceValidationError(
+            f"Slot {code_slot} on {lock_entity_id} is managed by an entry; "
+            "change it there"
+        ) from err
+    if done is False:
+        raise HomeAssistantError(
+            f"{lock_entity_id} did not take the change to slot {code_slot}"
+        )
 
 
 def _stored_user(config: EntryConfig, name: str) -> str:

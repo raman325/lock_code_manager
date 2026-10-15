@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
@@ -21,13 +21,14 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     PENDING_WRITE_TTL,
 )
+from custom_components.lock_code_manager.core.slot import Seen
 from custom_components.lock_code_manager.domain.credentials import (
     CredentialRef,
     CredentialType,
     WriteResult,
     credential_from_slot,
-    pin_address,
 )
+from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
@@ -71,6 +72,13 @@ class TestFullSetupLifecycle:
     ) -> None:
         """The coordinator is created and attached to the provider."""
         assert e2e_schlage_lock.coordinator is not None
+
+
+@pytest.fixture
+def no_read_lag() -> Iterator[None]:
+    """Read straight after setup's writes: for tests of the read, not the lag."""
+    with patch.object(SchlageLock, "read_lag", 0.0):
+        yield
 
 
 class TestSetAndClearCredentials:
@@ -134,11 +142,10 @@ class TestSetAndClearCredentials:
         e2e_schlage_lock: SchlageLock,
         schlage_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """Set via async_internal_set_usercode routes through base → async_set_credential."""
+        """The worker's write, async_set_usercode, routes through base → async_set_credential."""
         schlage_mock_services["add_code"].reset_mock()
-        await e2e_schlage_lock.async_internal_set_usercode(1, "9999", "Test User")
+        await e2e_schlage_lock.async_set_usercode(1, "9999", "Test User", source="sync")
 
-        # internal returns None (fires coordinator refresh) — check service call
         assert schlage_mock_services["add_code"].call_count >= 1
         add_call = schlage_mock_services["add_code"].call_args[0][0]
         assert add_call.data["name"] == "lcm:1:Test User"
@@ -146,17 +153,18 @@ class TestSetAndClearCredentials:
 
     async def test_coordinator_reflects_set_credential(
         self,
+        no_read_lag: None,
         hass: HomeAssistant,
         e2e_schlage_lock: SchlageLock,
         schlage_lock_entity: er.RegistryEntry,
         schlage_mock_services: dict[str, AsyncMock],
     ) -> None:
         """
-        After a coordinator refresh, data reflects the lock state.
+        After a worker read, its readings reflect the lock state.
 
-        Schlage is not a push provider, so the coordinator reads state
-        from the lock via get_codes. When the mock reports a tagged code
-        on slot 1, the coordinator data should show UNREADABLE_CODE.
+        Schlage is not a push provider, so the worker reads state from the
+        lock via get_codes. When the mock reports a tagged code on slot 1,
+        the worker sees it as a masked code.
         """
         entity_id = schlage_lock_entity.entity_id
 
@@ -171,25 +179,20 @@ class TestSetAndClearCredentials:
             hass, SCHLAGE_DOMAIN, "get_codes", schlage_mock_services["get_codes"]
         )
 
-        await e2e_schlage_lock.coordinator.async_refresh()
-
-        assert (
-            e2e_schlage_lock.coordinator.data.get(pin_address(1))
-            is SlotCredential.unreadable()
-        )
-        assert (
-            e2e_schlage_lock.coordinator.data.get(pin_address(2))
-            is SlotCredential.empty()
-        )
+        worker = lock_registry(hass).worker(entity_id)
+        assert await worker.read([1, 2]) == {1: Seen.MASKED, 2: Seen.EMPTY}
+        assert worker.slots[1].seen is Seen.MASKED
+        assert worker.slots[2].seen is Seen.EMPTY
 
     async def test_coordinator_reflects_clear_credential(
         self,
+        no_read_lag: None,
         hass: HomeAssistant,
         e2e_schlage_lock: SchlageLock,
         schlage_lock_entity: er.RegistryEntry,
         schlage_mock_services: dict[str, AsyncMock],
     ) -> None:
-        """After a coordinator refresh with empty codes, all slots are EMPTY."""
+        """After a worker read with empty codes, all slots are EMPTY."""
         entity_id = schlage_lock_entity.entity_id
 
         # Ensure get_codes returns empty
@@ -198,16 +201,10 @@ class TestSetAndClearCredentials:
             hass, SCHLAGE_DOMAIN, "get_codes", schlage_mock_services["get_codes"]
         )
 
-        await e2e_schlage_lock.coordinator.async_refresh()
-
-        assert (
-            e2e_schlage_lock.coordinator.data.get(pin_address(1))
-            is SlotCredential.empty()
-        )
-        assert (
-            e2e_schlage_lock.coordinator.data.get(pin_address(2))
-            is SlotCredential.empty()
-        )
+        worker = lock_registry(hass).worker(entity_id)
+        assert await worker.read([1, 2]) == {1: Seen.EMPTY, 2: Seen.EMPTY}
+        assert worker.slots[1].seen is Seen.EMPTY
+        assert worker.slots[2].seen is Seen.EMPTY
 
 
 class TestGetUsers:

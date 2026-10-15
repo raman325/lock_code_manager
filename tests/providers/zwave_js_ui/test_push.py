@@ -13,6 +13,7 @@ from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
+from custom_components.lock_code_manager.core.adapter import _Coordinator
 from custom_components.lock_code_manager.domain.credentials import pin_address
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
 from custom_components.lock_code_manager.domain.models import SlotCredential
@@ -67,7 +68,7 @@ async def zui_lock_subscribed(
     """
     await zui_lock_provider.async_setup(MagicMock())
     await hass.async_block_till_done()
-    zui_lock_provider.coordinator = MagicMock()
+    zui_lock_provider.coordinator = MagicMock(spec=_Coordinator)
     zui_lock_provider.coordinator.desired_credential.return_value = (
         SlotCredential.empty()
     )
@@ -599,7 +600,7 @@ class TestForeignNodeTraffic:
     ) -> None:
         """Without a resolved node topic there is no relative path to read."""
         lock = zui_lock_provider
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
 
         lock._process_node_message(f"{ZUI_NODE_TOPIC}/99/0/userCode/3", b"1234")
 
@@ -918,7 +919,7 @@ async def test_a_second_lock_on_the_same_node_is_addressed_separately(
     other_lock = build_zui_lock(hass, other_entity)
     await other_lock.async_setup(MagicMock())
     await hass.async_block_till_done()
-    other_lock.coordinator = MagicMock()
+    other_lock.coordinator = MagicMock(spec=_Coordinator)
 
     fire_node_value(hass, f"{USER_CODE_VALUEID}/3", "1234")
     await hass.async_block_till_done()

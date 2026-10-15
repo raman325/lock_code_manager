@@ -13,17 +13,18 @@ After every step it checks, through what Home Assistant and the mock lock
 show:
 
 1. Every loaded entry's slots are in sync on every lock it holds, with the
-   lock's code on their code sensors, within a few sync ticks.
+   lock's code on their code sensors, within a few sync ticks -- but on a
+   lock whose provider setup failed, where they stay unavailable.
 2. Each lock some loaded entry holds has exactly one live provider instance,
    and a lock no loaded entry holds has none: by the mock's ``setup`` and
    ``unload`` records, each instance unloaded at most once.
 3. An unload is permanent only when the entry dropped the lock through its
    options and no other enabled entry lists it (PR #1482).
-4. A push lock's live instance holds one subscription; every other instance
+4. A push lock's live instance holds its subscription; every other instance
    holds none.
-5. An instance that was unloaded, or dropped when its setup failed, never
-   runs its provider setup again: no ``setup`` after its teardown in the
-   mock's call order, even within the step that tore it down.
+5. An instance that was unloaded never runs its provider setup again: no
+   ``setup`` after its teardown in the mock's call order, even within the
+   step that tore it down.
 6. No repair is raised: nothing here should need the user.
 
 Some rules also check what they did, as they do it. Time passing changes a
@@ -97,8 +98,8 @@ from custom_components.lock_code_manager.const import (
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     DOMAIN,
-    TICK_INTERVAL,
 )
+from custom_components.lock_code_manager.core.slot import LIMIT as FIGHT_LIMIT
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.exceptions import (
     ProviderNotImplementedError,
@@ -109,6 +110,7 @@ from ..common import (
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
+    TICK_INTERVAL,
     LockFault,
     MockLCMLock,
     MockLCMPushLock,
@@ -177,11 +179,12 @@ class ExampleHung(Exception):
 class FailedSetup(StrEnum):
     """How a lock's setup fails, in the rule that makes it fail."""
 
-    # The provider's own setup raises something no handler expects: the lock
-    # is dropped before anything of it is running.
+    # The provider's own setup raises something no handler expects. The
+    # entry keeps the lock and its instance, which is never read: the slots'
+    # entities stay unavailable until that instance is gone.
     PROVIDER_BUG = "provider bug"
-    # A push lock whose subscription is not implemented: the lock is dropped
-    # after its coordinator and its state listener are running.
+    # A push lock whose subscription is not implemented. The entry keeps the
+    # lock and its instance, which is read and synced but hears no pushes.
     NO_PUSH = "push not implemented"
 
 
@@ -203,8 +206,8 @@ class _Position:
 
     entry: MockConfigEntry | None = None
     locks: tuple[str, ...] = ()
-    # The locks the entry holds while loaded: what it lists, less any whose
-    # setup failed when it last came up.
+    # The locks the entry holds while loaded: what it lists, a lock whose
+    # provider setup failed included.
     holds: set[str] = field(default_factory=set)
     loaded: bool = False
     disabled: bool = False
@@ -228,16 +231,24 @@ class SharedLockMachine(RuleBasedStateMachine):
         self._fail_next: tuple[str, FailedSetup] | None = None
         self._hang_builds = False
         self._held_setups: list[LockFault] = []
-        # Instances dropped by a failed setup, those dropped after their state
-        # listener started among them. Keyed by identity: a provider instance
-        # compares equal to any other for the same lock.
-        self.dropped: set[int] = set()
-        self.dropped_without_push: set[int] = set()
+        # Instances whose provider setup raised, and push instances whose
+        # subscription is not implemented: each stays the lock's live instance
+        # while it is held. Keyed by identity: a provider instance compares
+        # equal to any other for the same lock.
+        self.unready: set[int] = set()
+        self.deaf: set[int] = set()
         # Unload records already checked, and the permanence each lock's
         # unload in the current step must have.
         self._unloads_seen: dict[int, int] = {}
         self._permanent: dict[str, bool] = {}
         self.credential_uses: Counter[str] = Counter()
+        # Codes changed behind Lock Code Manager's back, per lock and slot.
+        # Each is a fight -- the lock went from agreeing to disagreeing --
+        # and the worker holds a slot fought over ``FIGHT_LIMIT`` times in its
+        # window (#776). The window runs on the real monotonic clock, which
+        # the frozen one does not move, so fights never age out here: a slot
+        # is changed at most ``FIGHT_LIMIT - 1`` times in an example.
+        self.fights: Counter[tuple[str, int]] = Counter()
         # Set once a step has hung: the loop may hold a task that will never
         # end, so teardown no longer drives Home Assistant through it.
         self.hung = False
@@ -394,12 +405,22 @@ class SharedLockMachine(RuleBasedStateMachine):
         ]
 
     def _live(self, lock_entity_id: str) -> list[MockLCMLock]:
-        """Return the instances of a lock neither unloaded nor dropped."""
+        """Return the instances of a lock not unloaded."""
         return [
             lock
             for lock in self._instances(lock_entity_id)
-            if not lock.service_calls["unload"] and id(lock) not in self.dropped
+            if not lock.service_calls["unload"]
         ]
+
+    def _ready(self, lock_entity_id: str) -> bool:
+        """Return whether the lock's live instance, if any, finished its setup."""
+        return not any(
+            id(instance) in self.unready for instance in self._live(lock_entity_id)
+        )
+
+    def _hears_pushes(self, instance: MockLCMLock) -> bool:
+        """Return whether a live push instance should hold its subscription."""
+        return id(instance) not in self.unready and id(instance) not in self.deaf
 
     # The model.
 
@@ -452,11 +473,11 @@ class SharedLockMachine(RuleBasedStateMachine):
             position.locks = tuple(locks)
         return position.entry
 
-    def _came_up(self, index: int, failed: str | None = None) -> None:
-        """Record that the entry at ``index`` loaded, holding all but ``failed``."""
+    def _came_up(self, index: int) -> None:
+        """Record that the entry at ``index`` loaded, holding every lock it lists."""
         position = self.positions[index]
         position.loaded = True
-        position.holds = set(position.locks) - {failed}
+        position.holds = set(position.locks)
 
     def _pick(self, data: st.DataObject, wanted, label: str) -> int:
         return data.draw(st.sampled_from(self._indices(wanted)), label=label)
@@ -674,10 +695,11 @@ class SharedLockMachine(RuleBasedStateMachine):
             for instance in self.built[built_before:]
             if instance.lock.entity_id == lock and instance.service_calls["setup"]
         ]
-        self.dropped.add(id(failed))
         if how == FailedSetup.NO_PUSH:
-            self.dropped_without_push.add(id(failed))
-        self._came_up(index, failed=lock)
+            self.deaf.add(id(failed))
+        else:
+            self.unready.add(id(failed))
+        self._came_up(index)
 
     @initialize(
         booting=st.lists(
@@ -734,8 +756,10 @@ class SharedLockMachine(RuleBasedStateMachine):
         """
         Change each held lock's codes behind Lock Code Manager, then let time pass.
 
-        Exactly one instance of each held lock reads it, none of a lock no
-        loaded entry holds, and the change reaches every holder.
+        A slot is changed only while one more change would not hold it for
+        fighting the lock. Exactly one instance of each held lock reads it,
+        none of a lock no loaded entry holds or whose setup failed, and the
+        change reaches every holder.
         """
         hass = self.hass
         reads_before = {
@@ -744,8 +768,14 @@ class SharedLockMachine(RuleBasedStateMachine):
         }
         changed: dict[str, tuple[str, str]] = {}
         for lock in LOCKS:
+            if not self._ready(lock):
+                continue
             for index in self._holders(lock):
                 slot = index + 1
+                if self.fights[(lock, slot)] >= FIGHT_LIMIT - 1:
+                    # One more change would hold the slot, as it should.
+                    continue
+                self.fights[(lock, slot)] += 1
                 code = f"{slot}0{slot}0"
                 self.physical[lock][slot] = code
                 entry = self.positions[index].entry
@@ -779,9 +809,10 @@ class SharedLockMachine(RuleBasedStateMachine):
                 if len(instance.service_calls["get_usercodes"])
                 > reads_before.get(id(instance), 0)
             ]
-            assert len(readers) == (1 if self._held(lock) else 0), (
+            expected = 1 if self._held(lock) and self._ready(lock) else 0
+            assert len(readers) == expected, (
                 f"{len(readers)} instances of {lock} read it in a read interval; "
-                f"held: {self._held(lock)}"
+                f"held: {self._held(lock)}, ready: {self._ready(lock)}"
             )
         missed = {
             entity_id: changed[entity_id]
@@ -798,7 +829,8 @@ class SharedLockMachine(RuleBasedStateMachine):
 
         It reaches every subscription still registered, a torn-down instance
         that never removed its own included, as a real lock's would; the use
-        reaches the entry owning the code exactly once.
+        reaches the entry owning the code exactly once -- or not at all when
+        the live instance never subscribed, its setup having failed.
         """
         index = data.draw(st.sampled_from(self._holders(PUSH_LOCK)), label="entry")
         entry = self.positions[index].entry
@@ -810,7 +842,11 @@ class SharedLockMachine(RuleBasedStateMachine):
 
         self._act(_report, "push_lock_reports_a_use")
         uses = self.credential_uses[entry.entry_id] - before
-        assert uses == 1, f"one use of slot {index + 1} reached {entry.title} {uses}x"
+        expected = 1 if all(map(self._hears_pushes, self._live(PUSH_LOCK))) else 0
+        assert uses == expected, (
+            f"one use of slot {index + 1} reached {entry.title} {uses}x, "
+            f"expected {expected}x"
+        )
 
     @precondition(lambda self: any(self._held(lock) for lock in LOCKS))
     @rule()
@@ -818,12 +854,14 @@ class SharedLockMachine(RuleBasedStateMachine):
         """
         Reload the integration the locks belong to.
 
-        Every live instance runs its provider setup again; the invariants
-        check that no torn-down one does.
+        Every live instance runs its provider setup again -- but one whose
+        setup raised, which never listened for its integration's state; the
+        invariants check that no torn-down one does.
         """
         live = [
             (instance, len(instance.service_calls["setup"]))
             for instance in self._live_all()
+            if id(instance) not in self.unready
         ]
         assert self._act(
             lambda: self.hass.config_entries.async_reload(self.lock_entry.entry_id),
@@ -860,6 +898,7 @@ class SharedLockMachine(RuleBasedStateMachine):
             for index, position in enumerate(self.positions)
             if position.loaded and position.entry is not None
             for lock in position.holds
+            if self._ready(lock)
         }
 
         def _in_sync() -> bool:
@@ -918,42 +957,27 @@ class SharedLockMachine(RuleBasedStateMachine):
         live = {id(instance) for instance in self._live(PUSH_LOCK)}
         for instance in self._instances(PUSH_LOCK):
             assert isinstance(instance, MockLCMPushLock)
-            if self._known_leak(instance):
-                continue
-            held = instance.subscribe_calls - instance.unsubscribe_calls
+            # Whether it still listens, not subscribes less unsubscribes: a
+            # provider's teardown must be idempotent, and an instance whose
+            # setup failed is torn down without ever having subscribed.
+            subscribed = instance._stop_hearing_uses is not None
             is_live = id(instance) in live
-            assert held == (1 if is_live else 0), (
+            assert subscribed is (is_live and self._hears_pushes(instance)), (
                 f"{'live' if is_live else 'torn-down'} push instance "
-                f"holds {held} subscriptions"
+                f"{'holds' if subscribed else 'lacks'} its subscription"
             )
 
     @invariant()
     def torn_down_instances_never_set_up_again(self) -> None:
         for instance in self._instances():
             order = instance.call_order
-            # Where its life ended: the call after its unload, or after its
-            # one provider setup, the one that failed.
-            if instance.service_calls["unload"]:
-                after = order.index("unload") + 1
-            elif id(instance) in self.dropped and not self._known_leak(instance):
-                after = order.index("setup") + 1
-            else:
+            # Where its life ended: the call after its unload.
+            if not instance.service_calls["unload"]:
                 continue
+            after = order.index("unload") + 1
             assert "setup" not in order[after:], (
                 f"a torn-down {instance.lock.entity_id} instance set up again: {order}"
             )
-
-    def _known_leak(self, instance: MockLCMLock) -> bool:
-        """
-        Return whether an instance was dropped after its state listener started.
-
-        Nothing removes that listener, so the instance unsubscribes and sets
-        up again whenever the locks' integration reloads: a known defect,
-        pinned by ``tests/test_init.py::
-        test_a_lock_dropped_after_its_listener_started_never_sets_up_again``
-        and exempt here, alone, until it is fixed.
-        """
-        return id(instance) in self.dropped_without_push
 
     @invariant()
     def no_repairs(self) -> None:

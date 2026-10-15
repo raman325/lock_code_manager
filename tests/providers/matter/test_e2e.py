@@ -25,6 +25,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
@@ -32,12 +33,15 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOT,
     CONF_USERS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
-    TICK_INTERVAL,
 )
+from custom_components.lock_code_manager.core.slot import Seen
+from custom_components.lock_code_manager.core.worker import RETRY_AFTER
 from custom_components.lock_code_manager.domain.credentials import (
     WriteResult,
-    pin_address,
+)
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_registry,
+    port_of,
 )
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import parse_tag
@@ -59,10 +63,12 @@ from tests.common import (
 )
 from tests.conftest import async_advance_time, async_initial_tick
 
+from ...common import TICK_INTERVAL
 from .conftest import FAKE_MATTER_SLOTS, matter_helpers_patched
 from .fake_node import DlStatus, FakeMatterLock, ImStatus
 
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
+WORKER = "custom_components.lock_code_manager.core.worker"
 
 
 class TestFullSetupLifecycle:
@@ -156,10 +162,12 @@ class TestSetAndClearUsercodes:
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
         """
-        After set, the coordinator has the optimistic UNREADABLE_CODE value.
+        After set, the provider's push tells the core the slot holds a masked code.
 
-        Matter PINs are write-only so optimistic updates use UNREADABLE_CODE
-        instead of the actual PIN value. The push comes from async_set_credential.
+        Matter PINs are write-only so the push carries an unreadable code
+        instead of the actual PIN value. The push comes from
+        async_set_credential; slot 4 is managed by no entry, so the push
+        lands with the lock's untracked codes.
         """
         with (
             patch(
@@ -177,10 +185,9 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
-        assert (
-            e2e_matter_lock.coordinator.data.get(pin_address(4))
-            is SlotCredential.unreadable()
-        )
+        worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
+        assert worker is not None
+        assert port_of(worker).others.get(4) is Seen.MASKED
 
     async def test_clear_usercode_optimistic_update(
         self,
@@ -188,8 +195,14 @@ class TestSetAndClearUsercodes:
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """After clear, the coordinator has SlotCredential.empty()."""
+        """After clear, the provider pushes an empty slot 2 to the lock's worker."""
+        worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
+        assert worker is not None
+        pushed: list[tuple[int, object]] = []
         with (
+            patch.object(
+                worker, "push", lambda slot, value: pushed.append((slot, value))
+            ),
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
                 matter_mock_helpers["get_lock_users"],
@@ -205,10 +218,7 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_clear_usercode(2)
 
-        assert (
-            e2e_matter_lock.coordinator.data.get(pin_address(2))
-            is SlotCredential.empty()
-        )
+        assert (2, Seen.EMPTY) in pushed
 
 
 class TestGetUsercodes:
@@ -319,8 +329,8 @@ class TestOutOfBandDeletion:
         Manage access sends ClearUser, so the lock no longer lists the user
         when the event arrives; the slot it anchored is resolved from the
         provider's last read. The in-sync sensor goes off on the event, the
-        next tick writes the PIN back for the same user, and the sensor
-        returns to on once the lock lists the user again.
+        worker writes the PIN back for the same user, and the sensor
+        returns to on once the write's read-back lists the user again.
         """
         in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, lock_entity.entity_id)
         await async_initial_tick(hass, in_sync)
@@ -342,21 +352,34 @@ class TestOutOfBandDeletion:
         )
 
         matter_mock_helpers["get_lock_users"].return_value = _AFTER_USER_ONE_DELETED
-        matter_mock_helpers["set_lock_credential"].reset_mock()
+        set_credential = matter_mock_helpers["set_lock_credential"]
+        set_credential.reset_mock()
+        write = set_credential.side_effect
+
+        async def _write_back(*args: Any, **kwargs: Any) -> Any:
+            # The lock lists the user again once the PIN is written: the
+            # write's read-back sees it.
+            result = await write(*args, **kwargs)
+            matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
+            return result
+
+        set_credential.side_effect = _write_back
+        states: list[str] = []
+        unsub = async_track_state_change_event(
+            hass, in_sync, lambda event: states.append(event.data["new_state"].state)
+        )
         deliver(EventType.NODE_EVENT, _user_cleared_event(matter_node.node_id, 1))
         await hass.async_block_till_done()
-        assert hass.states.get(in_sync).state == STATE_OFF
+        unsub()
+        # The deletion turned the sensor off, then the write-back on again.
+        assert states[:1] == [STATE_OFF], states
 
-        await async_advance_time(hass, TICK_INTERVAL * 2)
         writes = matter_mock_helpers["set_lock_credential"].await_args_list
         assert any(
             call.kwargs.get("credential_data") == "1234"
             and call.kwargs.get("user_index") == 1
             for call in writes
         ), [call.kwargs for call in writes]
-
-        matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
-        await async_advance_time(hass, TICK_INTERVAL * 3)
         assert hass.states.get(in_sync).state == STATE_ON
 
 
@@ -611,18 +634,43 @@ class TestStartup:
         Right after a restart the lock answered SetCredential with status 133
         (InvalidField, which Home Assistant names ``unknown(133)``), and the
         client, not yet connected, raised ``InvalidState`` (MS_CLIENT:771-772):
-        the slots were disabled or suspended for good. Each slot is refused
-        more times than the breaker allows.
+        the slots were disabled or suspended for good. Here the lock refuses
+        every write for its first stretch of time; each slot waits longer
+        before each try again, so its last try lands once the lock is ready.
         """
-        refusals = len(FAKE_MATTER_SLOTS) * MAX_SYNC_ATTEMPTS
+        not_ready_for = RETRY_AFTER[0] + RETRY_AFTER[1] / 2
         refused = fake_matter_lock.refuse(
-            "SetCredential", status=DlStatus.kInvalidField, times=refusals
+            "SetCredential", status=DlStatus.kInvalidField
         )
         not_connected = fake_matter_lock.fail(
-            "SetUser", error=InvalidState("Not connected"), times=MAX_SYNC_ATTEMPTS
+            "SetUser", error=InvalidState("Not connected")
         )
 
+        # The spacing that ships (imported before the harness zeroes it).
+        with patch(f"{WORKER}.RETRY_AFTER", RETRY_AFTER):
+            await self._a_lock_not_ready_for(
+                hass,
+                freezer,
+                fake_matter_lock_entity,
+                refused,
+                not_connected,
+                not_ready_for,
+            )
+
+    async def _a_lock_not_ready_for(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock_entity: er.RegistryEntry,
+        refused: Any,
+        not_connected: Any,
+        not_ready_for: float,
+    ) -> None:
         async with _entry_on(hass, fake_matter_lock_entity) as entry:
+            await async_advance_clock(hass, freezer, not_ready_for)
+            assert refused.hits + not_connected.hits > 0
+            refused.clear()
+            not_connected.clear()
             await async_tick_until(
                 hass,
                 freezer,
@@ -630,12 +678,10 @@ class TestStartup:
                     _states(hass, entry, fake_matter_lock_entity, slot)[0] == STATE_ON
                     for slot in FAKE_MATTER_SLOTS
                 ),
-                max_ticks=4 * refusals,
+                max_ticks=int(RETRY_AFTER[1]),
                 what="every slot in sync",
             )
 
-            assert refused.hits == refusals
-            assert not_connected.hits == MAX_SYNC_ATTEMPTS
             assert lcm_issue_ids(hass, "slot_disabled") == []
             assert lcm_issue_ids(hass, "slot_suspended") == []
 
@@ -809,7 +855,7 @@ class TestOpenBugs:
         strict=True,
         raises=AssertionError,
         reason=(
-            "open: a turned-off slot's clear adopts an untagged user holding a "
+            "open (#1518): a turned-off slot's clear adopts an untagged user holding a "
             "PIN at the slot's credential index and removes the homeowner's code"
         ),
     )

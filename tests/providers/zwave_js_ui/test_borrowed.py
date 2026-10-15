@@ -84,7 +84,9 @@ async def test_the_occupancy_read_returns_the_transport_it_borrowed(
     assert occupancy.is_known
     assert transport.opened
     assert transport.live == []
-    assert transport.disposed == [zui_lock_answering]
+    # The flow's own provider and the one the lock's worker reads through
+    # are both handed back.
+    assert set(transport.disposed) == {zui_lock_answering}
 
 
 async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
@@ -103,7 +105,7 @@ async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
     with (
         patch.object(
             ZWaveJSUILock,
-            "async_internal_get_occupied_indices",
+            "async_get_usercodes",
             side_effect=LockDisconnected("no answer"),
         ),
         track_zui_transport() as transport,
@@ -113,7 +115,9 @@ async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
         )
 
     assert not occupancy.is_known
-    assert transport.disposed == [zui_lock_answering]
+    assert transport.disposed
+    assert set(transport.disposed) == {zui_lock_answering}
+    assert transport.live == []
 
 
 async def test_the_capacity_check_returns_the_transport_it_borrowed(

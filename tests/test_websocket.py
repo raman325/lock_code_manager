@@ -77,7 +77,6 @@ from custom_components.lock_code_manager.const import (
     ATTR_TARGET,
     ATTR_USER_ENTITY_ID,
     ATTR_USERCODE,
-    BACKOFF_FAILURE_THRESHOLD,
     CONF_CONDITIONS,
     CONF_CONFIG_ENTRY,
     CONF_ENTITIES,
@@ -86,10 +85,20 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     SERVICE_DELETE_USER,
+    SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_USE_CREDENTIAL,
+)
+from custom_components.lock_code_manager.core.worker import (
+    BACKOFF_AFTER,
+    LockError,
+    LockWorker,
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_codes,
+    lock_registry,
+)
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.providers import BaseLock
@@ -116,9 +125,11 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
+    async_setup_lcm_entry,
     async_tick_until,
     current_entry,
     in_sync_entity_id,
+    mock_lock,
     slot_entity_id,
     unnumbered_user_subentry,
     user_subentries,
@@ -137,6 +148,47 @@ BINARY_SENSOR_TEST_ENTITY_ID = "binary_sensor.test_motion"
 SWITCH_TEST_ENTITY_ID = "switch.test_switch"
 INPUT_BOOLEAN_TEST_ENTITY_ID = "input_boolean.test_toggle"
 SCHEDULE_TEST_ENTITY_ID = "schedule.test_schedule"
+
+
+async def _async_events_until_quiet(ws_client: Any) -> list[dict[str, Any]]:
+    """Return every event payload the client has been sent, once none follow."""
+    events: list[dict[str, Any]] = []
+    while True:
+        try:
+            async with asyncio.timeout(0.2):
+                msg = await ws_client.receive_json()
+        except TimeoutError:
+            return events
+        assert msg["type"] == "event", msg
+        events.append(msg["event"])
+
+
+async def _async_result_for(
+    ws_client: Any, msg_id: int, events: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """
+    Return the result of command ``msg_id``.
+
+    The events sent before it are collected into ``events`` when given.
+    """
+    while True:
+        msg = await ws_client.receive_json()
+        if msg["type"] == "result" and msg["id"] == msg_id:
+            return msg
+        if events is not None and msg["type"] == "event":
+            events.append(msg["event"])
+
+
+def _lock_1_worker(hass: HomeAssistant) -> LockWorker:
+    """Return the worker that owns lock 1."""
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+    return worker
+
+
+def _push(lock: BaseLock, slot: int, pin: str) -> None:
+    """Have the lock report, on its own, that ``slot`` holds ``pin``."""
+    lock._push_credential_update(slot, SlotCredential.known(pin))
 
 
 async def test_get_config_entry_data(
@@ -305,18 +357,25 @@ async def test_subscribe_lock_codes(
     assert event["type"] == "event"
     assert event["event"][ATTR_LOCK_ENTITY_ID] == LOCK_1_ENTITY_ID
 
+    # Slot 2 is inactive (its calendar has no event): the lock was cleared.
+    assert {
+        slot[ATTR_SLOT]: slot[ATTR_CODE] for slot in event["event"][CONF_SLOTS]
+    } == {
+        1: "1234",
+        2: "empty",
+    }
+
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator.push_update({1: "9999"})
+    _push(lock, 1, "9999")
     await hass.async_block_till_done()
 
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-    assert {
-        slot[ATTR_SLOT]: slot[ATTR_CODE] for slot in updated["event"][CONF_SLOTS]
-    } == {
-        1: "9999",
-        2: "5678",
-    }
+    # The card sees what the lock reported, then the managed PIN put back.
+    events = await _async_events_until_quiet(ws_client)
+    codes = [
+        {slot[ATTR_SLOT]: slot[ATTR_CODE] for slot in e[CONF_SLOTS]} for e in events
+    ]
+    assert codes[0] == {1: "9999", 2: "empty"}
+    assert codes[-1] == {1: "1234", 2: "empty"}
 
 
 async def test_subscribe_lock_codes_sync_status(
@@ -344,17 +403,20 @@ async def test_subscribe_lock_codes_sync_status(
     assert event["type"] == "event"
     assert ATTR_SYNC_STATUS not in event["event"]
 
-    # Make the lock unreachable (trips the lock breaker) and notify listeners
+    # The lock stops answering: the worker backs off it
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    for _ in range(BACKOFF_FAILURE_THRESHOLD):
-        lock.coordinator._lock_breaker.record_failure()
-    lock.coordinator.async_update_listeners()
-    await hass.async_block_till_done()
+    with lock.fail("get"):
+        # The worker backs off after a few reads with no answer
+        for _ in range(BACKOFF_AFTER):
+            with pytest.raises(LockError):
+                await _lock_1_worker(hass).read()
+        await hass.async_block_till_done()
+        assert _lock_1_worker(hass).reachable is False
 
-    # Updated event should have sync_status == "suspended"
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-    assert updated["event"][ATTR_SYNC_STATUS] == "suspended"
+        # Updated event should have sync_status == "suspended"
+        events = await _async_events_until_quiet(ws_client)
+        assert events
+        assert events[-1][ATTR_SYNC_STATUS] == "suspended"
 
 
 async def test_subscribe_lock_codes_masked(
@@ -379,10 +441,12 @@ async def test_subscribe_lock_codes_masked(
 
     event = await ws_client.receive_json()
     assert event["type"] == "event"
-    # Codes are masked
-    for slot in event["event"][CONF_SLOTS]:
-        assert slot[ATTR_CODE] is None
-        assert slot[ATTR_CODE_LENGTH] == 4
+    # Codes are masked. Slot 2 is inactive (its calendar is off), so its
+    # lock has cleared it: an empty slot holds nothing to mask.
+    slots = {slot["slot"]: slot for slot in event["event"][CONF_SLOTS]}
+    assert slots[1][ATTR_CODE] is None
+    assert slots[1][ATTR_CODE_LENGTH] == 4
+    assert slots[2][ATTR_CODE] == "empty"
 
 
 async def test_subscribe_lock_codes_entity_state_change(
@@ -830,7 +894,7 @@ async def test_subscribe_code_slot_coordinator_update(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test subscribe_code_slot triggers updates on coordinator changes."""
+    """Test subscribe_code_slot triggers updates on what the lock reports."""
     ws_client = await hass_ws_client(hass)
 
     # Subscribe to slot 1
@@ -852,25 +916,21 @@ async def test_subscribe_code_slot_coordinator_update(
     initial_locks = event["event"][CONF_LOCKS]
     assert len(initial_locks) > 0
 
-    # Update the lock coordinator
+    # The lock reports a different code in the slot
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator.push_update({1: "9999"})
+    _push(lock, 1, "9999")
     await hass.async_block_till_done()
 
-    # Should receive an update event with new code
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-    # Find lock 1 in the locks data
-    lock_1_data = next(
-        (
-            lock_data
-            for lock_data in updated["event"][CONF_LOCKS]
-            if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
-        ),
-        None,
-    )
-    assert lock_1_data is not None
-    assert lock_1_data[ATTR_CODE] == "9999"
+    # Should receive an update event with the new code, then the managed
+    # PIN once it is put back
+    lock_1_codes = [
+        lock_data[ATTR_CODE]
+        for event in await _async_events_until_quiet(ws_client)
+        for lock_data in event[CONF_LOCKS]
+        if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+    ]
+    assert lock_1_codes[0] == "9999"
+    assert lock_1_codes[-1] == "1234"
 
 
 async def test_subscribe_code_slot_ignores_metadata_changes(
@@ -1207,8 +1267,10 @@ async def test_subscribe_lock_codes_attributes_a_disabled_entrys_slot(
         disabled_by=ConfigEntryDisabler.USER,
     )
     holder.add_to_hass(hass)
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    await lock.coordinator.async_refresh()
+    # Slot 3 holds the disabled entry's code; a read of the lock tells of it.
+    mock_lock(lock_code_manager_config_entry).codes[3] = "9999"
+    await _lock_1_worker(hass).read()
+    await hass.async_block_till_done()
     ws_client = await hass_ws_client(hass)
 
     await ws_client.send_json(
@@ -1232,28 +1294,34 @@ async def test_set_usercode_operation_failure(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_usercode websocket command when operation fails."""
+    """
+    Test set_usercode websocket command when operation fails.
+
+    A provider that raises something unexpected is charged to the slot; once
+    the slot is held after its tries, the command fails.
+    """
     ws_client = await hass_ws_client(hass)
 
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
-        "async_internal_set_usercode",
+        "async_set_usercode",
         AsyncMock(side_effect=Exception("Test error")),
-    ):
+    ) as set_usercode:
         await ws_client.send_json(
             {
                 "id": 1,
                 "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "1234",
+                ATTR_USERCODE: "9876",
             }
         )
-        msg = await ws_client.receive_json()
+        msg = await _async_result_for(ws_client, 1)
         assert not msg["success"]
         assert msg["error"]["code"] == "unknown_error"
-        assert "Test error" in msg["error"]["message"]
+        assert "did not take the change to slot 3" in msg["error"]["message"]
+        assert set_usercode.await_count >= 1
 
 
 async def test_clear_usercode_operation_failure(
@@ -1266,9 +1334,11 @@ async def test_clear_usercode_operation_failure(
     ws_client = await hass_ws_client(hass)
 
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    # Slot 3 holds a code nobody manages: a slot read empty needs no clear.
+    mock_lock(lock_code_manager_config_entry).codes[3] = "4444"
     with patch.object(
         lock,
-        "async_internal_clear_usercode",
+        "async_clear_usercode",
         AsyncMock(side_effect=Exception("Clear failed")),
     ):
         await ws_client.send_json(
@@ -1279,10 +1349,11 @@ async def test_clear_usercode_operation_failure(
                 ATTR_CODE_SLOT: 3,
             }
         )
-        msg = await ws_client.receive_json()
+        msg = await _async_result_for(ws_client, 1)
         assert not msg["success"]
         assert msg["error"]["code"] == "unknown_error"
-        assert "Clear failed" in msg["error"]["message"]
+        assert "did not take the change to slot 3" in msg["error"]["message"]
+    assert mock_lock(lock_code_manager_config_entry).codes[3] == "4444"
 
 
 async def test_set_usercode_duplicate_code_error(
@@ -1291,13 +1362,17 @@ async def test_set_usercode_duplicate_code_error(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test set_usercode websocket command returns error when duplicate code detected."""
+    """
+    Test set_usercode websocket command returns error when duplicate code detected.
+
+    The lock's refusal is its answer: the write is not retried.
+    """
     ws_client = await hass_ws_client(hass)
 
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     with patch.object(
         lock,
-        "async_internal_set_usercode",
+        "async_set_usercode",
         AsyncMock(
             side_effect=DuplicateCodeError(
                 code_slot=3,
@@ -1306,21 +1381,21 @@ async def test_set_usercode_duplicate_code_error(
                 lock_entity_id=LOCK_1_ENTITY_ID,
             )
         ),
-    ):
+    ) as set_usercode:
         await ws_client.send_json(
             {
                 "id": 1,
                 "type": "lock_code_manager/write_unmanaged_code",
                 ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
                 ATTR_CODE_SLOT: 3,
-                ATTR_USERCODE: "1234",
+                ATTR_USERCODE: "9876",
             }
         )
-        msg = await ws_client.receive_json()
+        msg = await _async_result_for(ws_client, 1)
         assert not msg["success"]
         assert msg["error"]["code"] == "unknown_error"
-        assert "duplicate" in msg["error"]["message"].lower()
-        assert "slot 7" in msg["error"]["message"]
+        assert "did not take the change to slot 3" in msg["error"]["message"]
+        assert set_usercode.await_count == 1
 
 
 # =============================================================================
@@ -1363,11 +1438,6 @@ async def test_pin_set_via_service_reflects_in_subscribe_code_slot(
         target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
         blocking=True,
     )
-    await hass.async_block_till_done()
-
-    # Force coordinator refresh to pick up new code from mock lock
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    await lock.coordinator.async_refresh()
     await hass.async_block_till_done()
 
     # Collect WebSocket updates until we see the new PIN
@@ -1431,11 +1501,6 @@ async def test_pin_clear_via_service_reflects_in_subscribe_code_slot(
         target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
         blocking=True,
     )
-    await hass.async_block_till_done()
-
-    # Force coordinator refresh
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    await lock.coordinator.async_refresh()
     await hass.async_block_till_done()
 
     # Collect WebSocket updates until we see PIN is None
@@ -1505,7 +1570,7 @@ async def test_coordinator_push_update_reflects_in_subscribe_lock_codes(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """Test that a coordinator push update is reflected in subscribe_lock_codes."""
+    """Test that a lock's push is reflected in subscribe_lock_codes."""
     ws_client = await hass_ws_client(hass)
 
     # Subscribe to lock 1 with reveal=True
@@ -1524,16 +1589,18 @@ async def test_coordinator_push_update_reflects_in_subscribe_lock_codes(
     event = await ws_client.receive_json()
     assert event["type"] == "event"
 
-    # Push coordinator update with new code for slot 1
+    # The lock pushes a new code for slot 1
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator.push_update({1: "9999"})
+    _push(lock, 1, "9999")
     await hass.async_block_till_done()
 
-    # Receive WebSocket update and verify slot 1 has code "9999"
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-    slots_by_num = {s[ATTR_SLOT]: s for s in updated["event"][CONF_SLOTS]}
+    # The first update shows slot 1 with code "9999"; the managed PIN is
+    # then put back
+    events = await _async_events_until_quiet(ws_client)
+    slots_by_num = {s[ATTR_SLOT]: s for s in events[0][CONF_SLOTS]}
     assert slots_by_num[1][ATTR_CODE] == "9999"
+    slots_by_num = {s[ATTR_SLOT]: s for s in events[-1][CONF_SLOTS]}
+    assert slots_by_num[1][ATTR_CODE] == "1234"
 
 
 async def test_set_usercode_reflects_in_subscribe_lock_codes(
@@ -1571,18 +1638,18 @@ async def test_set_usercode_reflects_in_subscribe_lock_codes(
             ATTR_USERCODE: "7777",
         }
     )
-    set_msg = await ws_client.receive_json()
+    set_msg = await _async_result_for(ws_client, 2)
     assert set_msg["success"]
 
-    # Force coordinator refresh to pick up the new code
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    await lock.coordinator.async_refresh()
+    # Read the lock to pick up the new code
+    await _lock_1_worker(hass).read()
     await hass.async_block_till_done()
 
     # Receive WebSocket update and verify slot 3 appears with code "7777"
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-    slots_by_num = {s[ATTR_SLOT]: s for s in updated["event"][CONF_SLOTS]}
+    events = await _async_events_until_quiet(ws_client)
+    assert events
+    assert events
+    slots_by_num = {s[ATTR_SLOT]: s for s in events[-1][CONF_SLOTS]}
     assert 3 in slots_by_num
     assert slots_by_num[3][ATTR_CODE] == "7777"
     assert slots_by_num[3][ATTR_MANAGED] is False
@@ -1639,7 +1706,7 @@ async def test_set_slot_condition_reflects_in_subscribe_code_slot(
             "entity_id": condition_entity_id,
         }
     )
-    condition_msg = await ws_client.receive_json()
+    condition_msg = await _async_result_for(ws_client, 2)
     assert condition_msg["success"]
     await hass.async_block_till_done()
 
@@ -1653,11 +1720,12 @@ async def test_set_slot_condition_reflects_in_subscribe_code_slot(
             "reveal": True,
         }
     )
-    msg = await ws_client.receive_json()
+    msg = await _async_result_for(ws_client, 3)
     assert msg["success"]
 
     event = await ws_client.receive_json()
     assert event["type"] == "event"
+    assert event["id"] == 3
     conditions = event["event"][CONF_CONDITIONS]
     # The condition_entity key should contain the condition entity data
     assert ATTR_CONDITION_ENTITY in conditions
@@ -1817,8 +1885,11 @@ async def test_subscribe_lock_codes_masked_shape_contract(
     event = await ws_client.receive_json()
     assert event["type"] == "event"
 
-    # Each slot should have code=None and code_length as an integer
+    # Each slot holding a code has code=None and code_length as an integer;
+    # an empty one (slot 2 is inactive, so cleared) says so instead.
     for slot in event["event"][CONF_SLOTS]:
+        if slot[ATTR_CODE] == "empty":
+            continue
         assert slot[ATTR_CODE] is None
         assert isinstance(slot[ATTR_CODE_LENGTH], int)
 
@@ -2933,15 +3004,14 @@ async def test_subscribe_lock_codes_tracking_refresh_noop_when_unchanged(
     event = await ws_client.receive_json()
     assert event["type"] == "event"
 
-    # Trigger a coordinator update - _send_update calls _refresh_lock_state_tracking
+    # Trigger a lock update - _send_update calls _refresh_lock_state_tracking
     # with the same entity set, so it should be a no-op (early return)
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator.push_update({1: "9999"})
+    _push(lock, 1, "9999")
     await hass.async_block_till_done()
 
-    # Should still get the coordinator update event
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
+    # Should still get the lock's update events
+    assert await _async_events_until_quiet(ws_client)
 
     # Verify state tracking still works (entity state change produces update)
     enabled_entity_id = SLOT_1_ENABLED_ENTITY
@@ -3397,7 +3467,7 @@ async def test_subscribe_code_slot_receives_coordinator_updates(
     lock_code_manager_config_entry,
     hass_ws_client: WebSocketGenerator,
 ) -> None:
-    """subscribe_code_slot fires events when coordinator data changes."""
+    """subscribe_code_slot fires events when what the lock holds changes."""
     ws_client = await hass_ws_client(hass)
 
     # Subscribe to slot 1
@@ -3417,26 +3487,23 @@ async def test_subscribe_code_slot_receives_coordinator_updates(
     event = await ws_client.receive_json()
     assert event["type"] == "event"
 
-    # Push new coordinator data
+    # The lock reports a new code
     lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator.push_update({1: "new_code"})
+    _push(lock, 1, "5555")
     await hass.async_block_till_done()
 
-    # Receive websocket event
-    updated = await ws_client.receive_json()
-    assert updated["type"] == "event"
-
-    # Verify the lock status in the event shows the new code
+    # Verify the lock status in the first event shows the new code
+    events = await _async_events_until_quiet(ws_client)
     lock_1_data = next(
         (
             lock_data
-            for lock_data in updated["event"][CONF_LOCKS]
+            for lock_data in events[0][CONF_LOCKS]
             if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
         ),
         None,
     )
     assert lock_1_data is not None
-    assert lock_1_data[ATTR_CODE] == "new_code"
+    assert lock_1_data[ATTR_CODE] == "5555"
 
 
 class TestAddressingASlotByUser:
@@ -3849,3 +3916,37 @@ async def test_a_lock_that_withholds_codes_tells_the_card_the_pin_length(
     assert slot["code_length"] == 6
     assert slot["configured_code_length"] == 6
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_code_removed_at_the_keypad_leaves_the_lock_card(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An unmanaged code deleted at the lock disappears from what the card shows.
+
+    The old coordinator replaced its data with each read; ``port.others`` is
+    only ever added to, so the deleted code is shown for good.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.codes[7] = "4242"
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert lock_codes(hass, LOCK_1_ENTITY_ID)[7].pin == "4242"
+
+    del lock.codes[7]  # deleted at the keypad
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    credential = lock_codes(hass, LOCK_1_ENTITY_ID).get(7)
+    assert credential is None or not credential.pin
