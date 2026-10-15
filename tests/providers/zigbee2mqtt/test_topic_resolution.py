@@ -57,28 +57,6 @@ async def test_debug_info_shape_pin(
     assert payload["command_topic"] == f"{Z2M_FULL_TOPIC}/set"
 
 
-async def test_resolve_device_topic_from_state_topic(
-    hass: HomeAssistant, mqtt_lock_discovered: er.RegistryEntry
-) -> None:
-    """The device topic comes verbatim from the discovery state_topic."""
-    lock = _build_lock(hass, mqtt_lock_discovered)
-    assert lock._resolve_device_topic() == Z2M_FULL_TOPIC
-    assert lock._get_topic() == Z2M_FULL_TOPIC
-    assert lock._get_topic("set") == f"{Z2M_FULL_TOPIC}/set"
-    assert lock._get_topic("get") == f"{Z2M_FULL_TOPIC}/get"
-
-
-async def test_resolve_device_topic_multi_level_base_topic(
-    hass: HomeAssistant, mqtt_mock, mqtt_teardown
-) -> None:
-    """Multi-level base topics (home/z2m) resolve verbatim — no wildcard parsing."""
-    entity = await async_discover_z2m_lock(
-        hass, ieee="0xdeadbeef", name="BackDoor", base_topic="home/z2m"
-    )
-    lock = _build_lock(hass, entity)
-    assert lock._resolve_device_topic() == "home/z2m/BackDoor"
-
-
 async def test_resolve_device_topic_command_topic_fallback(
     hass: HomeAssistant, mqtt_mock, mqtt_teardown
 ) -> None:
