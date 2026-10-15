@@ -689,6 +689,46 @@ async def test_subscribe_code_slot_includes_sync_status_once_determined(
     assert lock_1_status[ATTR_SYNC_STATUS] == "in_sync"
 
 
+async def test_subscribe_code_slot_shows_a_slot_being_checked_as_pending(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    A slot whose reading was set aside to read it again is not in sync.
+
+    ``in_sync`` is False, so the slot card shows the lock pending rather
+    than its "Unknown" fallback.
+    """
+    await hass.async_block_till_done()
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+    worker.slots[1].seen = None
+    worker.on_change()
+    await hass.async_block_till_done()
+
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_code_slot",
+            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
+            ATTR_SLOT: 1,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    data = (await ws_client.receive_json())["event"]
+
+    lock_1_status = next(
+        lock_data
+        for lock_data in data[CONF_LOCKS]
+        if lock_data[ATTR_ENTITY_ID] == LOCK_1_ENTITY_ID
+    )
+    assert lock_1_status[ATTR_IN_SYNC] is False
+    assert ATTR_SYNC_STATUS not in lock_1_status
+
+
 async def test_subscribe_code_slot_masked(
     hass: HomeAssistant,
     mock_lock_config_entry,

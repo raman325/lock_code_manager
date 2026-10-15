@@ -48,6 +48,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
@@ -2925,5 +2926,71 @@ class TestReEnableAfterUnconfirmedClear:
 
         assert fake_zwave_lock.holds(1) == "9999"
         assert states[0] == (STATE_OFF, "")
+        assert all(STATE_UNAVAILABLE not in seen for seen in states), states
+        assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "9999")
+
+
+class TestReEnableWhileClearing:
+    """A user turned off, then back on before the clear is confirmed."""
+
+    @pytest.fixture(name="lock_schlage_be469_state")
+    def supervised_state_fixture(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC: the clear is not verified."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    @pytest.mark.parametrize(
+        "clear_out",
+        [
+            # Production test 2 (and test 3's slower locks): back on while the
+            # clear is still with the lock. The lock reports the slot Available
+            # once the clear lands.
+            pytest.param(True, id="clear_out"),
+            # Production test 3's first lock: back on once its clear is in.
+            pytest.param(False, id="clear_in"),
+        ],
+    )
+    async def test_the_slot_shows_pending_then_takes_the_pin_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        clear_out: bool,
+    ) -> None:
+        """
+        Found on a production test: turned back on, the slot went unavailable.
+
+        Wanting the PIN again while the clear was unconfirmed set the slot's
+        reading aside, to read it before writing (``Slot.doubt``), and the
+        sensors went unavailable while it was checked: the card showed "?".
+        They stay available: off (pending) with an unknown code, then in sync
+        with the PIN, written once.
+        """
+        entry = fake_zwave_lock_entry
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+        sets = list(fake_zwave_lock.sets)
+        states = _record_slot_states(hass, entry, lock_entity, 1)
+
+        with fake_zwave_lock.hang("clear", 1) as fault:
+            await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+            await fault.async_wait_held()
+            if clear_out:
+                await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        # The clear lands, and the lock says so.
+        fake_zwave_lock.report(1)
+        if not clear_out:
+            await async_advance_clock(hass, freezer, 8)
+            assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "")
+            await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        await async_advance_clock(hass, freezer, 60)
+
+        assert fake_zwave_lock.clears == [1]
+        assert fake_zwave_lock.sets == [*sets, (1, "9999")]
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert (STATE_OFF, STATE_UNKNOWN if clear_out else "") in states, states
         assert all(STATE_UNAVAILABLE not in seen for seen in states), states
         assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "9999")
