@@ -191,7 +191,9 @@ class EntityCallbackRegistry:
         """
         prefix = f"{slot_num}|"
         to_remove = [uid for uid in self.remove_entity if uid.startswith(prefix)]
-        await asyncio.gather(*(self._remove_entity(uid) for uid in to_remove))
+        async with asyncio.TaskGroup() as tg:
+            for uid in to_remove:
+                tg.create_task(self._remove_entity(uid))
 
     async def _remove_entity(self, uid: str) -> None:
         """Run one entity remover, logging rather than raising."""
