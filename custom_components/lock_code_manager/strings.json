@@ -576,7 +576,11 @@
       },
       "abort": {
         "reconfigure_successful": "The user was updated.",
-        "users_added": "Added {num_users} users."
+        "users_added": "Added {num_users} users.",
+        "users_added_cannot_report": "Added {num_users} users. {lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
+      },
+      "create_entry": {
+        "cannot_report": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
       }
     }
   }

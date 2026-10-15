@@ -346,10 +346,20 @@ async def _async_validate_users_yaml(
     return parsed_users, {}, {}
 
 
-def _cannot_report(locks: Iterable[str], slots: Iterable[int]) -> dict[str, str]:
-    """Name the locks that cannot report their codes, and the slots at risk."""
+def _cannot_report(
+    hass: HomeAssistant, locks: Iterable[str], slots: Iterable[int]
+) -> dict[str, str] | None:
+    """
+    Name those of ``locks`` that cannot report their codes, and the slots at risk.
+
+    None when every one of them can: nothing to warn of. Said, not asked:
+    any lock would get these slots, and nothing seen in them may still be a
+    keypad code.
+    """
+    if not (silent := locks_that_cannot_report(hass, locks)):
+        return None
     return {
-        "lock": ", ".join(locks),
+        "lock": ", ".join(silent),
         "slots": ", ".join(str(slot) for slot in sorted(slots)),
     }
 
@@ -708,16 +718,15 @@ class LockCodeManagerFlowHandler(
         config = EntryConfig.from_mapping(
             {**self.data, CONF_SLOT_ASSIGNMENT: dict(assignment.slots)}
         )
-        silent = locks_that_cannot_report(self.hass, self.data[CONF_LOCKS])
+        warning = _cannot_report(
+            self.hass, self.data[CONF_LOCKS], assignment.slots.values()
+        )
         return self.async_create_entry(
             title=self.title,
             data=config.to_dict(),
             subentries=config.subentries(),
-            # Said on the way out, not asked: any lock would get these slots.
-            description="cannot_report" if silent else None,
-            description_placeholders=(
-                _cannot_report(silent, assignment.slots.values()) if silent else None
-            ),
+            description="cannot_report" if warning else None,
+            description_placeholders=warning,
         )
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
@@ -934,15 +943,14 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                     self.hass, self.config_entry, added, config.slot_numbers
                 )
                 if not errors and (
-                    silent := locks_that_cannot_report(self.hass, added)
+                    warning := _cannot_report(self.hass, added, config.slot_numbers)
                 ):
-                    # Nothing seen in the way may still be a keypad code.
+                    # Home Assistant shows no description on an options
+                    # flow's result: a step of its own instead.
                     self._locks = user_input[CONF_LOCKS]
                     return self.async_show_form(
                         step_id="cannot_report",
-                        description_placeholders=_cannot_report(
-                            silent, config.slot_numbers
-                        ),
+                        description_placeholders=warning,
                         last_step=True,
                     )
             if not errors:
@@ -1046,14 +1054,17 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                     # Reconciled against what the entry already holds, so
                     # everybody already here keeps their number and only the
                     # newcomer is issued one.
-                    assignment = config.assignment.reconcile(
+                    slot = config.assignment.reconcile(
                         {**config.users, name: fields},
                         start=1,
                         unavailable=unavailable,
-                    )
+                    ).slots[identity(name)]
+                    warning = _cannot_report(self.hass, config.locks, [slot])
                     return self.async_create_entry(
                         title=name,
-                        data={**fields, CONF_SLOT: assignment.slot(name)},
+                        data={**fields, CONF_SLOT: slot},
+                        description="cannot_report" if warning else None,
+                        description_placeholders=warning,
                     )
 
         return self.async_show_form(
@@ -1125,6 +1136,9 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                     description_placeholders.update(allocation_placeholders)
                 else:
                     arrived = {**config.users, **users}
+                    assignment = config.assignment.reconcile(
+                        arrived, start=1, unavailable=unavailable
+                    )
                     # Written through the one write path rather than by
                     # completing the flow: a finished subentry flow creates
                     # exactly one subentry, and this creates as many as were
@@ -1135,15 +1149,23 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                         EntryConfig(
                             locks=config.locks,
                             users=arrived,
-                            assignment=config.assignment.reconcile(
-                                arrived, start=1, unavailable=unavailable
-                            ),
+                            assignment=assignment,
                             extra=config.extra,
                         ),
                     )
+                    warning = _cannot_report(
+                        self.hass,
+                        config.locks,
+                        (assignment.slots[identity(name)] for name in users),
+                    )
                     return self.async_abort(
-                        reason="users_added",
-                        description_placeholders={"num_users": str(len(users))},
+                        reason="users_added_cannot_report"
+                        if warning
+                        else "users_added",
+                        description_placeholders={
+                            "num_users": str(len(users)),
+                            **(warning or {}),
+                        },
                     )
 
         return self.async_show_form(
