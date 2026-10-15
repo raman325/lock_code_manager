@@ -44,6 +44,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockBusy,
+    LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationFailed,
     LockOperationUnsupported,
@@ -384,6 +385,63 @@ async def test_a_providers_refresh_request_is_a_read(ports) -> None:
     async with asyncio.timeout(5):
         while len(lock.service_calls["get_usercodes"]) == reads:
             await asyncio.sleep(0)
+
+
+async def test_an_exchange_a_provider_starts_goes_in_the_locks_turn(ports) -> None:
+    """An event's follow-up: answered through the worker, the lock's error as raised."""
+    _, worker, lock = await ports()
+    worker.start()
+    await worker.settled()
+    assert lock.coordinator is not None
+    tasks: list[asyncio.Task | None] = []
+
+    async def _ask() -> str:
+        tasks.append(asyncio.current_task())
+        return "answer"
+
+    async def _fail() -> None:
+        raise LockOperationFailed("busy")
+
+    assert await lock.coordinator.async_in_turn(_ask) == "answer"
+    assert tasks == [worker._task]  # run by the worker, not its caller
+    with pytest.raises(LockOperationFailed, match="busy"):
+        await lock.coordinator.async_in_turn(_fail)
+
+
+async def test_a_providers_bug_in_an_exchange_it_starts_is_logged_and_raised(
+    ports, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An error the worker cannot read as the lock's: logged as the provider's bug."""
+    _, worker, lock = await ports()
+    worker.start()
+    await worker.settled()
+    assert lock.coordinator is not None
+
+    async def _bug() -> None:
+        raise LockCodeManagerProviderError("oops")
+
+    with pytest.raises(LockCodeManagerProviderError, match="oops"):
+        await lock.coordinator.async_in_turn(_bug)
+    assert "Lock provider failed" in caplog.text
+
+
+async def test_an_exchange_a_provider_starts_after_the_worker_stops_is_not_sent(
+    ports,
+) -> None:
+    """Once the lock's worker has stopped, nothing a provider starts reaches it."""
+    _, worker, lock = await ports()
+    worker.start()
+    await worker.settled()
+    await worker.stop(grace=0.1)
+    assert lock.coordinator is not None
+    asked: list[bool] = []
+
+    async def _ask() -> None:
+        asked.append(True)
+
+    with pytest.raises(LockDisconnected):
+        await lock.coordinator.async_in_turn(_ask)
+    assert not asked
 
 
 def test_the_stand_in_answers_everything_a_provider_asks_its_coordinator() -> None:

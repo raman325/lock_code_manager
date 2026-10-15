@@ -126,6 +126,60 @@ async def test_an_entry_overlapping_a_slot_still_gets_the_lock(
     assert "managed by another entry" in caplog.text
 
 
+_SECOND_ON_SLOT_2 = {
+    CONF_LOCKS: [LOCK_1_ENTITY_ID],
+    CONF_SLOTS: {2: {CONF_NAME: "other2", CONF_PIN: "2222", CONF_ENABLED: True}},
+}
+
+
+@pytest.mark.parametrize("clear", [True, False], ids=["cleared", "left"])
+async def test_a_slot_given_up_goes_to_the_entry_still_configuring_it(
+    hass: HomeAssistant, mock_lock_config_entry, clear: bool
+) -> None:
+    """Stored storage with two entries on one slot: the other's PIN lands."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    lock = mock_lock(second)
+    assert lock.codes[2] == "5678"  # the first entry's
+
+    async_give_up(hass, first, LOCK_1_ENTITY_ID, 2, clear=clear)
+    await hass.async_block_till_done()
+
+    assert lock.codes[2] == "2222"
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+
+
+async def test_a_slot_given_up_is_not_handed_to_an_entry_on_another_lock(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The same slot number on a different lock is no overlap: nothing is pushed."""
+    first = await async_setup_lcm_entry(hass)
+    await async_setup_lcm_entry(
+        hass, {**_SECOND_ON_SLOT_2, CONF_LOCKS: [LOCK_2_ENTITY_ID]}, unique_id="rt2"
+    )
+
+    async_give_up(hass, first, LOCK_1_ENTITY_ID, 2)
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) is None
+    assert "cannot set slot" not in caplog.text
+
+
+async def test_a_slot_let_go_on_unload_goes_to_the_entry_still_configuring_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The owner unloads: the other entry configuring the slot takes it over."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    lock = mock_lock(second)
+
+    assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert lock.codes[2] == "2222"
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+
+
 async def test_a_slot_given_up_then_wanted_again_is_cleared_plainly(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

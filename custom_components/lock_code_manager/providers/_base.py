@@ -8,7 +8,7 @@ See ARCHITECTURE.md for the provider interface contract.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Collection
+from collections.abc import Awaitable, Callable, Collection
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
@@ -129,6 +129,9 @@ class ProviderCoordinator(Protocol):
 
     async def async_refresh(self) -> None:
         """Take the first read."""
+
+    async def async_in_turn(self, call: Callable[[], Awaitable[Any]]) -> Any:
+        """Run ``call`` against the lock in its turn; return its result."""
 
     def async_set_update_error(self, err: Exception) -> None:
         """Note that the first read failed."""
