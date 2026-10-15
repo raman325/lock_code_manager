@@ -47,7 +47,7 @@ from ..model.queries import get_entry_config
 from .runtime import async_want
 
 if TYPE_CHECKING:
-    from ..model.models import LockCodeManagerConfigEntry
+    from .entry import LockCodeManagerConfigEntry
 
 
 _LOGGER = logging.getLogger(__name__)

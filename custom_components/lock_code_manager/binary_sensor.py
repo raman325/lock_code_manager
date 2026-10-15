@@ -15,8 +15,8 @@ from .entity import (
     BaseLockCodeManagerEntity,
     LockWorkerView,
 )
+from .ha.entry import LockCodeManagerConfigEntry
 from .model.credentials import CredentialAddress, managed_addresses
-from .model.models import LockCodeManagerConfigEntry
 from .model.queries import subentry_id_for_slot
 from .providers import BaseLock
 from .sync.slot import Status

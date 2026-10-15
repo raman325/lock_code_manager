@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import ATTR_CODE
 from .entity import BaseLockCodeManagerCodeSlotPerLockEntity, LockWorkerView
-from .model.models import LockCodeManagerConfigEntry
+from .ha.entry import LockCodeManagerConfigEntry
 from .model.queries import subentry_id_for_slot
 from .providers import BaseLock
 from .sync.slot import Holds, Seen, Status

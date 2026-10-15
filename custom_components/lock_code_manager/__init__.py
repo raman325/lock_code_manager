@@ -102,6 +102,10 @@ from .const import (
     LockCodeManagerData,
 )
 from .entity import build_slot_device_info
+from .ha.entry import (
+    LockCodeManagerConfigEntry,
+    LockCodeManagerConfigEntryRuntimeData,
+)
 from .ha.locks import get_locks_from_targets
 from .ha.references import async_notify_moved
 from .ha.runtime import (
@@ -138,10 +142,6 @@ from .model.config import (
 )
 from .model.credentials import CredentialType
 from .model.exceptions import UnclaimedLockError
-from .model.models import (
-    LockCodeManagerConfigEntry,
-    LockCodeManagerConfigEntryRuntimeData,
-)
 from .model.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,

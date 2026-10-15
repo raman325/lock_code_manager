@@ -12,8 +12,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
 from .entity import BaseLockCodeManagerEntity
+from .ha.entry import LockCodeManagerConfigEntry
 from .ha.slot_coordinator import InvalidNameError
-from .model.models import LockCodeManagerConfigEntry
 from .model.queries import subentry_id_for_slot
 
 _LOGGER = logging.getLogger(__name__)
