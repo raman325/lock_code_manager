@@ -657,3 +657,35 @@ async def test_the_worker_in_service_is_the_one_held(setup) -> None:
     assert registry.worker("back") is None
     await registry.release("front", "a")
     assert registry.worker("front") is None
+
+
+async def test_a_one_off_write_asked_again_is_tried_again() -> None:
+    """
+    An unmanaged clear held after its tries, asked for again by the user.
+
+    On a lock an entry holds, the held one-off slot stays in the worker; the
+    same request again changes no target, so nothing resumes it: the call
+    answers "held" at once and the lock is never asked, for ever.
+    """
+    lock = FakeLock(codes={1: "1111", 7: "7777"}, refuse_clear={7})
+    locks = Locks(front=lock)
+    registry = LockRegistry(locks.make, grace=0.1)
+    worker = await registry.hold("front", "a", {1: "1111"})
+    try:
+        await _check_retry(registry, worker, lock, _settle)
+    finally:
+        await registry.stop()
+
+
+async def _check_retry(registry, worker, lock, _settle) -> None:
+    await _settle(worker)
+    await registry.write_once("front", 7, None)
+    await _settle(worker)
+    assert worker.status(7) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+
+    # The user fixes the lock and presses "clear" again.
+    lock.refuse_clear = set()
+    await registry.write_once("front", 7, None)
+    await _settle(worker)
+
+    assert 7 not in lock.codes

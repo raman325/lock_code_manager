@@ -1842,6 +1842,17 @@ def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
     )
 
 
+async def async_setup_lcm_entry(
+    hass: HomeAssistant, data: dict = TWO_SLOTS_ON_LOCK_1, unique_id: str = "lcm"
+) -> MockConfigEntry:
+    """Add a Lock Code Manager entry holding ``data`` and set it up."""
+    entry = MockConfigEntry(domain=DOMAIN, data=data, unique_id=unique_id)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
 def current_entry(
     unique_id: str,
     pins: dict[int, str],

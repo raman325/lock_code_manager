@@ -1,19 +1,11 @@
-"""
-Guards for behaviour the retired breaker, sync-manager and in-sync tests held.
-
-The old core's CircuitBreaker and SlotSyncManager.calculate_in_sync are gone;
-what they guaranteed now lives in the worker's backoff, a slot's fights and
-``Slot.status``. These tests hold the parts nothing else did.
-"""
+"""A slot's status, from what it wants, what was written and what the lock shows."""
 
 from __future__ import annotations
 
 from hypothesis import given, strategies as st
-import pytest
 
 from custom_components.lock_code_manager.core.slot import (
     CLEARED,
-    WINDOW,
     Holds,
     Repair,
     Seen,
@@ -21,93 +13,8 @@ from custom_components.lock_code_manager.core.slot import (
     Status,
     fingerprint,
 )
-from custom_components.lock_code_manager.core.worker import (
-    BACKOFF_AFTER,
-    BACKOFF_MAX,
-    BACKOFF_MIN,
-    LockError,
-)
 
-from .test_worker import SALT, FakeLock, _run, _started, rig_factory  # noqa: F401
-
-# The lock as a whole -------------------------------------------------------------
-
-
-async def test_the_backoff_doubles_from_a_minute_to_half_an_hour_and_starts_over(
-    rig_factory,  # noqa: F811
-) -> None:
-    """
-    A lock that stops answering waits a minute, then twice that each time, never
-    more than half an hour; once it answers, the next outage starts at a minute.
-    """
-    lock = FakeLock({1: "1234"})
-    rig = await _started(rig_factory(lock), {1: "1234"})
-    waits: list[float] = []
-    paced = rig.clock.sleep
-
-    async def _recorded(seconds: float) -> None:
-        if seconds >= BACKOFF_MIN:
-            waits.append(seconds)
-        await paced(seconds)
-
-    rig.worker.sleep = _recorded
-    lock.reads_unanswered = True
-    for _ in range(BACKOFF_AFTER - 1):
-        with pytest.raises(LockError):
-            await rig.worker.read([1])
-    assert rig.worker.reachable  # below the threshold: no backoff yet
-    with pytest.raises(LockError):
-        await rig.worker.read([1])
-    assert not rig.worker.reachable
-
-    await _run(rig, lambda: len(waits) >= 8, 400)
-    assert waits[:8] == [60.0, 120.0, 240.0, 480.0, 960.0, 1800.0, 1800.0, 1800.0]
-    assert BACKOFF_MAX == 1800.0
-
-    lock.reads_unanswered = False
-    await _run(rig, lambda: rig.worker.reachable, 400)
-    assert rig.worker.reachable
-
-    waits.clear()
-    lock.reads_unanswered = True
-    for _ in range(BACKOFF_AFTER):
-        with pytest.raises(LockError):
-            await rig.worker.read([1])
-    await _run(rig, lambda: bool(waits), 400)
-    assert waits[0] == BACKOFF_MIN
-
-
-# Fights --------------------------------------------------------------------------
-
-
-async def test_fights_spread_inside_the_window_hold_and_a_resume_forgets_them(
-    rig_factory,  # noqa: F811
-) -> None:
-    """
-    Three codes taken back within five minutes, minutes apart, hold the slot;
-    once the user resumes it, one more is put right, not held.
-    """
-    lock = FakeLock({1: "1234"})
-    rig = await _started(rig_factory(lock), {1: "1234"})
-    step = WINDOW / 3
-    for round_ in range(3):
-        rig.clock.now += step - 1
-        lock.codes[1] = f"000{round_}"
-        rig.worker.push(1, Holds(f"000{round_}"))
-        await rig.settle()
-
-    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
-
-    rig.worker.resume(1)
-    await rig.settle()
-    assert rig.status(1) == (Status.IN_SYNC, None)
-    lock.codes[1] = "0009"
-    rig.worker.push(1, Holds("0009"))
-    await rig.settle()
-
-    assert rig.status(1) == (Status.IN_SYNC, None)
-    assert lock.codes[1] == "1234"
-
+from .test_worker import SALT
 
 # In sync -------------------------------------------------------------------------
 

@@ -73,7 +73,9 @@ from custom_components.lock_code_manager.domain.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_registry,
+)
 from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
@@ -99,6 +101,7 @@ from .common import (
     async_enable_and_reload,
     async_set_slot_pin,
     async_settle_background,
+    async_setup_lcm_entry,
     async_switch_slot,
     async_tick_until,
     code_entity_id,
@@ -2230,3 +2233,101 @@ async def test_pin_in_sync_mirrors_the_manager_once_enabled(
     assert aggregate is not None and pin is not None
     assert pin.state == aggregate.state == STATE_OFF
     assert pin.attributes[ATTR_SYNC_STATUS] == aggregate.attributes[ATTR_SYNC_STATUS]
+
+
+async def test_a_user_turned_off_with_no_pin_settles_in_sync(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """#1085: a disabled user saved with no PIN is in sync, not waiting for one."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {1: {CONF_NAME: "test1", CONF_ENABLED: False}},
+        },
+        unique_id="pr1085",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert hass.states.get(in_sync_entity_id(hass, entry, 1)).state == STATE_ON
+    assert 1 not in mock_lock(entry).codes
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_slot_left_to_another_entry_does_not_show_that_entry_s_code(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An entry whose slot another entry already manages on the lock is not in sync.
+
+    Its user's PIN (2222) is not on the lock; the first entry's (5678) is. Its
+    per-lock sensors mirrored the first entry's slot: "in sync", and the code
+    sensor showed the other entry's user's PIN.
+    """
+    await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(
+        hass,
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                2: {CONF_NAME: "other2", CONF_PIN: "2222", CONF_ENABLED: True},
+                3: {CONF_NAME: "other3", CONF_PIN: "3333", CONF_ENABLED: True},
+            },
+        },
+        unique_id="other_entry",
+    )
+    assert mock_lock(second).codes[2] == "5678"
+
+    in_sync = hass.states.get(in_sync_entity_id(hass, second, 2))
+    code = hass.states.get(code_entity_id(hass, second, 2))
+    assert in_sync.state != STATE_ON
+    assert code.state != "5678"
+    # Its own slot on the lock is still viewed.
+    assert hass.states.get(in_sync_entity_id(hass, second, 3)).state == STATE_ON
+
+
+CONDITION = "input_boolean.access"
+
+
+async def test_a_condition_change_shows_the_slot_syncing(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The calendar/condition turning a slot off queues a clear: the sensor says syncing.
+
+    The old sensor showed ``syncing`` from the moment a sync was due. Now the
+    worker reports a change only when a job finishes, and a condition change
+    writes no entity state, so the sensor keeps saying in_sync for the whole
+    of a slow clear.
+    """
+    hass.states.async_set(CONDITION, "on")
+    entry = await async_setup_lcm_entry(
+        hass,
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {
+                    CONF_NAME: "test1",
+                    CONF_PIN: "1234",
+                    CONF_ENABLED: True,
+                    CONF_CONDITION: CONDITION,
+                },
+            },
+        },
+    )
+    lock = mock_lock(entry)
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    assert sync_status(hass, in_sync) == "in_sync"
+
+    fault = lock.hang("clear", 1)
+    hass.states.async_set(CONDITION, "off")
+    await fault.async_wait_held()
+
+    assert sync_status(hass, in_sync) == "syncing"
+
+    fault.clear()
+    await hass.async_block_till_done()
+    assert 1 not in lock.codes
+    assert sync_status(hass, in_sync) == "in_sync"

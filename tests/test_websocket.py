@@ -85,6 +85,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     SERVICE_DELETE_USER,
+    SERVICE_HARD_REFRESH_USERCODES,
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.core.worker import (
@@ -94,7 +95,10 @@ from custom_components.lock_code_manager.core.worker import (
 )
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_codes,
+    lock_registry,
+)
 from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.providers import BaseLock
@@ -121,6 +125,7 @@ from .common import (
     SLOT_1_IN_SYNC_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_EVENT_ENTITY,
+    async_setup_lcm_entry,
     async_tick_until,
     current_entry,
     in_sync_entity_id,
@@ -3911,3 +3916,37 @@ async def test_a_lock_that_withholds_codes_tells_the_card_the_pin_length(
     assert slot["code_length"] == 6
     assert slot["configured_code_length"] == 6
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_code_removed_at_the_keypad_leaves_the_lock_card(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    An unmanaged code deleted at the lock disappears from what the card shows.
+
+    The old coordinator replaced its data with each read; ``port.others`` is
+    only ever added to, so the deleted code is shown for good.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.codes[7] = "4242"
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert lock_codes(hass, LOCK_1_ENTITY_ID)[7].pin == "4242"
+
+    del lock.codes[7]  # deleted at the keypad
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    credential = lock_codes(hass, LOCK_1_ENTITY_ID).get(7)
+    assert credential is None or not credential.pin

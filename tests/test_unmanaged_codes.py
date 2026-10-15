@@ -2,20 +2,33 @@
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryDisabler
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from custom_components.lock_code_manager import async_migrate_entry
-from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
+from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    DOMAIN,
+)
 from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.lock_runtime import lock_registry
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    async_give_up,
+    async_write_once,
+    lock_registry,
+    port_of,
+)
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.unmanaged import unmanaged_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
@@ -25,7 +38,10 @@ from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    TWO_SLOTS_ON_LOCK_1,
     MockLCMLock,
+    async_setup_lcm_entry,
+    mock_lock,
     user_subentries,
 )
 
@@ -327,3 +343,71 @@ async def test_a_refused_clear_is_reported_as_a_clear(
     error = result["description_placeholders"]["error"]
     assert "set code" not in error
     assert "clear" in error
+
+
+async def test_an_unmanaged_clear_after_a_release_is_a_plain_clear(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A slot given up long ago, now holding someone else's code.
+
+    ``releasing`` keeps the slot after its release is done, so the card's
+    clear of the unmanaged code goes out as a release: a native-user
+    provider (Matter) deletes only an LCM-tagged user and leaves the code,
+    and on a masked lock the clear is then trusted (#1437) -- reported done.
+    """
+    entry = MockConfigEntry(domain=DOMAIN, data=TWO_SLOTS_ON_LOCK_1, unique_id="rt")
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    lock = mock_lock(entry)
+
+    async_give_up(hass, entry, LOCK_1_ENTITY_ID, 2)
+    await hass.async_block_till_done()
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None and 2 not in worker.slots
+    assert 2 not in lock.codes
+
+    # Someone programs a code at the keypad; the user clears it from the card.
+    lock.codes[2] = "9999"
+    releases: list[int] = []
+
+    async def _release(self, slot: int) -> None:
+        releases.append(slot)  # no LCM-tagged user here: nothing deleted
+
+    with patch.object(type(lock), "async_release_managed_slot", _release):
+        done = await async_write_once(hass, LOCK_1_ENTITY_ID, 2, None)
+        await hass.async_block_till_done()
+
+    assert releases == []
+    assert 2 not in lock.codes
+    assert done is True
+    assert 2 not in port_of(worker).releasing
+
+
+async def test_clearing_an_unmanaged_code_on_a_lock_no_entry_holds(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The lock left every entry after the sweep: the repair says so, at once.
+
+    The old flow refused with "not managed". Now the clear starts a worker
+    for a provider nobody sets up: every write is unsent, the flow waits a
+    minute and then reports a failed clear "after two tries" that never
+    reached the lock -- and a worker is left running for the lock.
+    """
+    await async_setup_lcm_entry(hass)  # holds lock 1 only
+    flow = await async_create_fix_flow(
+        hass,
+        unmanaged_issue_id(LOCK_2_ENTITY_ID, 2),
+        {"lock_entity_id": LOCK_2_ENTITY_ID, "slot": 2},
+    )
+    flow.hass = hass
+    started = time.monotonic()
+    result = await flow.async_step_clear()
+    await hass.async_block_till_done()
+
+    assert time.monotonic() - started < 10
+    assert result["type"] == "abort"
+    assert "two tries" not in result["description_placeholders"].get("error", "")
+    assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None

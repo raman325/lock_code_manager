@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.core.slot import (
 )
 from custom_components.lock_code_manager.core.worker import (
     BACKOFF_AFTER,
+    BACKOFF_MAX,
     BACKOFF_MIN,
     OFFLINE_AFTER,
     RETRY_AFTER,
@@ -2839,3 +2840,265 @@ async def test_a_held_slot_resumed_is_read_before_it_is_written(rig_factory) -> 
 
     assert rig.status(1) == (Status.IN_SYNC, None)
     assert rig.lock.writes == [(1, None)]
+
+
+async def test_a_release_after_unanswered_pin_writes_reaches_the_lock(
+    rig_factory,  # noqa: F811
+) -> None:
+    """
+    ``released`` from an earlier release must not excuse a later one.
+
+    A release is answered but the code stays; the slot is claimed again and
+    its PIN writes go unanswered (they may have landed: a native-user lock
+    may have made the user); the slot is given up again and reads empty.
+    The new release must still be sent.
+    """
+    lock = FakeLock({5: "1111"})
+    rig = rig_factory(lock)
+    rig.worker.want(5, "1111")
+    rig.worker.start()
+    await rig.settle()
+    assert rig.status(5) == (Status.IN_SYNC, None)
+
+    lock.ignore_writes = True
+    rig.worker.want(5, None, release=True)
+    await rig.settle()
+    assert rig.status(5) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+    assert rig.worker.slots[5].released
+
+    # Claimed again; the code is gone from the keypad, and the PIN writes go
+    # unanswered.
+    lock.ignore_writes = False
+    lock.writes_unanswered = True
+    del lock.codes[5]
+    rig.worker.want(5, "2222")
+    await rig.settle()
+    assert (5, "2222") in lock.writes
+
+    lock.writes_unanswered = False
+    writes = len(lock.writes)
+    rig.worker.want(5, None, release=True)
+    await rig.settle()
+    assert (5, None) in lock.writes[writes:]
+
+
+async def test_a_write_is_read_back_by_asking_only_about_its_slot(
+    rig_factory,  # noqa: F811
+) -> None:
+    """
+    The read-back after a write asks about the slot written, not the whole lock.
+
+    On a lock that drops half its answers, reading one slot back lands about
+    half the time and a walk of every slot almost never (#1549).
+    """
+    lock = FakeLock({1: "1111", 2: "2222", 3: "3333"})
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222", 3: "3333"})
+    reads: list[tuple[int, ...]] = []
+    original = lock.read
+
+    async def _note(slots):
+        reads.append(tuple(slots))
+        return await original(slots)
+
+    lock.read = _note  # type: ignore[method-assign]
+    rig.worker.want(2, "9999")
+    await rig.settle()
+
+    assert lock.writes == [(2, "9999")]
+    assert reads == [(2,)]
+    assert rig.status(2) == (Status.IN_SYNC, None)
+
+
+# The lock as a whole -------------------------------------------------------------
+
+
+async def test_the_backoff_doubles_from_a_minute_to_half_an_hour_and_starts_over(
+    rig_factory,  # noqa: F811
+) -> None:
+    """
+    A lock that stops answering waits a minute, then twice that each time, never
+    more than half an hour; once it answers, the next outage starts at a minute.
+    """
+    lock = FakeLock({1: "1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    waits: list[float] = []
+    paced = rig.clock.sleep
+
+    async def _recorded(seconds: float) -> None:
+        if seconds >= BACKOFF_MIN:
+            waits.append(seconds)
+        await paced(seconds)
+
+    rig.worker.sleep = _recorded
+    lock.reads_unanswered = True
+    for _ in range(BACKOFF_AFTER - 1):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    assert rig.worker.reachable  # below the threshold: no backoff yet
+    with pytest.raises(LockError):
+        await rig.worker.read([1])
+    assert not rig.worker.reachable
+
+    await _run(rig, lambda: len(waits) >= 8, 400)
+    assert waits[:8] == [60.0, 120.0, 240.0, 480.0, 960.0, 1800.0, 1800.0, 1800.0]
+    assert BACKOFF_MAX == 1800.0
+
+    lock.reads_unanswered = False
+    await _run(rig, lambda: rig.worker.reachable, 400)
+    assert rig.worker.reachable
+
+    waits.clear()
+    lock.reads_unanswered = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    await _run(rig, lambda: bool(waits), 400)
+    assert waits[0] == BACKOFF_MIN
+
+
+# Fights --------------------------------------------------------------------------
+
+
+async def test_fights_spread_inside_the_window_hold_and_a_resume_forgets_them(
+    rig_factory,  # noqa: F811
+) -> None:
+    """
+    Three codes taken back within five minutes, minutes apart, hold the slot;
+    once the user resumes it, one more is put right, not held.
+    """
+    lock = FakeLock({1: "1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    step = WINDOW / 3
+    for round_ in range(3):
+        rig.clock.now += step - 1
+        lock.codes[1] = f"000{round_}"
+        rig.worker.push(1, Holds(f"000{round_}"))
+        await rig.settle()
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+
+    rig.worker.resume(1)
+    await rig.settle()
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    lock.codes[1] = "0009"
+    rig.worker.push(1, Holds("0009"))
+    await rig.settle()
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert lock.codes[1] == "1234"
+
+
+async def test_a_new_pin_on_a_slot_the_lock_hides_is_written_once(
+    rig_factory,  # noqa: F811
+) -> None:
+    """
+    #962: a lock that hides its codes still gets a changed PIN, once.
+
+    The slot reads occupied whatever it holds. A code put there by someone
+    else is written over once; a new PIN is written once; neither is
+    written again.
+    """
+    lock = FakeLock({1: "1234"}, masked=True)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    assert lock.writes == [(1, "1234")]
+
+    rig.worker.want(1, "4321")
+    await rig.settle()
+    for _ in range(3):
+        await rig.pass_()
+
+    assert lock.writes == [(1, "1234"), (1, "4321")]
+    assert lock.codes == {1: "4321"}
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_code_deleted_at_the_lock_and_pushed_is_put_back(
+    rig_factory,  # noqa: F811
+) -> None:
+    """#1538: an in-sync slot the lock says is now empty goes out of sync and is rewritten."""
+    lock = FakeLock({1: "1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    assert lock.writes == []
+
+    del lock.codes[1]
+    rig.worker.push(1, Seen.EMPTY)
+    await rig.settle()
+
+    assert lock.writes == [(1, "1234")]
+    assert lock.codes == {1: "1234"}
+    assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_polls_of_a_lock_with_a_held_ignored_slot(rig_factory) -> None:  # noqa: F811
+    """
+    A lock that fails a whole read over one slot it ignores (ZHA).
+
+    Once slot 7 is held, polls leave it out: the drift on slot 1 is seen, and
+    the lock is not backed off by a slot nothing is trying any more.
+    """
+    lock = FakeLock({1: "1111", 2: "2222"}, strict=True)
+    rig = await _started(rig_factory(lock), {1: "1111", 2: "2222"})
+    lock.ignored = {7}
+    rig.worker.want(7, "7777")
+    await _run(rig, lambda: rig.status(7)[0] is Status.SUSPENDED)
+    assert rig.status(7)[0] is Status.SUSPENDED
+    lock.codes[1] = "0000"  # changed at the keypad
+    for _ in range(3):
+        await _poll(rig)
+    await rig.settle()
+    # The drift on slot 1 is seen and put right; the lock is not taken as gone.
+    assert lock.codes[1] == "1111"
+    assert (1, "1111") in lock.writes
+    assert rig.worker.reachable
+
+
+async def test_a_probe_from_outside_leaves_no_stale_backoff_timer(rig_factory) -> None:  # noqa: F811
+    """
+    A lock brought back by a probe from outside (the hard refresh service)
+    does not keep the old backoff's timer.
+
+    The timer still sleeping out the old backoff blocks the next outage's
+    probe from being scheduled: the lock stays down, every sync dropped,
+    until that old timer fires -- up to 30 minutes for a 60s backoff.
+    """
+    lock = FakeLock({1: "1234"})
+    rig = rig_factory(lock)
+    stuck = asyncio.Event()
+    first_long = True
+
+    async def sleep(seconds: float) -> None:
+        nonlocal first_long
+        rig.clock.now += seconds
+        if seconds >= 60 and first_long:
+            # The first backoff's timer: still sleeping (a long backoff).
+            first_long = False
+            await stuck.wait()
+        await asyncio.sleep(0)
+
+    rig.worker.sleep = sleep
+    await _started(rig, {1: "1234"})
+
+    lock.reads_unanswered = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    assert not rig.worker.reachable
+
+    # The hard refresh service: a probe from outside, and the lock answers.
+    lock.reads_unanswered = False
+    await rig.worker.read(probe=True)
+    assert rig.worker.reachable
+
+    # A second outage, and the lock answers again once probed.
+    lock.reads_unanswered = True
+    for _ in range(BACKOFF_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+    assert not rig.worker.reachable
+    lock.reads_unanswered = False
+    for _ in range(50):
+        if rig.worker.reachable:
+            break
+        await asyncio.sleep(0)
+    assert rig.worker.reachable
+    stuck.set()

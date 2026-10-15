@@ -80,6 +80,10 @@ from custom_components.lock_code_manager.domain.config import (
 )
 from custom_components.lock_code_manager.domain.credentials import CredentialType
 from custom_components.lock_code_manager.domain.events import CredentialOperation
+from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    lock_registry,
+)
 from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.domain.services import async_set_usercode
@@ -92,8 +96,10 @@ from tests.providers.helpers import register_mock_service
 
 from .common import (
     LOCK_1_ENTITY_ID,
+    async_advance_clock,
     async_advance_sync_ticks,
     async_set_slot_pin,
+    async_setup_lcm_entry,
     async_tick_until,
     mock_lock,
     reading_for,
@@ -2333,3 +2339,62 @@ async def test_add_user_with_nobody_named_reports_the_missing_field(
             {"config_entry_id": lock_code_manager_config_entry.entry_id},
             blocking=True,
         )
+
+
+async def test_a_hard_refresh_asks_a_lock_that_is_backing_off(
+    hass: HomeAssistant, mock_lock_config_entry, freezer
+) -> None:
+    """
+    The lock is back; the user asks Lock Code Manager to look again.
+
+    The old service read the lock whatever had happened before. Through a
+    worker backing off, the read fails at once, unsent, and the slot waits
+    out the backoff (up to 30 minutes).
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    outage = lock.fail(None, error=LockDisconnected)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_advance_clock(hass, freezer, 10 * 60)
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+    assert not worker.reachable
+    outage.clear()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert worker.reachable
+    assert lock.codes[1] == "4321"
+
+
+async def test_the_hard_refresh_service_walks_the_whole_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    "Query the lock for all usercodes": the service asks the provider for a hard refresh.
+
+    The old service called the provider's unscoped ``async_hard_refresh_codes``
+    -- for a cloud or Zigbee lock the only call that bypasses its cache, for
+    Z-Wave the only one that re-reads slots nobody manages. Now it is a read
+    of the managed slots through ``async_get_usercodes``, so a code added at
+    the keypad of a caching provider is never fetched.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.service_calls["hard_refresh_codes"].clear()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert (None,) in lock.service_calls["hard_refresh_codes"]
