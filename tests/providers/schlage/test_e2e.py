@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -62,6 +63,9 @@ class TestFullSetupLifecycle:
         lock = lcm_config_entry.runtime_data.locks.get(schlage_lock_entity.entity_id)
         assert lock is not None
         assert isinstance(lock, SchlageLock)
+        assert lock.domain == SCHLAGE_DOMAIN
+        assert lock.supports_code_slot_events is False
+        assert lock.usercode_scan_interval == timedelta(minutes=5)
 
     async def test_coordinator_created(
         self,

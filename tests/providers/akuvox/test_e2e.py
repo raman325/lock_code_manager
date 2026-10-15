@@ -1,5 +1,6 @@
 """Full lifecycle E2E tests for Akuvox lock provider."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 from freezegun.api import FrozenDateTimeFactory
@@ -62,6 +63,9 @@ class TestFullSetupLifecycle:
         lock = e2e_lcm_config_entry.runtime_data.locks.get(akuvox_lock_entity.entity_id)
         assert lock is not None
         assert isinstance(lock, AkuvoxLock)
+        assert lock.domain == AKUVOX_DOMAIN
+        assert lock.supports_code_slot_events is False
+        assert lock.usercode_scan_interval == timedelta(minutes=2)
 
     async def test_coordinator_created(
         self,
