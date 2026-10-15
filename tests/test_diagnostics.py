@@ -13,7 +13,7 @@ from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 
 from .common import (
     BASE_CONFIG,
@@ -26,7 +26,7 @@ from .common import (
 )
 
 # SlotCode sentinel values as they appear after _mask_code
-_SENTINEL_VALUES = {"empty", "unreadable_code", None}
+_SENTINEL_VALUES = {*(code.value for code in SlotCode), None}
 
 
 async def test_config_entry_diagnostics(

@@ -14,9 +14,12 @@ import {
     LockCodesCardConfig,
     LockCoordinatorData,
     LockCoordinatorSlotData,
+    SLOT_CODE_DISABLED,
+    SLOT_CODE_UNANSWERED,
     SLOT_CODE_UNREADABLE,
     isSlotEmpty,
-    isSlotOccupied
+    isSlotOccupied,
+    isSlotSentinel
 } from './types';
 
 const DEFAULT_TITLE = 'Lock Codes';
@@ -207,9 +210,7 @@ class LockCodesCard extends LockCodesCardBase {
         // prefilled empty for a masked slot.
         // Sentinels are not editable values.
         const currentCode =
-            isSlotOccupied(slot.code) && slot.code !== SLOT_CODE_UNREADABLE
-                ? String(slot.code)
-                : '';
+            isSlotOccupied(slot.code) && !isSlotSentinel(slot.code) ? String(slot.code) : '';
         this._editValue = currentCode;
         this._editingSlot = slot.slot;
         // Focus input after render
@@ -473,12 +474,8 @@ class LockCodesCard extends LockCodesCardBase {
         const showName = !!slotName || managed !== false;
         const isClickable = managed === true && !!slot.config_entry_id;
 
-        // Pending: slot has a configured code but the lock doesn't have it yet.
-        // Mirrors the .lcm-code.pending detection on the PIN — out-of-sync,
-        // syncing, etc. Defensive default when enabled is unknown (undefined
-        // doesn't mean "off").
-        const lockHasCode = !isSlotEmpty(slot.code) || !!slot.code_length;
-        const isPending = hasConfiguredCode && !lockHasCode && slot.enabled !== false;
+        // Same predicate as the clock on the PIN.
+        const isPending = this._isPending(slot);
 
         // Determine state for LCM-managed slots:
         // - Active: active=true (code on lock, conditions met)
@@ -709,14 +706,24 @@ class LockCodesCard extends LockCodesCardBase {
     }
 
     /**
-     * A code the lock can't read back, but which LCM manages and currently
+     * Whether the lock gave no PIN back: it holds a code it won't read back, or
+     * it didn't answer at all.
+     */
+    private _isWithheld(slot: LockCoordinatorSlotData): boolean {
+        return slot.code === SLOT_CODE_UNREADABLE || slot.code === SLOT_CODE_UNANSWERED;
+    }
+
+    /**
+     * A code the lock gave no PIN back for, but which LCM manages and currently
      * considers in sync — so LCM's configured PIN is a reliable stand-in. Shown
      * italicized with a tooltip so it reads as "configured by LCM", not as a
      * value read back from the lock (which could differ if changed at the keypad).
+     * A code disabled on the lock is never stood in for: the lock said what it
+     * holds, and the configured PIN is not in force there.
      */
     private _isProxyCode(slot: LockCoordinatorSlotData): boolean {
         return (
-            slot.code === SLOT_CODE_UNREADABLE &&
+            this._isWithheld(slot) &&
             slot.managed === true &&
             slot.in_sync === true &&
             (!!slot.configured_code || !!slot.configured_code_length)
@@ -725,26 +732,52 @@ class LockCodesCard extends LockCodesCardBase {
 
     /** Whether revealing can show a real value, i.e. whether to offer the eye. */
     private _canReveal(slot: LockCoordinatorSlotData): boolean {
-        // An unreadable code LCM can't vouch for (unmanaged or out of sync) has
-        // nothing to reveal — hide the eye rather than toggle it to no effect.
-        if (slot.code === SLOT_CODE_UNREADABLE && !this._isProxyCode(slot)) return false;
+        // A disabled code, or a withheld one LCM can't vouch for (unmanaged or
+        // out of sync), has nothing to reveal — hide the eye rather than toggle
+        // it to no effect.
+        if (slot.code === SLOT_CODE_DISABLED) return false;
+        if (this._isWithheld(slot) && !this._isProxyCode(slot)) return false;
         return this._hasCode(slot) || !!slot.configured_code || !!slot.configured_code_length;
     }
 
     /** Tooltip for a code whose origin or unreadability isn't self-evident. */
     private _codeTitle(slot: LockCoordinatorSlotData): string | undefined {
+        if (slot.code === SLOT_CODE_DISABLED) return 'Disabled on lock';
+        if (slot.code === SLOT_CODE_UNANSWERED) {
+            return this._isProxyCode(slot)
+                ? "Configured in Lock Code Manager — this lock didn't answer"
+                : "This lock didn't answer";
+        }
         if (slot.code !== SLOT_CODE_UNREADABLE) return undefined;
         return this._isProxyCode(slot)
             ? 'Configured in Lock Code Manager — not read from the lock'
             : "This lock doesn't report its stored code";
     }
 
+    /**
+     * Whether a write to this slot is due: LCM manages it and its in-sync sensor
+     * says the lock doesn't hold what is configured. Read from sync state, not
+     * from the code: an empty slot can be exactly what LCM wants there, a code
+     * on the lock can be the wrong one, and a lock that didn't answer has said
+     * neither.
+     */
+    private _isPending(slot: LockCoordinatorSlotData): boolean {
+        return slot.managed === true && slot.in_sync === false;
+    }
+
     private _getCodeClass(slot: LockCoordinatorSlotData): string {
+        const stateClass = this._getCodeStateClass(slot);
+        return this._isPending(slot) ? `pending ${stateClass}`.trim() : stateClass;
+    }
+
+    /** The class for what the lock holds, before any pending marker. */
+    private _getCodeStateClass(slot: LockCoordinatorSlotData): string {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
         const maskSuffix = shouldMask ? ' masked' : '';
 
-        if (slot.code === SLOT_CODE_UNREADABLE) {
+        if (slot.code === SLOT_CODE_DISABLED) return 'disabled-on-lock';
+        if (this._isWithheld(slot)) {
             // Managed + in sync: italicized configured-PIN proxy (still dimmed
             // while masked). Otherwise the value is genuinely unknown and gets
             // its own muted, hollow-dot treatment with no reveal.
@@ -754,13 +787,11 @@ class LockCodesCard extends LockCodesCardBase {
         if (slot.code_length) return 'masked';
         if (!isSlotEmpty(slot.code)) return '';
 
-        // Empty/null code on the lock — distinguish "off" (user disabled the slot)
-        // from "pending" (slot enabled but code not yet on the lock). Pending is the
-        // defensive default when the enabled state is unknown — undefined doesn't
-        // mean "off".
+        // Empty/null code on the lock with a PIN configured: either a write is
+        // due (the pending marker is added by the caller) or the PIN is meant to
+        // be off the lock — the slot is turned off or its condition is blocking.
         if (slot.configured_code || slot.configured_code_length) {
-            const cause = slot.enabled === false ? 'off' : 'pending';
-            return `${cause}${maskSuffix}`;
+            return this._isPending(slot) ? maskSuffix.trim() : `off${maskSuffix}`;
         }
         return 'no-code';
     }
@@ -769,7 +800,8 @@ class LockCodesCard extends LockCodesCardBase {
         const mode = this._config?.code_display ?? DEFAULT_CODE_DISPLAY;
         const shouldMask = mode === 'masked' || (mode === 'masked_with_reveal' && !this._revealed);
 
-        if (slot.code === SLOT_CODE_UNREADABLE) {
+        if (slot.code === SLOT_CODE_DISABLED) return 'Disabled on lock';
+        if (this._isWithheld(slot)) {
             // Unmanaged or out of sync: the value is genuinely unknown. Hollow
             // dots sized to the known length when we have one, else a short fixed
             // placeholder — never the misleading fixed-length "• • •".

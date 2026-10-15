@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.domain.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
 )
+from custom_components.lock_code_manager.domain.models import SlotCode
 
 _CONST_TS = pathlib.Path(__file__).resolve().parent.parent / "ts" / "const.ts"
 
@@ -164,6 +165,37 @@ def test_the_frontend_and_backend_agree_on_the_slot_payload() -> None:
         CONF_NAME,
         CONF_CONDITION,
     }
+
+
+# Each backend sentinel and the constant the cards compare a slot's code to.
+_SLOT_CODE_CONSTANTS = {
+    "SLOT_CODE_EMPTY": SlotCode.EMPTY,
+    "SLOT_CODE_UNREADABLE": SlotCode.UNREADABLE_CODE,
+    "SLOT_CODE_UNANSWERED": SlotCode.UNANSWERED,
+    "SLOT_CODE_DISABLED": SlotCode.DISABLED,
+}
+
+
+def test_the_frontend_and_backend_agree_on_the_slot_code_sentinels() -> None:
+    """
+    A sentinel the card does not recognize renders as if it were a PIN.
+
+    The card tells a sentinel from a code by comparing strings, so a value
+    renamed on one side, or a member added to ``SlotCode`` with no constant
+    beside it, reaches the screen as literal text like ``disabled_on_lock``
+    -- and pre-fills the unmanaged-slot edit field with it.
+    """
+    source = (_CONST_TS.parent / "types.ts").read_text(encoding="utf-8")
+    declared = dict(
+        re.findall(
+            r"^export const (SLOT_CODE_[A-Z_]+) = '([^']+)';", source, re.MULTILINE
+        )
+    )
+
+    assert declared == {
+        name: member.value for name, member in _SLOT_CODE_CONSTANTS.items()
+    }
+    assert set(_SLOT_CODE_CONSTANTS.values()) == set(SlotCode)
 
 
 def test_per_lock_suffixes_match_the_entity_names() -> None:

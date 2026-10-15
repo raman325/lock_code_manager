@@ -11,7 +11,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from .const import DOMAIN, SENSITIVE_ENTITY_KEYS
 from .domain.config import build_slot_device_identifier, slot_unique_id_key
 from .domain.lock_runtime import lock_codes, lock_registry
-from .domain.models import SlotCode, SlotCredential
+from .domain.models import SlotCode
 from .domain.queries import get_entry_config
 from .domain.util import mask_pin
 from .providers._base import BaseLock
@@ -23,17 +23,16 @@ def _get_instance_id(hass: HomeAssistant) -> str:
 
 
 def _mask_code(
-    code: SlotCredential | None, slot_num: int | str, instance_id: str
+    code: str | SlotCode | None, slot_num: int | str, instance_id: str
 ) -> str | None:
     """Mask a PIN code for diagnostics output."""
     if code is None:
         return None
-    label = code.as_label()
-    if isinstance(label, SlotCode):
-        return label.value
-    if not label:
+    if isinstance(code, SlotCode):
+        return code.value
+    if not code:
         return "empty"
-    return mask_pin(label, slot_num, instance_id)
+    return mask_pin(code, slot_num, instance_id)
 
 
 def _is_sensitive(entry: er.RegistryEntry) -> bool:

@@ -435,6 +435,154 @@ describe('LockCodesCard integration', () => {
         });
     });
 
+    describe('unanswered sentinel', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.front_door', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        const classes = (slot: Record<string, unknown>): string[] =>
+            (card as any)._getCodeClass(slot).split(' ');
+
+        const vouched = { code: 'unanswered', in_sync: true, managed: true, slot: 1 };
+
+        it('stands the configured PIN in when managed and in sync', () => {
+            expect((card as any)._formatCode({ ...vouched, configured_code_length: 4 })).toBe(
+                '••••'
+            );
+            expect(classes({ ...vouched, configured_code_length: 4 })).toEqual([
+                'configured',
+                'masked'
+            ]);
+            expect((card as any)._canReveal({ ...vouched, configured_code_length: 4 })).toBe(true);
+        });
+
+        it('reveals the configured PIN in italics when managed and in sync', () => {
+            (card as any)._revealed = true;
+            try {
+                expect((card as any)._formatCode({ ...vouched, configured_code: '1234' })).toBe(
+                    '1234'
+                );
+                expect(classes({ ...vouched, configured_code: '1234' })).toEqual(['configured']);
+            } finally {
+                (card as any)._revealed = false;
+            }
+        });
+
+        it("says the stand-in is configured because the lock didn't answer", () => {
+            const title = (card as any)._codeTitle({ ...vouched, configured_code_length: 4 });
+            expect(title).toContain('Lock Code Manager');
+            expect(title).toContain("didn't answer");
+        });
+
+        it("shows hollow dots and says the lock didn't answer otherwise", () => {
+            const slot = { code: 'unanswered', managed: false, slot: 2 };
+            expect((card as any)._formatCode(slot)).toBe('◦◦◦');
+            expect(classes(slot)).toContain('unreadable');
+            expect((card as any)._codeTitle(slot)).toBe("This lock didn't answer");
+            expect((card as any)._canReveal(slot)).toBe(false);
+        });
+
+        it('sizes the hollow dots to the configured PIN when out of sync', () => {
+            const slot = { ...vouched, configured_code_length: 6, in_sync: false };
+            expect((card as any)._formatCode(slot)).toBe('◦◦◦◦◦◦');
+            expect((card as any)._canReveal(slot)).toBe(false);
+        });
+
+        it('does not count as a code on the lock', () => {
+            expect((card as any)._hasCode({ code: 'unanswered', slot: 1 })).toBe(false);
+        });
+
+        it('never pre-fills the edit field', () => {
+            (card as any)._startEditing(
+                { stopPropagation: () => {} },
+                { code: 'unanswered', slot: 2 }
+            );
+            expect((card as any)._editValue).toBe('');
+        });
+
+        it('renders a payload slot as hollow dots, never as the raw label', async () => {
+            let capturedCallback: ((data: unknown) => void) | undefined;
+            const card2 = document.createElement('lcm-lock-codes') as LockCodesCardElement;
+            card2.setConfig({
+                code_display: 'unmasked',
+                lock_entity_id: 'lock.front_door',
+                type: 'custom:lcm-lock-codes'
+            });
+            card2.hass = createMockHassWithConnection({
+                onSubscribe: (callback) => {
+                    capturedCallback = callback;
+                }
+            });
+            container.appendChild(card2);
+            await flush();
+
+            capturedCallback!(
+                makeLockCoordinatorData({
+                    slots: [{ code: 'unanswered', managed: false, slot: 1 }]
+                })
+            );
+
+            expect((card2 as any)._formatCode(card2._data!.slots[0])).toBe('◦◦◦');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('disabled-on-lock sentinel', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any -- accessing private methods for testing */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.front_door', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        const classes = (slot: Record<string, unknown>): string[] =>
+            (card as any)._getCodeClass(slot).split(' ');
+
+        const disabled = { code: 'disabled_on_lock', slot: 3 };
+
+        it('says the code is disabled on the lock, as a label', () => {
+            expect((card as any)._formatCode(disabled)).toBe('Disabled on lock');
+            expect(classes(disabled)).toEqual(['disabled-on-lock']);
+            expect((card as any)._codeTitle(disabled)).toBe('Disabled on lock');
+            expect((card as any)._canReveal(disabled)).toBe(false);
+        });
+
+        it('never stands the configured PIN in, even managed and in sync', () => {
+            const slot = { ...disabled, configured_code: '1234', in_sync: true, managed: true };
+            (card as any)._revealed = true;
+            try {
+                expect((card as any)._formatCode(slot)).toBe('Disabled on lock');
+                expect(classes(slot)).not.toContain('configured');
+                expect((card as any)._canReveal(slot)).toBe(false);
+            } finally {
+                (card as any)._revealed = false;
+            }
+        });
+
+        it('counts as a code on the lock', () => {
+            expect((card as any)._hasCode(disabled)).toBe(true);
+        });
+
+        it('never pre-fills the edit field', () => {
+            (card as any)._startEditing({ stopPropagation: () => {} }, disabled);
+            expect((card as any)._editValue).toBe('');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
     describe('sync_status data handling', () => {
         it('stores sync_status from subscription data', async () => {
             let capturedCallback: ((data: unknown) => void) | undefined;
@@ -967,7 +1115,9 @@ describe('LockCodesCard integration', () => {
                     slot: 1,
                     code: 'empty',
                     configured_code: '1234',
-                    enabled: true
+                    enabled: true,
+                    in_sync: false,
+                    managed: true
                 })
             ).toBe('pending masked');
         });
@@ -983,20 +1133,29 @@ describe('LockCodesCard integration', () => {
                     slot: 1,
                     code: 'empty',
                     configured_code: '1234',
-                    enabled: true
+                    enabled: true,
+                    in_sync: false,
+                    managed: true
                 })
             ).toBe('pending');
         });
 
-        it('returns "pending masked" when enabled state is unknown (defensive default)', () => {
+        it('returns "pending masked" when out of sync, whatever the enabled state', () => {
             (card as any)._config = {
                 code_display: 'masked',
                 lock_entity_id: 'lock.test_1',
                 type: 'custom:lcm-lock-codes'
             };
-            // Undefined enabled does not mean "off"; treat as pending.
+            // Pending follows the in-sync sensor; an unknown enabled state
+            // changes nothing.
             expect(
-                (card as any)._getCodeClass({ slot: 1, code: 'empty', configured_code: '1234' })
+                (card as any)._getCodeClass({
+                    slot: 1,
+                    code: 'empty',
+                    configured_code: '1234',
+                    in_sync: false,
+                    managed: true
+                })
             ).toBe('pending masked');
         });
 
@@ -1017,7 +1176,9 @@ describe('LockCodesCard integration', () => {
                     slot: 1,
                     code: 'empty',
                     configured_code_length: 4,
-                    enabled: true
+                    enabled: true,
+                    in_sync: false,
+                    managed: true
                 })
             ).toBe('pending masked');
         });
@@ -1058,6 +1219,7 @@ describe('LockCodesCard integration', () => {
                 code: 'empty',
                 configured_code: '1234',
                 enabled: true,
+                in_sync: false,
                 managed: true
             };
             const result = (card as any)._renderCodeDisplayMode(
@@ -1142,6 +1304,7 @@ describe('LockCodesCard integration', () => {
                 code: 'empty',
                 configured_code: '1234',
                 enabled: true,
+                in_sync: false,
                 managed: true,
                 name: 'Test User',
                 slot: 1
@@ -1192,6 +1355,7 @@ describe('LockCodesCard integration', () => {
                 code: 'empty',
                 configured_code: '1234',
                 enabled: true,
+                in_sync: false,
                 managed: true,
                 name: 'Test User',
                 slot: 1
@@ -1212,6 +1376,86 @@ describe('LockCodesCard integration', () => {
             };
             const result = (card as any)._renderSlotChip(slot, false);
             expect(collectAllStrings(result)).not.toContain('slot-name-pending-icon');
+        });
+        /* eslint-enable @typescript-eslint/no-explicit-any */
+    });
+
+    describe('pending follows the in-sync sensor', () => {
+        /* eslint-disable @typescript-eslint/no-explicit-any */
+        let card: LockCodesCardElement & Record<string, unknown>;
+
+        beforeEach(async () => {
+            card = document.createElement('lcm-lock-codes') as LockCodesCardElement &
+                Record<string, unknown>;
+            card.setConfig({ lock_entity_id: 'lock.test_1', type: 'custom:lcm-lock-codes' });
+            card.hass = createMockHassWithConnection();
+            container.appendChild(card);
+            await flush();
+        });
+
+        const collectAllStrings = (tmpl: any): string => {
+            if (!tmpl) return '';
+            const parts: string[] = [];
+            if (tmpl.strings) parts.push(tmpl.strings.join(''));
+            for (const v of tmpl.values ?? []) {
+                if (v && typeof v === 'object' && (v.strings || v.values)) {
+                    parts.push(collectAllStrings(v));
+                } else if (typeof v === 'string') {
+                    parts.push(v);
+                }
+            }
+            return parts.join(' ');
+        };
+
+        const chipIsPending = (slot: Record<string, unknown>): boolean =>
+            collectAllStrings((card as any)._renderSlotChip(slot, false))
+                .split(/\s+/)
+                .includes('pending');
+
+        const codeIsPending = (slot: Record<string, unknown>): boolean =>
+            (card as any)._getCodeClass(slot).split(' ').includes('pending');
+
+        const managedSlot = {
+            active: true,
+            configured_code: '1234',
+            enabled: true,
+            managed: true,
+            name: 'Alice',
+            slot: 1
+        };
+
+        it('marks a managed out-of-sync slot pending whatever the lock holds', () => {
+            for (const lockHolds of [
+                { code: 'empty' },
+                { code: '9999' },
+                { code: null, code_length: 4 },
+                { code: 'unreadable_code' },
+                { code: 'unanswered' }
+            ]) {
+                const slot = { ...managedSlot, ...lockHolds, in_sync: false };
+                expect(chipIsPending(slot), JSON.stringify(lockHolds)).toBe(true);
+                expect(codeIsPending(slot), JSON.stringify(lockHolds)).toBe(true);
+            }
+        });
+
+        it('does not mark a slot pending when its condition keeps the PIN off the lock', () => {
+            // What the backend sends for an enabled slot whose condition is
+            // blocking: the lock is empty, which is what LCM wants there.
+            const slot = { ...managedSlot, active: false, code: 'empty', in_sync: true };
+            expect(chipIsPending(slot)).toBe(false);
+            expect((card as any)._getCodeClass(slot)).toBe('off masked');
+        });
+
+        it('does not mark a slot pending while its in-sync state is unknown', () => {
+            const slot = { ...managedSlot, code: 'empty' };
+            expect(chipIsPending(slot)).toBe(false);
+            expect(codeIsPending(slot)).toBe(false);
+        });
+
+        it('never marks an unmanaged slot pending', () => {
+            const slot = { ...managedSlot, code: 'empty', in_sync: false, managed: false };
+            expect(chipIsPending(slot)).toBe(false);
+            expect(codeIsPending(slot)).toBe(false);
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
     });
@@ -1728,6 +1972,7 @@ describe('LockCodesCard integration', () => {
                         code: null,
                         configured_code: '1234',
                         enabled: true,
+                        in_sync: false,
                         managed: true,
                         name: 'Alice',
                         slot: 1
@@ -1746,6 +1991,7 @@ describe('LockCodesCard integration', () => {
                         code: null,
                         configured_code: '1234',
                         enabled: true,
+                        in_sync: false,
                         managed: true,
                         slot: 1
                     },

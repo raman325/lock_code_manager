@@ -73,7 +73,7 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_registry,
     port_of,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
@@ -106,7 +106,7 @@ from tests.providers.zwave_js.helpers import (
 )
 
 
-def _codes(hass: HomeAssistant, lock: ZWaveJSLock) -> dict[int, SlotCredential]:
+def _codes(hass: HomeAssistant, lock: ZWaveJSLock) -> dict[int, str | SlotCode]:
     """Return what the lock's worker has seen of every slot on it."""
     return lock_codes(hass, lock.lock.entity_id)
 
@@ -543,7 +543,7 @@ class TestSharedLock:
             )
         )
         await hass.async_block_till_done()
-        assert _codes(hass, lock).get(3) == SlotCredential.known("5555")
+        assert _codes(hass, lock).get(3) == "5555"
 
         await async_trigger_sync_tick(hass, in_sync, set_dirty=False)
         assert hass.states.get(in_sync).state == "on"
@@ -627,7 +627,7 @@ class TestSharedLock:
         )
         await hass.async_block_till_done()
 
-        assert _codes(hass, lock).get(1) == SlotCredential.empty()
+        assert _codes(hass, lock).get(1) == SlotCode.EMPTY
 
         await hass.config_entries.async_unload(second_entry.entry_id)
 
@@ -669,7 +669,7 @@ class TestSharedLock:
         )
         await hass.async_block_till_done()
 
-        assert _codes(hass, lock).get(3) == SlotCredential.empty()
+        assert _codes(hass, lock).get(3) == SlotCode.EMPTY
 
 
 def _lock_holds_on_slot_3(access_control: MagicMock, pin: str) -> None:
@@ -1016,7 +1016,7 @@ class TestUserCodeReports:
         )
         await hass.async_block_till_done()
 
-        assert _codes(hass, fake_e2e_lock).get(UNWANTED_SLOT) == SlotCredential.empty()
+        assert _codes(hass, fake_e2e_lock).get(UNWANTED_SLOT) == SlotCode.EMPTY
 
     @pytest.mark.parametrize(
         "code",
@@ -1433,7 +1433,7 @@ class TestDuplicateRefusedByUserCodeLock:
 
         assert _first_push(pushed, 2) == SlotCredential.unreadable()
         # The worker then reads the slot: it shows what the lock holds.
-        assert _codes(hass, fake_e2e_lock).get(2) != SlotCredential.known("5555")
+        assert _codes(hass, fake_e2e_lock).get(2) != "5555"
         assert fake_zwave_lock.holds(2) == "1234"
 
     async def test_a_pin_no_other_slot_holds_is_taken(
@@ -2079,9 +2079,10 @@ class TestReadBack:
         await async_advance_sync_ticks(hass, freezer, 10)
 
         assert fake_zwave_lock.sets[written:] == [(2, "4321")]
-        assert fake_zwave_lock.cached(
-            CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2
-        ) == ("4321")
+        assert (
+            fake_zwave_lock.cached(CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2)
+            == "4321"
+        )
         assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
             STATE_ON,
             "4321",

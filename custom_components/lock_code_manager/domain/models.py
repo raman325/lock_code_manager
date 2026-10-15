@@ -24,20 +24,28 @@ if TYPE_CHECKING:
 
 class SlotCode(StrEnum):
     """
-    Serialization labels for non-string credential states.
+    What the views are told of a slot when the lock gave no PIN for it.
 
-    Returned by ``SlotCredential.as_label()`` for diagnostics and websocket
-    payloads so external consumers see stable string values ("empty" /
-    "unreadable_code") rather than a structured credential object.
+    The websocket payloads and diagnostics carry these labels in place of a
+    code. The dashboard cards compare a slot's code against them, and
+    ``ts/types.ts`` declares each one as a ``SLOT_CODE_*`` constant.
 
-    UNREADABLE_CODE means a code exists on the lock but its value cannot be
-    read back (for example, write-only locks like Matter). This is distinct
-    from Home Assistant's STATE_UNKNOWN ("unknown"), which represents a
-    sensor whose state is not yet known.
+    EMPTY: the lock says the slot is clear.
+
+    UNREADABLE_CODE: the lock holds a code it will not show (Matter and
+    masking locks). Distinct from Home Assistant's STATE_UNKNOWN ("unknown"),
+    a sensor whose state is not yet known.
+
+    UNANSWERED: the lock answered without saying anything about the slot. The
+    slot may be clear or may hold a code.
+
+    DISABLED: the lock holds a code for the slot that is not in force.
     """
 
     EMPTY = "empty"
     UNREADABLE_CODE = "unreadable_code"
+    UNANSWERED = "unanswered"
+    DISABLED = "disabled_on_lock"
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,14 +102,6 @@ class SlotCredential:
     def matches(self, pin: str) -> bool:
         """Return True when this credential is readable and equals ``pin``."""
         return self.is_readable and self.pin == pin
-
-    def as_label(self) -> str | SlotCode:
-        """Return stable serialization for diagnostics/websocket consumers."""
-        if not self.present:
-            return SlotCode.EMPTY
-        if self.pin is None:
-            return SlotCode.UNREADABLE_CODE
-        return self.pin
 
 
 _EMPTY_CREDENTIAL: Final = SlotCredential(present=False, pin=None)

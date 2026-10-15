@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
     CodeDisplayMode,
     LockCoordinatorSlotData,
+    SLOT_CODE_DISABLED,
     SLOT_CODE_EMPTY,
+    SLOT_CODE_UNANSWERED,
     SLOT_CODE_UNREADABLE,
     isSlotEmpty,
-    isSlotOccupied
+    isSlotOccupied,
+    isSlotSentinel
 } from './types';
 
 // Test the logic that can be unit tested without full component instantiation
@@ -35,6 +38,25 @@ describe('SlotCode guard functions', () => {
             expect(isSlotOccupied(null, 4)).toBe(true));
         it('returns true for "empty" with code_length', () =>
             expect(isSlotOccupied(SLOT_CODE_EMPTY, 4)).toBe(true));
+        it('returns false for "unanswered" sentinel', () =>
+            expect(isSlotOccupied(SLOT_CODE_UNANSWERED)).toBe(false));
+        it('returns true for "disabled_on_lock" sentinel', () =>
+            expect(isSlotOccupied(SLOT_CODE_DISABLED)).toBe(true));
+    });
+
+    describe('isSlotSentinel', () => {
+        it('recognizes every backend label', () =>
+            expect(
+                [
+                    SLOT_CODE_EMPTY,
+                    SLOT_CODE_UNREADABLE,
+                    SLOT_CODE_UNANSWERED,
+                    SLOT_CODE_DISABLED
+                ].every(isSlotSentinel)
+            ).toBe(true));
+        it('returns false for a PIN string', () => expect(isSlotSentinel('1234')).toBe(false));
+        it('returns false for a numeric code', () => expect(isSlotSentinel(5678)).toBe(false));
+        it('returns false for null', () => expect(isSlotSentinel(null)).toBe(false));
     });
 });
 

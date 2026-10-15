@@ -1170,6 +1170,10 @@ class MockLCMLock(BaseLock):
         # Reported regardless of ``codes``, so a slot keeps reading occupied
         # after a clear -- which is the state a clear can never confirm.
         self.write_only: set[int] = set()
+        # Slots this lock answers every read without saying anything about,
+        # the way an API-only Z-Wave JS UI lock does with a slot it cannot
+        # read. Told to the core as that provider tells it.
+        self.unanswered: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
         self.call_order: list[str] = []
         # When each set, clear, and read reached the lock, on the monotonic
@@ -1533,6 +1537,7 @@ class MockLCMLock(BaseLock):
         # empty managed slot would hide the read the pending-write machinery
         # waits on.
         result = {**dict.fromkeys(scope, SlotCredential.empty()), **codes}
+        self.last_silent_slots = frozenset(self.unanswered)
         if fault is not None:
             await fault.async_after("get")
         return result
