@@ -319,7 +319,7 @@
       "fields": {
         "forget_reporting": {
           "name": "Forget that the lock can report codes",
-          "description": "For a lock that can't report which codes it holds but is treated as one that can, so new users can't be placed: Lock Code Manager forgets that it saw the lock report a code, and asks it again."
+          "description": "Only for a lock that can't report which codes it holds but is treated as one that can, so new users can't be placed. Lock Code Manager forgets that it saw the lock report a code, and reads it again. Don't use this on a lock that reports its free slots: until it reports one again, a new user may be placed over a code set at the keypad."
         }
       }
     },
