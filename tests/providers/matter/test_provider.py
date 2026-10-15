@@ -2593,7 +2593,8 @@ class TestGetCapabilities:
         assert caps.max_users == 20
         # Matter DoorLock spec cap (32 bytes UTF-8); hardcoded because
         # ``matter.lock_helpers`` does not yet surface the attribute.
-        assert caps.max_user_name_length == 32
+        # 9, not the Matter maximum of 10: the Aqara U400 fails GetUser for a name of exactly 10
+        assert caps.max_user_name_length == 9
         pin_cap = caps.capability_for(CredentialType.PIN)
         assert pin_cap is not None
         assert pin_cap.num_slots == 15
