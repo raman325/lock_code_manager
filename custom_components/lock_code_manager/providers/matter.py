@@ -14,7 +14,12 @@ from datetime import timedelta
 from typing import Any, Literal, override
 
 from matter_server.client.exceptions import MatterClientException
-from matter_server.common.errors import MatterError
+from matter_server.common.errors import (
+    MatterError,
+    NodeNotExists,
+    NodeNotReady,
+    NodeNotResolving,
+)
 from matter_server.common.models import EventType
 
 from homeassistant.components.matter.const import (
@@ -793,12 +798,21 @@ class MatterLock(BaseLock):
                     f"Matter set_lock_user rejected input for "
                     f"{self.lock.entity_id} (user_name={name!r}): {err}"
                 ) from err
-            except (HomeAssistantError, MatterClientException) as err:
+            except (
+                HomeAssistantError,
+                MatterClientException,
+                NodeNotExists,
+                NodeNotReady,
+                NodeNotResolving,
+            ) as err:
                 # Transport failures (incl. ``InvalidState: Not connected`` at
                 # startup, issue #1257) are not charset-recoverable -- the next
                 # candidate name hits the same closed connection -- so short-
                 # circuit to retry instead of falling through. MatterClientException
                 # is independent of HomeAssistantError, hence the explicit catch.
+                # The server's errors for a node it cannot reach are not the
+                # lock refusing a name either: taken for one, an adopted user's
+                # hold would send the user to the vendor's app (#1695).
                 raise LockDisconnected(
                     f"Matter set_lock_user failed for {self.lock.entity_id} "
                     f"(user_name={name!r}): {err}"
