@@ -74,7 +74,10 @@ combine-as-imports = true
 # Tests use nested with/if for fixture readability; SIM117/SIM102 don't
 # improve clarity there. RUF043 (regex match=) and bugbear are also too
 # noisy on test scaffolding.
-"tests/**/*.py" = ["B", "RUF", "D", "PLR", "SIM117", "SIM102", "SIM105"]
+"tests/**/*.py" = ["B", "RUF", "PLR", "SIM117", "SIM102", "SIM105"]
+# Docstrings are required of test helpers and fixtures but not of the
+# test modules themselves.
+"tests/**/test_*.py" = ["D"]
 
 
 [tool.pylint.MASTER]
