@@ -491,16 +491,9 @@ class TestASlotHeldByAnEntryThatSyncsNothing:
         ] == [("slot3", holder.entry_id)]
 
 
-class TestOpenBugs:
-    """Open virtual-lock bugs, each pinned by a strict xfail."""
+class TestLockLeaving:
+    """A lock leaves Lock Code Manager only when no entry lists it."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: when one entry drops a lock, only enabled entries count as "
-            "still listing it, so a disabled entry's stored codes are deleted"
-        ),
-    )
     async def test_a_disabled_entrys_lock_keeps_its_codes_when_another_drops_it(
         self,
         hass: HomeAssistant,
@@ -534,6 +527,10 @@ class TestOpenBugs:
             hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}"
         ).async_load()
         assert stored is not None
+
+
+class TestOpenBugs:
+    """Open virtual-lock bugs, each pinned by a strict xfail."""
 
     @pytest.mark.xfail(
         strict=True,

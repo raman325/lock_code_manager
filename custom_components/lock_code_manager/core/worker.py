@@ -128,9 +128,19 @@ class LockWorker:
     clock: Callable[[], float] = time.monotonic
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     on_change: Callable[[], None] = lambda: None
+    # A write is about to be sent: what was written before is no longer
+    # known to be there, and whatever remembers it has to forget it now --
+    # the write may land and Home Assistant stop before it returns.
+    on_send: Callable[[], None] = lambda: None
     # The lock refused this slot's PIN: the integration turns the slot off and
     # owns the repair that says why.
     on_disable: Callable[[int], None] = lambda slot: None
+    # What was last written to a slot before this worker, by an earlier run:
+    # a slot starts from it, so a lock that will not show its codes is not
+    # written again (#405).
+    recall: Callable[[int], str | None] = lambda slot: None
+    # The lock answered an earlier run: one not answering now is offline.
+    answered_before: bool = False
     slots: dict[int, Slot] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -177,7 +187,7 @@ class LockWorker:
         """Say what ``slot`` should hold; a release clear when ``release``."""
         self._stop_waiting(slot)
         if (current := self.slots.get(slot)) is None:
-            self.slots[slot] = Slot(pin, release=release)
+            self.slots[slot] = Slot(pin, wrote=self.recall(slot), release=release)
         else:
             if slot in self._unsure and current.seen is not Seen.SILENT:
                 # A write since the last reading may have landed: read first.
@@ -241,6 +251,11 @@ class LockWorker:
         return self._answers > 0
 
     @property
+    def answered_ever(self) -> bool:
+        """Return whether the lock has answered this worker or an earlier run."""
+        return self.answered or self.answered_before
+
+    @property
     def offline(self) -> bool:
         """
         Return whether a lock that answered before has stopped answering.
@@ -248,9 +263,10 @@ class LockWorker:
         A lock that answers for some slots and not others never gets here:
         a slot whose own exchanges go unanswered while another slot answers
         is held instead (#1644). A lock never reached is still coming up, not
-        offline (#1257).
+        offline (#1257); one that answered an earlier run and is dead at
+        this one's start is.
         """
-        return self._answers > 0 and self._no_answers >= OFFLINE_AFTER
+        return self.answered_ever and self._no_answers >= OFFLINE_AFTER
 
     def request_sync(self, slots: Collection[int] | None = None) -> None:
         """
@@ -534,6 +550,10 @@ class LockWorker:
         if not current():
             return
         self._unsure[number] = (slot, slot.epoch)
+        try:
+            self.on_send()
+        except Exception:  # the integration's trouble must not stop the lock
+            _LOGGER.exception("Lock send callback failed")
         try:
             # Reports taken in before the write is sent are older than it.
             changed = await self._exchange(

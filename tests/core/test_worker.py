@@ -22,6 +22,7 @@ from custom_components.lock_code_manager.core.slot import (
     Repair,
     Seen,
     Status,
+    fingerprint,
 )
 from custom_components.lock_code_manager.core.worker import (
     BACKOFF_AFTER,
@@ -1263,6 +1264,43 @@ async def test_a_failing_change_callback_does_not_stop_the_lock(rig_factory) -> 
     await _started(rig_factory(lock, on_change=_boom), {1: "1234"})
 
     assert lock.codes == {1: "1234"}
+
+
+async def test_a_failing_send_callback_does_not_stop_the_write(rig_factory) -> None:
+    """The integration failing to forget what was written is logged; the write goes."""
+
+    def _boom() -> None:
+        raise RuntimeError("store failed")
+
+    lock = FakeLock()
+    await _started(rig_factory(lock, on_send=_boom), {1: "1234"})
+
+    assert lock.codes == {1: "1234"}
+
+
+async def test_a_write_from_an_earlier_run_is_not_made_again(rig_factory) -> None:
+    """#405: a slot starts from what was last written, so a masked lock is left alone."""
+    lock = FakeLock({1: "1234"}, masked=True)
+    recalled = {1: fingerprint("1234", SALT)}
+    await _started(rig_factory(lock, recall=recalled.get), {1: "1234"})
+
+    assert lock.writes == []
+
+
+async def test_a_lock_that_answered_an_earlier_run_can_be_offline_at_once(
+    rig_factory,
+) -> None:
+    """Dead from the start this time, it answered before: it is gone, not coming up."""
+    rig = await _started(
+        rig_factory(FakeLock(reads_unanswered=True), answered_before=True),
+        {1: "1234"},
+    )
+    for _ in range(OFFLINE_AFTER):
+        with pytest.raises(LockError):
+            await rig.worker.read([1])
+        await rig.settle()
+
+    assert rig.worker.offline
 
 
 async def test_no_read_back_once_the_lock_backs_off(rig_factory) -> None:

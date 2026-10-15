@@ -27,12 +27,13 @@ slots are wanted on the lock:
 - ``syncing_owner``: the entry holding one slot. The credential Lock Code
   Manager wants there (``desired_credential``).
 
-Entries neither disabled nor ignored, in any load state, other than the one
-asking:
+Entries that are not ignored, in any load state, disabled ones included:
 
-- ``another_enabled_entry_configures``: whether any lists the lock. Keeping
-  per-lock repair issues, and keeping the provider's stored state when a lock
-  leaves an entry.
+- ``another_entry_configures``: whether one other than the one asking lists
+  the lock. Keeping per-lock repair issues, the provider's stored state and
+  what the core remembers when a lock leaves an entry.
+- ``every_configured_lock``: every lock one lists. What the core remembers
+  is kept for these alone.
 
 Who holds a live lock instance is a different question, about runtime
 objects rather than configuration:
@@ -136,6 +137,11 @@ def _enabled_entries(hass: HomeAssistant) -> list[ConfigEntry]:
     )
 
 
+def _listing_entries(hass: HomeAssistant) -> list[ConfigEntry]:
+    """Every entry that is not ignored, in any load state, disabled ones included."""
+    return hass.config_entries.async_entries(DOMAIN, include_ignore=False)
+
+
 def _syncing_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
     """Every enabled entry in a load state that keeps its slots."""
     return (
@@ -236,22 +242,32 @@ def syncing_owner(
     return _owner(_syncing_entries(hass), lock_entity_id, code_slot)
 
 
-def another_enabled_entry_configures(
+def another_entry_configures(
     hass: HomeAssistant, config_entry: ConfigEntry, lock_entity_id: str
 ) -> bool:
     """
     Return whether an entry other than ``config_entry`` lists the lock.
 
-    Counts entries that are neither disabled nor ignored, in any load state.
-    The per-lock repair issues outlive unloads and reloads, so an entry that
-    is merely between loads still needs its issue kept. Anything that tears
-    down live objects asks ``_lock_instance_held_by_another_entry`` in
-    ``__init__`` instead.
+    Counts every entry that is not ignored, in any load state, disabled ones
+    included: a lock a disabled entry lists has not left Lock Code Manager,
+    and enabling the entry again finds what was kept for it -- the per-lock
+    repairs, the provider's stored state, what was last written. Anything
+    that tears down live objects asks ``_lock_instance_held_by_another_entry``
+    in ``__init__`` instead.
     """
     return any(
         entry.entry_id != config_entry.entry_id
-        for entry, _config in _configuring(_enabled_entries(hass), lock_entity_id)
+        for entry, _config in _configuring(_listing_entries(hass), lock_entity_id)
     )
+
+
+def every_configured_lock(hass: HomeAssistant) -> set[str]:
+    """Return every lock an entry that is not ignored lists, disabled ones included."""
+    return {
+        lock
+        for entry in _listing_entries(hass)
+        for lock in get_entry_config(entry).locks
+    }
 
 
 def entries_holding(

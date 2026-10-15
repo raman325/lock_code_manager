@@ -58,6 +58,7 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    EVENT_HOMEASSISTANT_FINAL_WRITE,
     Platform,
 )
 from homeassistant.core import Event, HomeAssistant, callback
@@ -98,7 +99,11 @@ from custom_components.lock_code_manager.domain.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.lock_runtime import REGISTRY_KEY
+from custom_components.lock_code_manager.domain.lock_runtime import (
+    CORE_KEYS,
+    REGISTRY_KEY,
+    async_setup_core,
+)
 from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.domain.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
@@ -1851,6 +1856,30 @@ async def async_setup_lcm_entry(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     return entry
+
+
+async def async_restart_lcm(hass: HomeAssistant, *entries: ConfigEntry) -> None:
+    """
+    Restart Lock Code Manager's core: everything it kept in memory goes.
+
+    The entries unload, every worker stops (a clear still going included,
+    as when Home Assistant stops), the store is written as at Home
+    Assistant's final write, and the core starts again from what it holds.
+    The entries' locks are rebuilt; ``when_mock_lock_built`` keeps what a
+    real lock would hold across it.
+    """
+    for entry in entries:
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.data[DOMAIN][REGISTRY_KEY].stop()
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)
+    await hass.async_block_till_done()
+    for key in CORE_KEYS:
+        hass.data[DOMAIN].pop(key, None)
+    await async_setup_core(hass)
+    for entry in entries:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 def current_entry(

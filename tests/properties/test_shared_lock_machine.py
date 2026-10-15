@@ -597,12 +597,12 @@ class SharedLockMachine(RuleBasedStateMachine):
         position = self.positions[index]
         entry = position.entry
         assert entry is not None
-        # The lock leaves Lock Code Manager only if no other enabled entry
-        # lists it, loaded or not.
+        # The lock leaves Lock Code Manager only if no other entry lists it,
+        # loaded or not, disabled or not.
         self._permanent[lock] = not any(
             lock in other.locks
             for other_index, other in enumerate(self.positions)
-            if other_index != index and self._enabled(other)
+            if other_index != index and other.entry is not None
         )
         held_elsewhere = any(
             other_index != index and other.loaded and lock in other.holds
