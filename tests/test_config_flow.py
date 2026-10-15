@@ -2441,6 +2441,68 @@ async def test_options_flow_refuses_a_lock_too_small_for_the_existing_slots(
     _assert_options_error_renders(result)
 
 
+async def _async_add_lock_2(hass: HomeAssistant) -> dict[str, Any]:
+    """Add lock 2 to an entry on lock 1 whose users hold slots 1 and 2."""
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+            "User 2": {CONF_ENABLED: True, CONF_PIN: "5678"},
+        },
+    )
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    return await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+
+async def test_options_flow_refuses_a_lock_holding_codes_in_the_entrys_slots(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Regression for #1684: an added lock's codes are not written over.
+
+    The entry's numbers were issued before the lock joined it, so a code set
+    at its keypad in one of them is named, and the lock refused. Lock 1 holds
+    the same numbers and is not named: it is already the entry's.
+    """
+    with _holding(2, 3):
+        result = await _async_add_lock_2(hass)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "existing_codes"}
+    assert result["description_placeholders"] == {
+        "lock": LOCK_2_ENTITY_ID,
+        "slots": "2",
+    }
+    _assert_options_error_renders(result)
+
+
+async def test_options_flow_adds_a_lock_whose_slots_are_free(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A code outside the entry's numbers does not keep a lock out."""
+    with _holding(3):
+        result = await _async_add_lock_2(hass)
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+
+async def test_options_flow_refuses_a_lock_it_cannot_read(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """An added lock that cannot be read is refused, as setup refuses it."""
+    with when_mock_lock_built(lambda lock: lock.fail("get")):
+        result = await _async_add_lock_2(hass)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+    assert result["description_placeholders"] == {"locks": LOCK_2_ENTITY_ID}
+    _assert_options_error_renders(result)
+
+
 def _assert_options_error_renders(result) -> None:
     """
     Assert the options form has a sentence for its error, and all it names.
@@ -2618,9 +2680,11 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["errors"] == {"base": "slots_already_configured"}
 
         started = await hass.config_entries.options.async_init(entry.entry_id)
-        result = await hass.config_entries.options.async_configure(
-            started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
-        )
+        # Nothing at the keypad either, which would refuse it on its own.
+        with _holding():
+            result = await hass.config_entries.options.async_configure(
+                started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+            )
 
         assert result["type"] == "create_entry"
         assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
@@ -3656,10 +3720,13 @@ class TestFlowsOnAFailedEntry:
                 hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
             )
         else:
+            # The stale options are what the entry holds, so lock 1 is one
+            # being added, and is read for codes in the way.
             init = await hass.config_entries.options.async_init(entry.entry_id)
-            result = await async_configure_options(
-                hass, init["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-            )
+            with _holding():
+                result = await async_configure_options(
+                    hass, init["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+                )
         await hass.async_block_till_done()
         assert result["reason"] == "locks_updated"
         assert entry.state is ConfigEntryState.LOADED
