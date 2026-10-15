@@ -953,3 +953,151 @@ class TestWriteOnlyLock:
             assert len(_read_slots(bridge)) > reads_before
             assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
             _assert_trouble_free(hass, lock_id)
+
+
+@pytest.fixture
+def free_slots_only_bridge(fake_z2m_bridge: FakeZ2MBridge) -> FakeZ2MBridge:
+    """A bridge whose lock reports which slots are free, and Not Supported for the rest."""
+    fake_z2m_bridge.cannot_tell_codes = True
+    return fake_z2m_bridge
+
+
+class TestLockThatReportsOnlyFreeSlots:
+    """
+    A lock that answers available for an empty slot and Not Supported otherwise.
+
+    It has shown it can report, so a slot it will not describe holds a code:
+    nothing is numbered there. Sync still trusts its own writes, which read
+    back Not Supported too.
+    """
+
+    async def test_setup_never_numbers_an_occupied_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        free_slots_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """Keypad codes at 1 and 3 push two users to 2 and 4, across two reads."""
+        bridge = free_slots_only_bridge
+        bridge.set_user(1, "1111")
+        bridge.set_user(3, "3333")
+        lock_id = mqtt_lock_discovered.entity_id
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        await async_configure_flow(
+            hass, flow_id, {CONF_NAME: "free slots", CONF_LOCKS: [lock_id]}
+        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await _on_the_clock(
+            hass,
+            freezer,
+            async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2}),
+            "allocation",
+            max_steps=30,
+        )
+        assert result["step_id"] == "code_slot", result.get("errors")
+        # Slot 3 is read by a later pass than the slot that showed the lock
+        # can report: what that showed outlives the read that showed it.
+        assert _read_slots(bridge) == [1, 2, 3, 4]
+
+        for user, pin in (("user1", "1234"), ("user2", "5678")):
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                async_configure_flow(
+                    hass,
+                    flow_id,
+                    {CONF_NAME: user, CONF_PIN: pin, CONF_ENABLED: True},
+                ),
+                "entry creation",
+            )
+        assert result["type"] == "create_entry"
+        entry = hass.config_entries.async_get_entry(result["result"].entry_id)
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 2, "user2": 4}
+
+        pins = {2: "1234", 4: "5678"}
+        await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+        _assert_trouble_free(hass, lock_id)
+        assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
+        assert bridge.sets_for(1) == bridge.sets_for(3) == []
+        assert bridge.users[1] == (ENABLED, "1111")
+        assert bridge.users[3] == (ENABLED, "3333")
+        await _on_the_clock(
+            hass,
+            freezer,
+            hass.config_entries.async_unload(entry.entry_id),
+            "entry unload",
+        )
+
+    async def test_adding_a_user_steps_over_a_keypad_code(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        free_slots_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """The newcomer skips the code at 3 for the free slot at 4."""
+        bridge = free_slots_only_bridge
+        bridge.set_user(3, "3333")
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            flow = await hass.config_entries.subentries.async_init(
+                (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+            )
+            flow = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"], {"next_step_id": "one"}
+            )
+            await _until_settled(
+                hass, freezer, entry, lock_id, bridge, {1: "1234", 2: "5678"}
+            )
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.subentries.async_configure(
+                    flow["flow_id"],
+                    {CONF_NAME: "user4", CONF_PIN: "9012", CONF_ENABLED: True},
+                ),
+                "adding a user",
+            )
+
+            assert result["type"] == "create_entry", result.get("errors")
+            assert result["data"][CONF_SLOT] == 4
+            pins = {1: "1234", 2: "5678", 4: "9012"}
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            assert bridge.sets_for(3) == []
+            assert bridge.users[3] == (ENABLED, "3333")
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_adding_the_lock_over_a_keypad_code_is_refused(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        free_slots_only_bridge: FakeZ2MBridge,
+    ) -> None:
+        """#1693: the code at the entry's slot 2 is in the way, not unknown."""
+        bridge = free_slots_only_bridge
+        bridge.set_user(2, "2222")
+        lock_id = mqtt_lock_discovered.entity_id
+        entry = current_entry("test_z2m_lockless", {1: "1234", 2: "5678"}, locks=())
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await _on_the_clock(
+            hass,
+            freezer,
+            async_configure_options(hass, flow["flow_id"], {CONF_LOCKS: [lock_id]}),
+            "adding the lock",
+        )
+
+        assert result["errors"] == {"base": "existing_codes"}
+        assert result["description_placeholders"]["slots"] == "2"
+        assert bridge.sets_for(2) == []

@@ -81,6 +81,7 @@ class LockCodeManagerData(TypedDict, total=False):
     slots_given_up: dict[tuple[str, int], tuple[str, LockWorker[ProviderPort] | None]]
     slot_issues: dict[str, set[str]]
     lock_store: LockStore
+    locks_reporting: dict[str, bool]
 
 
 DATA: HassKey[LockCodeManagerData] = HassKey(DOMAIN)

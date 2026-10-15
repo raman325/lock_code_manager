@@ -82,6 +82,9 @@ class FakeZ2MBridge:
     # Reads answered, but every one with user status Not Supported and no
     # code (#1581); writes still land.
     cannot_tell: bool = False
+    # Reads of an empty user answered available, of any other Not Supported:
+    # a lock that reports which slots are free and not what the rest hold.
+    cannot_tell_codes: bool = False
     # The lock reports an attribute after each write, so Zigbee2MQTT
     # republishes its cache, users entries as last read included (#1335).
     # The report goes out once the write's publish has returned, as a real
@@ -173,11 +176,9 @@ class FakeZ2MBridge:
 
     def _answer_get_pin_code(self, user: int) -> None:
         """Answer ``getPinCode`` through ``lock_pin_code_response`` (``FZ:380-400``)."""
-        status, code = (
-            (NOT_SUPPORTED, None)
-            if self.cannot_tell
-            else self.users.get(user, (AVAILABLE, None))
-        )
+        status, code = self.users.get(user, (AVAILABLE, None))
+        if self.cannot_tell or (self.cannot_tell_codes and status != AVAILABLE):
+            status, code = NOT_SUPPORTED, None
         entry: dict[str, Any] = {
             "status": _STATUS_NAMES.get(status, f"not_supported_{status}")
         }

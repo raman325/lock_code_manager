@@ -463,7 +463,8 @@ class BaseLock:
     # providers that can tell: the core reads them as silent, not unreadable.
     last_silent_slots: frozenset[int] = field(default=frozenset(), init=False)
     # Of those, the ones the lock did answer, to say it cannot tell what they
-    # hold (#1581): silent all the same, but the read reached the lock.
+    # hold (#1581): silent all the same, but the read reached the lock -- and
+    # a code withheld, on a lock a read has seen describe a slot.
     last_cannot_tell_slots: frozenset[int] = field(default=frozenset(), init=False)
     # Slots the last read found a PIN at only under a user with no slot tag,
     # on a lock with user records: someone else's code at that index, not the

@@ -61,8 +61,18 @@ GIVEN_UP_KEY: Final = "slots_given_up"
 ISSUES_KEY: Final = "slot_issues"
 # What the workers remember across a restart.
 STORE_KEY: Final = "lock_store"
+# lock -> whether a read has described a slot of it, for every lock read this
+# run (``ProviderPort.read``). In memory only: a restart starts it over.
+REPORTS_KEY: Final = "locks_reporting"
 # Everything the core keeps for one run of Home Assistant.
-CORE_KEYS = (REGISTRY_KEY, LEAVING_KEY, GIVEN_UP_KEY, ISSUES_KEY, STORE_KEY)
+CORE_KEYS = (
+    REGISTRY_KEY,
+    LEAVING_KEY,
+    GIVEN_UP_KEY,
+    ISSUES_KEY,
+    STORE_KEY,
+    REPORTS_KEY,
+)
 
 # How long a one-off write from a repair or the card is waited for.
 WRITE_ONCE_WAIT = 60.0
@@ -145,6 +155,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
     data[LEAVING_KEY] = set()
     data[GIVEN_UP_KEY] = {}
     data[ISSUES_KEY] = {}
+    data[REPORTS_KEY] = {}
 
     def _make(lock_entity_id: str) -> LockWorker[ProviderPort]:
         # A config flow's read before the integration has set up remembers nothing.
@@ -211,7 +222,9 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
                 for entry, _ in entries_configuring(hass, lock_entity_id)
             )
 
-        port = ProviderPort(provider, name_for=_name_for, polling=_polling)
+        port = ProviderPort(
+            provider, name_for=_name_for, polling=_polling, reports=data[REPORTS_KEY]
+        )
         worker = LockWorker(
             port,
             # What a write is remembered by. Before the integration has set up

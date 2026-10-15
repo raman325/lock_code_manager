@@ -262,7 +262,9 @@ class BaseMqttLock(BaseLock):
         credential for anything it described, however unreadable, and
         ``CANNOT_TELL`` when it answered that it cannot say. Silence and
         ``CANNOT_TELL`` reach the core as silent (``last_silent_slots``): free
-        to allocate, and a write there is trusted. Only the silences decide
+        to allocate, and a write there is trusted -- except that, from a lock
+        that has described some slot, the core reads ``CANNOT_TELL`` as a
+        code withheld (``ProviderPort.read``). Only the silences decide
         whether the read was worth anything.
 
         Every slot failing at the transport is a different thing from every
