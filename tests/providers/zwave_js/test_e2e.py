@@ -231,7 +231,7 @@ class TestSetAndClearUsercodes:
                 user_id=2,
                 active=True,
                 user_type=UserCredentialUserType.GENERAL,
-                user_name="bob",
+                user_name="lcm:2:bob",
             ),
         ]
         mock_access_control.get_all_credentials_cached.return_value = [
@@ -247,6 +247,51 @@ class TestSetAndClearUsercodes:
 
         assert result is True
         mock_lock_helpers["async_delete_credential"].assert_called_once()
+
+    async def test_clear_usercode_leaves_an_untagged_user_alone(
+        self,
+        hass: HomeAssistant,
+        zwave_js_lock: ZWaveJSLock,
+        mock_access_control: MagicMock,
+        mock_lock_helpers: dict,
+        zwave_integration: MockConfigEntry,
+    ) -> None:
+        """
+        Clearing a slot never deletes an untagged user's credential (#1518).
+
+        A user with no ``lcm:<slot>:`` tag holding a PIN at the slot's index is
+        as likely to be the homeowner's as one of ours.
+        """
+        lcm_entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
+                CONF_SLOTS: {"2": {}},
+            },
+        )
+        lcm_entry.add_to_hass(hass)
+        zwave_js_lock._min_operation_delay = 0.0
+        mock_access_control.get_users_cached.return_value = [
+            UserData(
+                user_id=2,
+                active=True,
+                user_type=UserCredentialUserType.GENERAL,
+                user_name="bob",
+            ),
+        ]
+        mock_access_control.get_all_credentials_cached.return_value = [
+            CredentialData(
+                user_id=2,
+                type=UserCredentialType.PIN_CODE,
+                slot=2,
+                data="1234",
+            ),
+        ]
+
+        result = await zwave_js_lock.async_clear_usercode(2)
+
+        assert result is False
+        mock_lock_helpers["async_delete_credential"].assert_not_called()
 
 
 class TestGetUsercodes:
@@ -2664,7 +2709,7 @@ class TestUserRemoved:
         The release of a removed slot clears it on a slot-addressed lock.
 
         On a User Code lock there is no lock-side user to carry LCM's tag,
-        so the release (``adopt_untagged=False``) finds no owner and sends
+        so a release that adopts no untagged user found no owner and sent
         nothing: the deleted user's PIN still opens the door, the worker
         reads it back twice and raises ``slot_clear_failed`` -- which
         acknowledging only repeats.

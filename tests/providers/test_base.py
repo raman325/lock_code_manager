@@ -2108,13 +2108,9 @@ class _NativeUserOwnerResolutionLock(MockNativeUserLock):
         """Advertise PIN support so the base's write paths engage."""
         return _pin_capabilities()
 
-    async def async_clear_usercode(
-        self, code_slot: int, *, adopt_untagged: bool = True
-    ) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """Resolve the owner the way a real native-user provider does."""
-        return await BaseLock.async_clear_usercode(
-            self, code_slot, adopt_untagged=adopt_untagged
-        )
+        return await BaseLock.async_clear_usercode(self, code_slot)
 
 
 def _lock_user(user_id: int, name: str | None, pin_slot: int) -> User:
@@ -2132,11 +2128,9 @@ async def test_releasing_a_slot_does_not_delete_an_untagged_users_credential(
     """
     Releasing never adopts an untagged owner.
 
-    The clear path may: the slot is still LCM's, adoption is how a pre-tag
-    install is taken over, and the write that follows corrects a wrong guess.
-    Releasing has the opposite premise -- the slot is no longer LCM's, and
-    nothing follows -- so an untagged user holding a PIN at that index, which
-    is as likely to be one somebody else made, must be left alone.
+    The slot is no longer LCM's and nothing follows, so an untagged user
+    holding a PIN at that index, which is as likely to be one somebody else
+    made, must be left alone.
     """
     lock = _make_base_test_lock(
         hass, "release_untagged", _NativeUserOwnerResolutionLock
@@ -2183,28 +2177,53 @@ async def test_releasing_a_slot_deletes_the_credential_of_its_tagged_user(
     assert deleted.call_args.args[0].user_id == 99
 
 
-async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
+async def test_clearing_a_slot_does_not_delete_an_untagged_users_credential(
     hass: HomeAssistant,
 ):
-    """The upgrade path this scoping must not break: a clear may still adopt."""
-    lock = _make_base_test_lock(hass, "clear_adopts", _NativeUserOwnerResolutionLock)
+    """
+    A clear adopts no untagged owner either (#1518).
+
+    A slot turned off is cleared and nothing follows to correct a wrong
+    guess, so the homeowner's own user holding a PIN at that index is left
+    alone. Adoption is the set path's: its write tags the user.
+    """
+    lock = _make_base_test_lock(hass, "clear_untagged", _NativeUserOwnerResolutionLock)
     deleted = AsyncMock(return_value=True)
     with (
         patch.object(
-            lock,
-            "async_get_users",
-            AsyncMock(
-                return_value=[
-                    _lock_user(99, "Alice", 3),
-                ]
-            ),
+            lock, "async_get_users", AsyncMock(return_value=[_lock_user(99, "Mom", 3)])
         ),
+        patch.object(lock, "async_delete_credential", deleted),
+    ):
+        assert await lock.async_clear_usercode(3) is False
+
+    deleted.assert_not_called()
+
+
+async def test_clearing_a_slot_on_a_lock_without_user_records_adopts_by_slot(
+    hass: HomeAssistant,
+):
+    """
+    A lock that keeps no user records still clears by slot.
+
+    No user there can carry a tag (a Z-Wave User Code lock: the user is the
+    credential), so the slot is the identity.
+    """
+    lock = _make_base_test_lock(
+        hass, "clear_no_records", _NativeUserOwnerResolutionLock
+    )
+    deleted = AsyncMock(return_value=True)
+    with (
+        patch.object(
+            lock, "async_get_users", AsyncMock(return_value=[_lock_user(3, None, 3)])
+        ),
+        patch.object(lock, "_supports_user_records", AsyncMock(return_value=False)),
         patch.object(lock, "async_delete_credential", deleted),
     ):
         await lock.async_clear_usercode(3)
 
     deleted.assert_called_once()
-    assert deleted.call_args.args[0].user_id == 99
+    assert deleted.call_args.args[0].user_id == 3
 
 
 async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssistant):

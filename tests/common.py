@@ -1487,17 +1487,11 @@ class MockLCMLock(BaseLock):
             await fault.async_after("set")
         return result
 
-    async def async_clear_usercode(
-        self, code_slot: int, *, adopt_untagged: bool = True
-    ) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """
         Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
-
-        ``adopt_untagged`` is accepted and ignored: this lock is slot-only, so
-        it has no users to adopt. Matching the base signature is what lets the
-        release path pass it without special-casing the double.
         """
         fault = await self._async_reach_lock(
             "clear", (code_slot,), code_slot, changes=self._changes(code_slot, None)

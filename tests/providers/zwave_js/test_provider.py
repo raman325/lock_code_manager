@@ -757,13 +757,13 @@ async def test_async_clear_usercode_calls_delete_primitives(
     lcm_entry.add_to_hass(hass)
 
     zwave_js_lock._min_operation_delay = 0.0
-    # Seed the lock with one user owning one PIN at slot 1
+    # Seed the lock with LCM's tagged user owning one PIN at slot 1
     mock_access_control.get_users_cached.return_value = [
         UserData(
             user_id=1,
             active=True,
             user_type=UserCredentialUserType.GENERAL,
-            user_name="alice",
+            user_name="lcm:1:alice",
         ),
     ]
     mock_access_control.get_all_credentials_cached.return_value = [
