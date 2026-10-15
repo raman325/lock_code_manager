@@ -47,6 +47,7 @@ from .queries import (
     entries_configuring,
     every_configured_lock,
     get_entry_config,
+    iter_loaded_lcm_entries,
 )
 from .util import per_lock_issue_id
 
@@ -350,6 +351,32 @@ async def async_release_lock(
     if leaving:
         hass.data[DOMAIN][LEAVING_KEY].add(lock_entity_id)
     await lock_registry(hass).release(lock_entity_id, entry.entry_id)
+    _hand_off(hass, entry, lock_entity_id, get_entry_config(entry).slots)
+
+
+@callback
+def _hand_off(
+    hass: HomeAssistant, leaving: ConfigEntry, lock_entity_id: str, slots: Iterable[int]
+) -> None:
+    """
+    Hand ``slots``, which ``leaving`` let go of, to another entry configuring them.
+
+    Only old storage has two entries on one slot (the config flow forbids
+    it): the second one's claim was dropped when it held the lock, so once
+    the owner lets the slot go, nobody would want it again. Telling the
+    other entry what it wants claims the slot; for a slot it already owns,
+    that is nothing new.
+    """
+    for slot in slots:
+        for entry in iter_loaded_lcm_entries(hass):
+            runtime = entry.runtime_data
+            if (
+                entry.entry_id != leaving.entry_id
+                and lock_entity_id in runtime.locks
+                and (coordinator := runtime.slot_coordinators.get(slot))
+            ):
+                coordinator.async_push_want([lock_entity_id])
+                break
 
 
 @callback
@@ -438,6 +465,7 @@ def async_give_up(
                 store.forget_slot(lock_entity_id, slot)
     except KeyError:
         return  # never held: nothing to give up
+    _hand_off(hass, entry, lock_entity_id, [slot])
 
 
 async def async_write_once(

@@ -1583,7 +1583,10 @@ class MatterLock(BaseLock):
         """
         code_slot: int | None = None
         try:
-            raw_users = await self._raw_lock_users()
+            if self.coordinator is None:
+                raise LockDisconnected("not set up")
+            # In the lock's turn: nothing reaches it once its worker stops.
+            raw_users = await self.coordinator.async_in_turn(self._raw_lock_users)
         except (LockDisconnected, LockOperationFailed) as err:
             LOGGER.debug(
                 "Lock %s: could not read users to resolve LockUserChange "

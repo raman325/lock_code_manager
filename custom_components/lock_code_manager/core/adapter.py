@@ -21,7 +21,7 @@ The design: docs/superpowers/specs/2026-10-14-core-registry-adapter.md.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Collection
+from collections.abc import Awaitable, Callable, Collection
 import contextlib
 from datetime import datetime, timedelta
 import logging
@@ -522,6 +522,37 @@ class _Coordinator:
 
     async def async_refresh(self) -> None:
         """Do nothing: the worker's own first read comes first."""
+
+    async def async_in_turn(self, call: Callable[[], Awaitable[Any]]) -> Any:
+        """
+        Run ``call`` against the lock in its worker's turn; return its result.
+
+        For an exchange a provider starts on its own, such as an event's
+        follow-up read: the worker stays the one owner of every exchange, so
+        nothing reaches the lock once it has stopped. The provider's own error
+        comes back as it was raised; a worker that has stopped, or is backing
+        off, answers ``LockDisconnected`` without asking the lock.
+        """
+        worker = self._port.worker
+        # Built before the provider is set up with this stand-in.
+        assert worker is not None
+        raised: list[LockCodeManagerProviderError] = []
+
+        async def _call() -> Any:
+            try:
+                return await call()
+            except LockCodeManagerProviderError as err:
+                raised.append(err)
+                if (error := lock_error(err, clearing=False)) is None:
+                    raise  # the provider's bug: the worker logs it
+                raise error from err
+
+        try:
+            return await worker.turn(_call)
+        except LockError as err:
+            if raised:
+                raise raised[0] from None
+            raise LockDisconnected(str(err) or "the lock did not answer") from err
 
     def async_set_update_error(self, err: Exception) -> None:
         """Do nothing: the worker counts its own failures."""

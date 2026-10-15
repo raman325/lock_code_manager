@@ -52,6 +52,18 @@ from tests.providers.helpers import (
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 
 
+async def _run_now(call: Any) -> Any:
+    """Run an exchange at once, as a worker with nothing else queued would."""
+    return await call()
+
+
+def _mock_coordinator() -> MagicMock:
+    """Return a stand-in coordinator whose turn runs the exchange at once."""
+    coordinator = MagicMock()
+    coordinator.async_in_turn = _run_now
+    return coordinator
+
+
 def _make_set_credential_failed_error(
     status: str = "duplicate",
 ) -> HomeAssistantError:
@@ -1496,7 +1508,7 @@ class TestLockUserChangeEvent:
         ``lcm:<slot>:``; the push targets that LCM slot, NOT the credential
         index in dataIndex (which is now Matter-auto-allocated and opaque).
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
         matter_lock.coordinator = mock_coordinator
 
@@ -1531,7 +1543,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Modifying a PIN credential pushes SlotCredential.unreadable() to the LCM slot."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         mock_coordinator.data = {pin_address(5): SlotCredential.unreadable()}
         matter_lock.coordinator = mock_coordinator
 
@@ -1566,7 +1578,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Clearing a PIN credential pushes SlotCredential.empty() to the LCM slot."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         mock_coordinator.data = {pin_address(2): SlotCredential.unreadable()}
         matter_lock.coordinator = mock_coordinator
 
@@ -1606,7 +1618,7 @@ class TestLockUserChangeEvent:
         credentials, or keypad-enrolled credentials on a different user) must
         not push spurious updates into LCM's coordinator.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
@@ -1643,7 +1655,7 @@ class TestLockUserChangeEvent:
         doesn't model yet; we ignore rather than push a stale resolved
         state with the wrong semantics.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1673,7 +1685,7 @@ class TestLockUserChangeEvent:
         would silently lose otherwise-resolvable state updates -- the LCM
         slot comes from ``userIndex`` -> tag.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
         matter_lock.coordinator = mock_coordinator
 
@@ -1714,7 +1726,7 @@ class TestLockUserChangeEvent:
         task. The coordinator update is dropped; the next refresh will
         surface the change.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         with patch(
@@ -1746,7 +1758,7 @@ class TestLockUserChangeEvent:
         ``user_name`` field. There's no way to parse a tag without a name,
         so the event is dropped (untagged-user contract).
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
@@ -1776,7 +1788,7 @@ class TestLockUserChangeEvent:
 
     def test_non_pin_data_type_ignored(self, matter_lock: MatterLock) -> None:
         """Non-PIN LockDataType (e.g. RFID=7) is ignored."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1795,7 +1807,7 @@ class TestLockUserChangeEvent:
 
     def test_missing_data_index_ignored(self, matter_lock: MatterLock) -> None:
         """Event with no dataIndex is ignored."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1814,7 +1826,7 @@ class TestLockUserChangeEvent:
 
     def test_non_integer_data_index_ignored(self, matter_lock: MatterLock) -> None:
         """Non-integer dataIndex logs warning and is ignored."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1833,7 +1845,7 @@ class TestLockUserChangeEvent:
 
     def test_unknown_operation_type_ignored(self, matter_lock: MatterLock) -> None:
         """Unknown DataOperationType is ignored."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1869,7 +1881,7 @@ class TestLockUserChangeEvent:
 
     def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
         """Event from non-DoorLock cluster is ignored."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
         matter_lock._on_node_event(
@@ -1897,7 +1909,7 @@ class TestLockUserChangeEvent:
         reading the lock: the user is gone. The slot comes from what the last
         read said that user index anchored.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -1938,7 +1950,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """The PIN-level CLEAR that follows a ClearUser resolves the same way."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -1975,7 +1987,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock, operation: int
     ) -> None:
         """A user record appearing or changing says nothing about its PIN."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -2011,7 +2023,7 @@ class TestLockUserChangeEvent:
         believed: resolving it through the map would show a deleted user's
         slot as occupied.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -2056,7 +2068,7 @@ class TestLockUserChangeEvent:
         Reads run for every write on any slot; one landing between the
         out-of-band deletion and its event must leave the anchor in place.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -2092,7 +2104,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A user someone renamed to an untagged name is no longer ours to empty."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -2135,7 +2147,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A cleared user LCM never saw anchors no slot of ours."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users([]):
             matter_lock._on_node_event(
@@ -2158,7 +2170,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A user LCM creates is known before any read; a user it deletes is forgotten."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with (
             self._patch_users([]),
@@ -2192,7 +2204,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Legacy adoption is a write, not a read: the map learns the index from it."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         untagged_holder = [
             {
@@ -2220,7 +2232,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A flaky read at the moment of deletion must not lose the deletion."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -2250,7 +2262,7 @@ class TestLockUserChangeEvent:
         Without this the vendor user's own later deletion would empty the
         slot the index anchored for LCM long ago.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -2279,7 +2291,7 @@ class TestLockUserChangeEvent:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """A user re-tagged to another slot since the last read empties that slot."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
             [
@@ -3467,7 +3479,7 @@ class TestSetCredential:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """async_set_credential pushes SlotCredential.unreadable() on success."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         mock_set_credential = AsyncMock(
             return_value={"credential_index": 2, "user_index": 2}
@@ -3911,7 +3923,7 @@ class TestSetCredential:
         again and the write fails for the slot breaker; nothing is pushed as
         a success (issue #1538).
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         mock_clear = AsyncMock(return_value={})
         with (
@@ -3955,7 +3967,7 @@ class TestSetCredential:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """The lock naming the intended user confirms the write."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with (
             patch(
@@ -3981,7 +3993,7 @@ class TestSetCredential:
         deleting the PIN that just landed and charging the lock breaker for a
         write that succeeded.
         """
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with (
             patch(
@@ -4022,7 +4034,7 @@ class TestSetCredential:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """The write that lands after a duplicate clear is checked like any other."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         mock_set_credential = AsyncMock(
             side_effect=[
@@ -4136,7 +4148,7 @@ class TestDeleteCredential:
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Successful delete pushes SlotCredential.empty() to coordinator."""
-        mock_coordinator = MagicMock()
+        mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         mock_clear = AsyncMock(return_value=None)
         ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)

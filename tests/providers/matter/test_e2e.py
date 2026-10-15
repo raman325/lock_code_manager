@@ -938,14 +938,6 @@ class TestOpenBugs:
             STATE_ON
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open: an event's follow-up read is not cancelled when the entry "
-            "unloads, so it still reaches the lock afterwards"
-        ),
-    )
     async def test_nothing_reaches_the_lock_after_the_entry_unloads(
         self,
         hass: HomeAssistant,
@@ -958,6 +950,8 @@ class TestOpenBugs:
         await _async_settle(
             hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
         )
+        # The worker gives the exchange it is in no time to finish once it stops.
+        lock_registry(hass)._grace = 0
         held = fake_matter_lock.hang("GetUser")
         fake_matter_lock.program(9, "999999", name="Mom", credential_index=9)
         await held.async_wait_held()
