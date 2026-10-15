@@ -144,7 +144,8 @@ class ProviderPort:
         Bounded by the provider's own budget for a walk of that many slots.
         A slot the lock said nothing about is left out (silent); a read where
         it said nothing about any of them, from a lock that has answered
-        reads before, is no answer.
+        reads before, is no answer -- unless, of some, it answered that it
+        cannot tell.
         """
         provider = self.provider
         if self._managed and not await self._set_up():
@@ -158,6 +159,7 @@ class ProviderPort:
             else provider.async_get_usercodes
         )
         provider.last_silent_slots = provider.last_foreign_slots = frozenset()
+        provider.last_cannot_tell_slots = frozenset()
         # A slot past the lock's capacity is never asked about: no answer
         # would come, and the lock would be taken for gone (#1398). Its write
         # is refused unsent, which holds it.
@@ -179,7 +181,11 @@ class ProviderPort:
             # A read that failed said nothing about any slot: no answer.
             raise LockError(ErrorKind.NO_ANSWER, message=str(err)) from err
         silent = provider.last_silent_slots & set(slots)
-        if self._answered and silent >= set(slots):
+        if (
+            self._answered
+            and silent >= set(slots)
+            and not provider.last_cannot_tell_slots & silent
+        ):
             raise LockError(ErrorKind.NO_ANSWER, message="the lock said nothing")
         # The lock answered, but of a slot written too lately to show it yet:
         # left out (silent), so the write is trusted until a later read.

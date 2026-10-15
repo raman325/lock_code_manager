@@ -462,6 +462,9 @@ class BaseLock:
     # Slots the last read asked about that the lock said nothing about, for
     # providers that can tell: the core reads them as silent, not unreadable.
     last_silent_slots: frozenset[int] = field(default=frozenset(), init=False)
+    # Of those, the ones the lock did answer, to say it cannot tell what they
+    # hold (#1581): silent all the same, but the read reached the lock.
+    last_cannot_tell_slots: frozenset[int] = field(default=frozenset(), init=False)
     # Slots the last read found a PIN at only under a user with no slot tag,
     # on a lock with user records: someone else's code at that index, not the
     # slot's own (``_util.foreign_slots``). The core reads the slot as empty.
