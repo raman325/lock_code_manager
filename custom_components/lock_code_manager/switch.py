@@ -11,8 +11,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .entity import BaseLockCodeManagerEntity
+from .ha.entry import LockCodeManagerConfigEntry
 from .ha.slot_coordinator import PinRequiredError
-from .model.models import LockCodeManagerConfigEntry
 from .model.queries import subentry_id_for_slot
 
 _LOGGER = logging.getLogger(__name__)
