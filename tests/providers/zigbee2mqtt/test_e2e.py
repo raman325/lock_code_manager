@@ -1,5 +1,6 @@
 """Full lifecycle E2E tests for Zigbee2MQTT lock provider."""
 
+import asyncio
 from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
 import json
@@ -41,7 +42,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.ha.adapter import reading
+from custom_components.lock_code_manager.ha.adapter import ProviderPort, reading
 from custom_components.lock_code_manager.ha.runtime import (
     RE_PAIRED_WORK_DROPPED,
     STORE_KEY,
@@ -1375,6 +1376,16 @@ def _re_pair(hass: HomeAssistant) -> Coroutine[Any, Any, er.RegistryEntry]:
     return async_discover_z2m_lock(hass, ieee="0xbeef")
 
 
+def _re_pair_unawaited(hass: HomeAssistant) -> None:
+    """``_re_pair``, not waiting for Home Assistant to be done: something isn't."""
+    async_fire_mqtt_message(hass, f"homeassistant/lock/{Z2M_IEEE}/lock/config", "")
+    async_fire_mqtt_message(
+        hass,
+        "homeassistant/lock/0xbeef/lock/config",
+        json.dumps(z2m_lock_discovery_payload(ieee="0xbeef")),
+    )
+
+
 def _spy_on_unloads(hass: HomeAssistant) -> Any:
     """Count the config entries Home Assistant is asked to unload."""
     return patch.object(
@@ -1505,14 +1516,7 @@ class TestRePairedLock:
             bridge.silent = False
             bridge.users = {2: (ENABLED, "0000")}
             bridge.requests.clear()
-            async_fire_mqtt_message(
-                hass, f"homeassistant/lock/{Z2M_IEEE}/lock/config", ""
-            )
-            async_fire_mqtt_message(
-                hass,
-                "homeassistant/lock/0xbeef/lock/config",
-                json.dumps(z2m_lock_discovery_payload(ieee="0xbeef")),
-            )
+            _re_pair_unawaited(hass)
             await async_step_clock_until(
                 hass,
                 freezer,
@@ -1545,6 +1549,146 @@ class TestRePairedLock:
             assert (await flow.async_step_init({}))["type"] == "create_entry"
             ir.async_delete_issue(hass, DOMAIN, issue_id)  # as Home Assistant does
             assert bridge.sets_for(2) == []
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_a_re_pair_while_the_entry_unloads_is_caught_at_its_next_setup(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        No entry is loaded to rebuild for: the old worker stops as a lock leaving.
+
+        It remembered its slots after the new device came in, under the new
+        registry id. Taken for the new device's, the new worker would trust
+        them and write nothing to a lock that cannot say what it holds.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            old = lock_registry(hass).worker(lock_id)
+            store = hass.data[DOMAIN][STORE_KEY]
+            bridge.users.clear()
+            bridge.cannot_tell = True
+
+            # The entry's unload paused before it lets go of the lock, and
+            # the device re-paired meanwhile.
+            re_paired = asyncio.Event()
+            unload_platforms = hass.config_entries.async_unload_platforms
+
+            async def _unload_platforms(*args: Any) -> bool:
+                await re_paired.wait()
+                return await unload_platforms(*args)
+
+            with patch.object(
+                hass.config_entries, "async_unload_platforms", _unload_platforms
+            ):
+                unload = hass.async_create_task(
+                    hass.config_entries.async_unload(entry.entry_id)
+                )
+                await async_run_until_quiet()
+                assert entry.state is ConfigEntryState.UNLOAD_IN_PROGRESS
+                _re_pair_unawaited(hass)
+                await async_run_until_quiet()
+                new_lock = er.async_get(hass).async_get(lock_id)
+                assert new_lock.id != old.port.provider.lock.id
+                old.on_change()  # still holding its slots: filed under the new id
+                assert store.wrote(lock_id, 1) is not None
+                re_paired.set()
+                assert await unload
+            await hass.async_block_till_done()
+            assert lock_registry(hass).worker(lock_id) is None
+            # What the old device was written is not the new one's.
+            assert store.wrote(lock_id, 1) is None
+
+            setup = hass.async_create_task(
+                hass.config_entries.async_setup(entry.entry_id)
+            )
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            assert await setup
+            worker = lock_registry(hass).worker(lock_id)
+            assert worker.port.provider.lock.id == new_lock.id
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [2, 2]
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_a_re_pair_while_the_entry_sets_up_is_caught_at_its_next_reload(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        Re-paired between its worker's build and the entry holding it.
+
+        Not yet the entry's lock, so no rebuild: the worker stays on the old
+        device until the entry reloads, and what it kept meanwhile -- under
+        the new registry id -- is not trusted for the new device then.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            store = hass.data[DOMAIN][STORE_KEY]
+            bridge.users.clear()
+            bridge.cannot_tell = True
+
+            port_setup = ProviderPort.async_setup
+
+            created = asyncio.Event()
+
+            @callback
+            def _created(event: Event) -> None:
+                if event.data["action"] == "create":
+                    created.set()
+
+            async def _setup(port: ProviderPort, config_entry: Any) -> None:
+                if not created.is_set():
+                    unsub = hass.bus.async_listen(
+                        er.EVENT_ENTITY_REGISTRY_UPDATED, _created
+                    )
+                    _re_pair_unawaited(hass)
+                    await created.wait()
+                    unsub()
+                    assert lock_id not in config_entry.runtime_data.locks
+                await port_setup(port, config_entry)
+
+            with patch.object(ProviderPort, "async_setup", _setup):
+                await _on_the_clock(
+                    hass,
+                    freezer,
+                    hass.config_entries.async_reload(entry.entry_id),
+                    "reloading",
+                )
+                await async_step_clock_until(
+                    hass,
+                    freezer,
+                    lambda: lock_id in entry.runtime_data.locks,
+                    max_steps=100,
+                    what="the entry holding its lock",
+                    step=1.0,
+                )
+            new_id = er.async_get(hass).async_get(lock_id).id
+            stale = lock_registry(hass).worker(lock_id)
+            assert stale.port.provider.lock.id != new_id
+            stale.on_change()  # its slots filed under the new registry id
+            assert store.wrote(lock_id, 1) is not None
+
+            await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.async_reload(entry.entry_id),
+                "reloading",
+            )
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            worker = lock_registry(hass).worker(lock_id)
+            assert worker.port.provider.lock.id == new_id
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [2, 2]
             _assert_trouble_free(hass, lock_id)
 
     async def test_a_rename_is_no_rebuild(

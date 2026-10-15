@@ -312,7 +312,12 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
 
     async def _cleanup(lock_entity_id: str, worker: LockWorker[ProviderPort]) -> None:
         port = worker.port
-        leaving = lock_entity_id in data[LEAVING_KEY]
+        # A worker whose device was re-paired leaves as a lock leaving does,
+        # whether or not a rebuild saw the re-pair: what it kept since went
+        # under the entity id, which names the new device now.
+        leaving = lock_entity_id in data[LEAVING_KEY] or _re_paired(
+            hass, lock_entity_id, worker
+        )
         if leaving:
             # Nothing will answer it now: the lock is gone from here.
             async_delete_issue(
@@ -387,28 +392,38 @@ def async_listen_for_re_pairs(
     return hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, _changed)
 
 
+def _re_paired(
+    hass: HomeAssistant, lock: str, worker: LockWorker[ProviderPort]
+) -> bool:
+    """
+    Return whether ``lock``'s entity id names a device other than ``worker``'s.
+
+    A device re-paired under the same entity id has a new registry id. What
+    the store keeps under the entity id is the new device's then: the old
+    worker's fingerprints there must not pass for writes to it, nor the old
+    device's "has reported". A lock removed, or renamed (the same registry
+    id), is not re-paired.
+    """
+    entity = er.async_get(hass).async_get(lock)
+    return entity is not None and entity.id != worker.port.provider.lock.id
+
+
 async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
     """
     Start ``lock``'s worker over if its entity id now names another device.
 
     The entries holding it unload together, as a reload would, so its last
     holder stops the worker; they set up again, building a new provider and
-    worker with every slot they want. It leaves as a lock leaving Lock Code
-    Manager does: what the store kept under the entity id goes -- the old
-    worker may have written there since the re-pair, and a fingerprint of a
-    write to the old device must not pass for the new one's -- and the new
-    device starts unknown to report. Clears owed to the old device are moot:
-    it is gone; a repair names their slots, which the same lock re-paired
-    may still hold. Its record under the old registry id goes at the next
-    start.
+    worker with every slot they want. The old worker stops as a lock leaving
+    Lock Code Manager does (``_re_paired``). Clears owed to the old device
+    are moot: it is gone; a repair names their slots, which the same lock
+    re-paired may still hold. Its record under the old registry id goes at
+    the next start.
     """
     data = hass.data[DATA]
     registry = lock_registry(hass)
-    entity = er.async_get(hass).async_get(lock)
-    if (worker := registry.worker(lock)) is None or entity is None:
-        return  # not running, or removed: nothing to rebuild yet
-    if entity.id == worker.port.provider.lock.id:
-        return  # the same device, perhaps renamed
+    if (worker := registry.worker(lock)) is None or not _re_paired(hass, lock, worker):
+        return  # not running, removed, or the same device (perhaps renamed)
     holders = [
         entry
         for entry in iter_loaded_lcm_entries(hass)
@@ -444,7 +459,6 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
         )
         worker.forget(slot)
         data[GIVEN_UP_KEY].pop((lock, slot), None)
-    data[LEAVING_KEY].add(lock)
     unloaded = await asyncio.gather(
         *(hass.config_entries.async_unload(entry.entry_id) for entry in holders),
         return_exceptions=True,
@@ -454,10 +468,6 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
             _LOGGER.error(
                 "Unloading %s for re-paired %s failed: %s", entry.title, lock, result
             )
-    if registry.worker(lock) is worker:
-        # A one-off read still holds it, and the entries take it back: not
-        # taken for a lock leaving when it stops. A reload rebuilds it.
-        data[LEAVING_KEY].discard(lock)
     for entry in holders:
         # One set up again meanwhile (a reload), or not unloaded, is left be.
         if entry.state is not ConfigEntryState.NOT_LOADED:
