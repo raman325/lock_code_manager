@@ -12,6 +12,7 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.matter import lock_helpers
 from homeassistant.config_entries import SOURCE_USER, ConfigEntriesFlowManager
 from homeassistant.const import (
     CONF_ENABLED,
@@ -49,6 +50,7 @@ from tests.common import (
     async_add_users,
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_options,
     async_set_slot_pin,
     async_switch_slot,
     async_tick_until,
@@ -383,16 +385,14 @@ class TestOutOfBandDeletion:
 
 
 class TestAddingThroughTheUserInterface:
-    """A Matter lock has nothing for allocation to read, so the flow never waits.
+    """An allocation that finishes at once goes straight on, never to progress.
 
-    Matter allocates its own credential index, so allocation skips the lock
-    and finishes the moment it starts. Shown as progress anyway, the dialog
-    hears nothing: Home Assistant announces the step moved on before the
-    dialog has subscribed to hear it, and setup sits on the progress screen
-    for good (issue #1639).
-
-    These helpers never wait, so a flow that asked the lock would also skip
-    the progress screen; each test checks the lock was asked nothing.
+    Allocation reads a Matter lock's users in one call (the indices writing
+    would adopt), and these helpers answer it without waiting, so it finishes
+    the moment it starts. Shown as progress anyway, the dialog hears nothing:
+    Home Assistant announces the step moved on before the dialog has
+    subscribed to hear it, and setup sits on the progress screen for good
+    (issue #1639). Each test checks that one read was all the lock was asked.
     """
 
     @pytest.fixture(autouse=True)
@@ -441,7 +441,7 @@ class TestAddingThroughTheUserInterface:
         assert result["type"] == "form"
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"] == {"user_num": 1, "num_users": 3}
-        assert _asked(matter_mock_helpers) == []
+        assert _asked(matter_mock_helpers) == ["get_lock_users"]
 
         for num in (1, 2, 3):
             result = await hass.config_entries.flow.async_configure(
@@ -486,8 +486,113 @@ class TestAddingThroughTheUserInterface:
 
         assert result["type"] == "create_entry"
         assert flow_users(result) == users
-        assert asked_before_saving == [[]]
+        assert asked_before_saving == [["get_lock_users"]]
         await hass.config_entries.async_unload(result["result"].entry_id)
+
+
+class TestAddingTheLockToAnEntry:
+    """
+    Regression for #1684: an added Matter lock's own users are not taken over.
+
+    Writing slot n on a Matter lock adopts an untagged user holding a PIN at
+    credential index n, renaming them and writing over their PIN. The
+    options flow reads the lock for those before letting it join.
+    """
+
+    async def _async_add(
+        self,
+        hass: HomeAssistant,
+        lock: er.RegistryEntry,
+        slots: dict[int, dict[str, Any]] = FAKE_MATTER_SLOTS,
+    ) -> dict[str, Any]:
+        """Add ``lock`` to an entry on no lock whose users hold ``slots``."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: []},
+            subentries_data=user_subentries(slots),
+        )
+        entry.add_to_hass(hass)
+        started = await hass.config_entries.options.async_init(entry.entry_id)
+        return await async_configure_options(
+            hass, started["flow_id"], {CONF_LOCKS: [lock.entity_id]}
+        )
+
+    async def test_a_user_at_one_of_the_entry_s_indices_keeps_the_lock_out(
+        self,
+        hass: HomeAssistant,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Mom, added through Home Assistant's own Matter actions, is named."""
+        await _async_add_user(fake_matter_lock, "Mom", credential_index=1)
+
+        result = await self._async_add(hass, fake_matter_lock_entity)
+
+        assert result["type"] == "form"
+        assert result["errors"] == {"base": "existing_codes"}
+        assert result["description_placeholders"] == {
+            "lock": fake_matter_lock_entity.entity_id,
+            "slots": "1",
+        }
+        assert fake_matter_lock.holds(1) == "246810"
+
+    @pytest.mark.parametrize(
+        ("name", "credential_index"), [("lcm:1:Old", 1), ("Mom", 3)]
+    )
+    async def test_a_tagged_user_or_one_elsewhere_lets_the_lock_in(
+        self,
+        hass: HomeAssistant,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        name: str,
+        credential_index: int,
+    ) -> None:
+        """Lock Code Manager's own user, or one at no index of the entry's, is not in the way."""
+        await _async_add_user(fake_matter_lock, name, credential_index=credential_index)
+
+        result = await self._async_add(hass, fake_matter_lock_entity)
+
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_LOCKS] == [fake_matter_lock_entity.entity_id]
+
+    async def test_a_lock_another_entry_holds_is_read_in_its_turn(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Shared with an entry on slots 1 and 2, Mom at index 3 is still named."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        await _async_add_user(fake_matter_lock, "Mom", credential_index=3)
+
+        result = await self._async_add(
+            hass,
+            fake_matter_lock_entity,
+            {3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: True}},
+        )
+
+        assert result["errors"] == {"base": "existing_codes"}
+        assert result["description_placeholders"]["slots"] == "3"
+
+
+async def _async_add_user(
+    fake: FakeMatterLock, name: str, *, credential_index: int
+) -> None:
+    """Put a user and its PIN on the lock through Home Assistant's own Matter actions."""
+    added = await lock_helpers.set_lock_credential(
+        fake.client,
+        fake.node,
+        credential_type="pin",
+        credential_data="246810",
+        credential_index=credential_index,
+    )
+    await lock_helpers.set_lock_user(
+        fake.client, fake.node, user_index=added["user_index"], user_name=name
+    )
 
 
 def _asked(helpers: dict[str, AsyncMock]) -> list[str]:

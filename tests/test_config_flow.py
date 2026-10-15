@@ -49,9 +49,11 @@ from custom_components.lock_code_manager.domain.allocation import (
     build_lock_instance,
 )
 from custom_components.lock_code_manager.domain.credentials import (
+    Credential,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    User,
 )
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerError,
@@ -1389,6 +1391,7 @@ async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
             return_value=False,
         ),
         patch.object(MockLCMLock, "async_get_capabilities", capabilities),
+        patch.object(MockLCMLock, "async_get_users", AsyncMock(return_value=[])),
     ):
         result = await async_configure_flow(
             hass,
@@ -1639,22 +1642,22 @@ async def test_claims_above_the_window_do_not_widen_the_read(
     assert windows == [3], "another entry's distant claims widened the read"
 
 
-async def test_a_lock_that_allocates_its_own_index_is_not_asked(
+async def test_a_lock_that_allocates_its_own_index_skips_what_writing_would_adopt(
     hass: HomeAssistant, mock_lock_config_entry
 ):
-    """Occupancy is not read from a lock whose contents cannot constrain it.
-
-    Where the lock picks its own credential index, what it holds says nothing
-    about which slot number is free -- so asking spends a round trip, or one
-    per index on some providers, on an answer nothing reads.
     """
-    reads: list[int] = []
+    Allocation skips an index a self-indexing lock would adopt (#1684).
 
-    async def _read(self, slots=None):
-        scope = list(self.managed_slots if slots is None else slots)
-        reads.append(max(scope, default=0))
-        return dict.fromkeys(scope, SlotCredential.empty())
+    Writing slot n on such a lock (Matter) adopts an untagged user holding a
+    PIN at credential index n, renaming them and writing over their PIN. A
+    user tagged as Lock Code Manager's is its own, and is not in the way.
+    """
 
+    def _user(user_id: int, name: str, index: int) -> User:
+        credential = Credential(CredentialType.PIN, index, SlotCredential.unreadable())
+        return User(user_id=user_id, name=name, credentials=[credential])
+
+    users = [_user(1, "Mom", 1), _user(2, "lcm:2:Old", 2)]
     flow_id = await _start_config_flow(hass)
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
@@ -1665,12 +1668,17 @@ async def test_a_lock_that_allocates_its_own_index_is_not_asked(
             new_callable=PropertyMock,
             return_value=False,
         ),
-        patch.object(MockLCMLock, "async_get_usercodes", _read),
+        patch.object(MockLCMLock, "async_get_users", AsyncMock(return_value=users)),
     ):
-        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+        await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+        for name, pin in (("Raman", "1111"), ("Priya", "2222")):
+            result = await async_configure_flow(
+                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: pin}
+            )
 
-    assert result["step_id"] == "code_slot"
-    assert reads == [], "a lock that cannot constrain the numbering was read"
+    assert result["type"] == "create_entry"
+    # 1 is Mom's; 2 is free, its tagged user being Lock Code Manager's own.
+    assert sorted(flow_slots(result).values()) == [2, 3]
 
 
 @pytest.mark.parametrize(
@@ -2060,6 +2068,7 @@ async def test_a_lock_that_allocates_its_own_index_does_not_bound_the_search(
             return_value=False,
         ),
         patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=2)),
+        patch.object(MockLCMLock, "async_get_users", AsyncMock(return_value=[])),
     ):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 8})
 
