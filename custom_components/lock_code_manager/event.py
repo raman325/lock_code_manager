@@ -15,8 +15,8 @@ from .const import (
     EVENT_CREDENTIAL_USED,
 )
 from .entity import BaseLockCodeManagerEntity
+from .ha.entry import LockCodeManagerConfigEntry
 from .model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
-from .model.models import LockCodeManagerConfigEntry
 from .model.queries import get_entry_config, subentry_id_for_slot
 
 

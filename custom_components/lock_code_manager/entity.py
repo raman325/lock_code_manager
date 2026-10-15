@@ -23,10 +23,10 @@ from .const import (
     ATTR_SLOT_FIELD,
     DOMAIN,
 )
+from .ha.entry import LockCodeManagerConfigEntry
 from .ha.runtime import lock_registry, signal_lock_changed
 from .ha.slot_coordinator import SlotEntityCoordinator
 from .model.config import build_slot_device_identifier, build_slot_unique_id
-from .model.models import LockCodeManagerConfigEntry
 from .model.names import fallback_name
 from .model.queries import get_entry_config
 from .providers import BaseLock

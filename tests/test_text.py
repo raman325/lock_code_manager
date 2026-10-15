@@ -20,13 +20,13 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.ha.entry import (
+    LockCodeManagerConfigEntryRuntimeData,
+)
 from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
-)
-from custom_components.lock_code_manager.model.models import (
-    LockCodeManagerConfigEntryRuntimeData,
 )
 from custom_components.lock_code_manager.text import (
     LockCodeManagerText,

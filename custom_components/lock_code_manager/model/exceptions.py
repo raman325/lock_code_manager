@@ -1,11 +1,6 @@
 """Exceptions for lock_code_manager."""
 
-from typing import TYPE_CHECKING
-
 from homeassistant.exceptions import HomeAssistantError
-
-if TYPE_CHECKING:
-    from ..providers import BaseLock
 
 
 class LockCodeManagerError(HomeAssistantError):
@@ -148,8 +143,14 @@ class LockOperationUnsupported(LockOperationFailed):
 class ProviderNotImplementedError(LockCodeManagerProviderError, NotImplementedError):
     """Raised when a provider method that subclasses must override is called."""
 
-    def __init__(self, provider: BaseLock, method_name: str, guidance: str = ""):
-        """Initialize the error."""
+    def __init__(self, provider: object, method_name: str, guidance: str = ""):
+        """
+        Initialize the error.
+
+        ``provider`` is the provider (``BaseLock``) instance; only its class
+        name is used. It is typed ``object`` because this layer must not
+        import ``providers``.
+        """
         message = f"{provider.__class__.__name__} does not implement {method_name}()."
         if guidance:
             message = f"{message} {guidance}"
