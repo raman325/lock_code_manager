@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Collection, Container, Iterable, Mapping, Sequence
 import logging
-from typing import Any
+from typing import Any, override
 
 import probatio as vol
 
@@ -513,6 +513,7 @@ class LockCodeManagerFlowHandler(
         # many users they wanted.
         self._unavailable: frozenset[int] = frozenset()
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -819,12 +820,14 @@ class LockCodeManagerFlowHandler(
 
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
         """Get options flow."""
         return LockCodeManagerOptionsFlow()
 
     @classmethod
     @callback
+    @override
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:

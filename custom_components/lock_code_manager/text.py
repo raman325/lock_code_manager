@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import override
 
 from homeassistant.components.text import TextEntity, TextMode
 from homeassistant.const import CONF_NAME, CONF_PIN
@@ -72,6 +73,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
         self._attr_mode = text_mode
 
     @property
+    @override
     def native_min(self) -> int:
         """
         Return the minimum value length -- always the permissive default.
@@ -88,6 +90,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
         return self._DEFAULT_MIN
 
     @property
+    @override
     def native_max(self) -> int:
         """
         Return the maximum value length -- always the permissive default.
@@ -103,10 +106,12 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
         return self._DEFAULT_MAX
 
     @property
+    @override
     def native_value(self) -> str | None:
         """Return native value."""
         return self._state
 
+    @override
     async def async_set_value(self, value: str) -> None:
         """Set value of text."""
         coordinator = self._require_slot_coordinator()
@@ -123,6 +128,7 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
                 ) from err
         self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)

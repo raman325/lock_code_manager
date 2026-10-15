@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import MatterError
@@ -186,11 +186,13 @@ class MatterLock(BaseLock):
     _slot_by_user_index: dict[int, int] = field(default_factory=dict, init=False)
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return "matter"
 
     @property
+    @override
     def supports_push(self) -> bool:
         """
         Return whether this lock supports push-based updates.
@@ -202,11 +204,13 @@ class MatterLock(BaseLock):
         return True
 
     @property
+    @override
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=5)
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Return interval between hard refreshes for drift detection.
@@ -218,6 +222,7 @@ class MatterLock(BaseLock):
         return timedelta(hours=1)
 
     @property
+    @override
     def supports_native_users(self) -> bool:
         """
         Return True — Matter locks expose the full User/Credential model.
@@ -230,6 +235,7 @@ class MatterLock(BaseLock):
         return True
 
     @property
+    @override
     def credential_index_follows_slot(self) -> bool:
         """
         Return False — Matter allocates its own credential index.
@@ -465,6 +471,7 @@ class MatterLock(BaseLock):
         )
         return lock_data.get("users", [])
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read every user and their Personal Identification Number credentials from the lock.
@@ -539,6 +546,7 @@ class MatterLock(BaseLock):
                 self._slot_by_user_index[index] = anchored
         return users
 
+    @override
     async def async_get_capabilities(self) -> LockCapabilities:
         """
         Read lock capabilities from the Matter DoorLock cluster.
@@ -569,6 +577,7 @@ class MatterLock(BaseLock):
             max_user_name_length=32,
         )
 
+    @override
     async def async_set_user(self, user: User) -> SetUserResult:
         """
         Find-or-create the lock user for the LCM slot encoded in ``user.name``.
@@ -851,6 +860,7 @@ class MatterLock(BaseLock):
                 None,
             )
 
+    @override
     async def async_delete_user(self, user_id: int) -> None:
         """
         Delete a lock user and all of its credentials.
@@ -864,6 +874,7 @@ class MatterLock(BaseLock):
         )
         self._slot_by_user_index.pop(user_id, None)
 
+    @override
     async def async_release_managed_slot(self, slot: int) -> None:
         """
         Tear down the LCM-owned user that anchors ``slot``.
@@ -969,6 +980,7 @@ class MatterLock(BaseLock):
             None,
         )
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -1193,6 +1205,7 @@ class MatterLock(BaseLock):
             f"(credential {credential_index}) under user {owner}, not user {user_id}"
         )
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number credential from the lock.
@@ -1226,9 +1239,11 @@ class MatterLock(BaseLock):
         self._push_credential_update(ref.slot, SlotCredential.empty())
         return True
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """No matter-specific setup; base validates required capabilities."""
 
+    @override
     async def async_is_device_available(self) -> bool:
         """
         Return whether the Matter lock is reachable, per the lock entity's state.
@@ -1250,6 +1265,7 @@ class MatterLock(BaseLock):
             STATE_UNKNOWN,
         )
 
+    @override
     def describe_link_health(self) -> str | None:
         """
         Report the lock's own Thread radio counters.
@@ -1322,6 +1338,7 @@ class MatterLock(BaseLock):
     # -- Event subscription via push framework --------------------------------
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe to Matter DoorLock cluster events.
@@ -1358,6 +1375,7 @@ class MatterLock(BaseLock):
         )
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from Matter DoorLock cluster events."""
         self._clear_push_unsubs()
@@ -1623,6 +1641,7 @@ class MatterLock(BaseLock):
         )
         self._confirm_slot(code_slot, resolved)
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:

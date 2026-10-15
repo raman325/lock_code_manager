@@ -7,7 +7,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from functools import partial
 import json
-from typing import Any, ClassVar, Literal, NoReturn
+from typing import Any, ClassVar, Literal, NoReturn, override
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -134,15 +134,18 @@ class Zigbee2MQTTLock(BaseMqttLock):
     _subscribed_topic: str | None = field(init=False, default=None)
 
     @property
+    @override
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
         return True
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return True
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Subscribe to the device topic before the coordinator runs its first poll."""
         await self._async_ensure_device_subscription()
@@ -206,11 +209,13 @@ class Zigbee2MQTTLock(BaseMqttLock):
             "zigbee2mqtt_* identifier)."
         )
 
+    @override
     def _raise_not_connected(self) -> NoReturn:
         """Name the wrong-bridge misconfiguration before the generic reason."""
         self._maybe_raise_wrong_bridge_disconnect()
         super()._raise_not_connected()
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
@@ -425,6 +430,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         LOGGER.debug("Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id)
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe via background task when still unsubscribed (e.g. reconnect).
@@ -436,6 +442,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         )
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from MQTT updates."""
         had_subscription = bool(self._push_unsubs)
@@ -450,6 +457,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 future.cancel()
         self._pending_codes.clear()
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -518,6 +526,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a code slot.
@@ -578,6 +587,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
@@ -674,6 +684,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self._pending_codes.pop(slot_num, None)
         return credential
 
+    @override
     async def async_get_max_slot(self) -> int | None:
         """
         Report no opinion: the bridge is not asked.

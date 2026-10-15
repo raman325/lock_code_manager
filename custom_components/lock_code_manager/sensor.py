@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import override
+
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -74,6 +76,7 @@ class LockCodeManagerCodeSlotSensorEntity(
         )
 
     @property
+    @override
     def native_value(self) -> str | None:
         """Return what the lock holds, as far as it is known."""
         if (slot := self._core_slot()) is None:
@@ -87,6 +90,7 @@ class LockCodeManagerCodeSlotSensorEntity(
         return None
 
     @property
+    @override
     def available(self) -> bool:
         """Return whether the lock has said anything about the slot yet."""
         return (
@@ -95,6 +99,7 @@ class LockCodeManagerCodeSlotSensorEntity(
             and slot.seen is not None
         )
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerCodeSlotPerLockEntity.async_added_to_hass(self)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import override
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import CONF_ENABLED
@@ -49,10 +50,12 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
     """Switch entity for lock code manager."""
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return native value."""
         return self._state
 
+    @override
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
         coordinator = self._require_slot_coordinator()
@@ -62,6 +65,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
             raise HomeAssistantError(str(err)) from err
         self.async_write_ha_state()
 
+    @override
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""
         coordinator = self._require_slot_coordinator()

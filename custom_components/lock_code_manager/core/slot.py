@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 import hashlib
+from typing import override
 
 # What the lock said about a slot.
 
@@ -33,6 +34,7 @@ class Holds:
 
     pin: str = field(repr=False)
 
+    @override
     def __repr__(self) -> str:
         """Keep the PIN out of logs (#917)."""
         return "Holds(****)"
