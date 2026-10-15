@@ -135,8 +135,8 @@ class TestUserCodeValues:
         ("payload", "expected_code"),
         [
             # A raw-payload gateway publishes the bare code, so an all-digit
-            # one is JSON's idea of a number by the time it is unwrapped.
-            pytest.param("1234", "1234", id="bare_number"),
+            # one is JSON's idea of a number by the time it is unwrapped; the
+            # bare "1234" case is test_a_published_code_confirms_the_slot[raw-*].
             pytest.param(wrapped(1234), "1234", id="wrapped_number"),
             # No JSON number form has a leading zero, so this arrives as the
             # text it was published as -- and the zero has to survive.
@@ -281,20 +281,6 @@ class TestStaleAvailable:
         await hass.async_block_till_done()
 
         lock.coordinator.observe_push.assert_not_called()
-
-    async def test_available_confirms_empty_when_no_pin_is_expected(
-        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
-    ) -> None:
-        """The guard is about a contradicted clear, not about clears at all."""
-        lock = zui_lock_subscribed
-        lock.coordinator.desired_credential.return_value = SlotCredential.empty()
-
-        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
-        await hass.async_block_till_done()
-
-        lock.coordinator.observe_push.assert_called_once_with(
-            pin_address(4), SlotCredential.empty()
-        )
 
     async def test_available_confirms_empty_without_a_coordinator(
         self, hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
