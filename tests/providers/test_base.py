@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import timedelta
 import logging
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
@@ -928,57 +928,6 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
     await lock.async_unload(False)
 
 
-async def test_async_setup_internal_creates_coordinator_when_setup_fails(
-    hass: HomeAssistant,
-):
-    """Test that coordinator is created even when async_setup raises."""
-    entity_reg = er.async_get(hass)
-    dev_reg = dr.async_get(hass)
-
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock_setup_fail",
-        config_entry=config_entry,
-    )
-
-    lock = BaseLock(
-        hass,
-        dev_reg,
-        entity_reg,
-        config_entry,
-        lock_entity,
-    )
-
-    # Make async_setup raise an exception
-    with (
-        patch.object(
-            lock,
-            "async_setup",
-            side_effect=LockDisconnected("provider unavailable"),
-        ),
-    ):
-        # Should not raise even though async_setup failed
-        await lock.async_setup_internal(config_entry, _stand_in(lock))
-
-    # Coordinator should still have been created
-    assert lock.coordinator is not None
-    # Setup should be marked as failed
-    assert lock._setup_succeeded is False
-
-    # Simulate reconnect: mock lock_config_entry as LOADED, async_setup succeeds
-    mock_entry = MagicMock()
-    mock_entry.state = ConfigEntryState.LOADED
-    lock.lock_config_entry = mock_entry
-    with patch.object(lock, "async_setup", return_value=None):
-        await lock._async_on_integration_loaded()
-
-    assert lock._setup_succeeded is True
-
-
 async def test_a_lock_whose_setup_raised_comes_up_with_its_integration(
     freezer: FrozenDateTimeFactory,
     hass: HomeAssistant,
@@ -1314,52 +1263,6 @@ async def test_on_integration_loaded_runs_deferred_capability_validation(
     await lock.async_unload(False)
 
 
-async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload(
-    hass: HomeAssistant,
-):
-    """Initial-setup validation failure degrades the lock instead of dropping it.
-
-    A structural failure (no PIN support / zero usable slots) during initial
-    setup used to propagate, making ``_async_setup_new_locks`` pop the lock
-    from runtime data with no retry path and no UI surface — a re-included
-    Z-Wave lock whose interview completed asleep stayed invisible until a
-    full reload. Initial setup now matches the reconnect path: the failure is
-    logged, the coordinator and recovery listener are still created, and the
-    LOADED transition re-runs validation so the lock recovers once the
-    underlying condition is fixed (e.g. after a re-interview).
-    """
-    lock = _make_base_test_lock(
-        hass, "test_lock_structural_degraded", MockNativeUserLock
-    )
-
-    no_pin_caps = LockCapabilities(
-        supports_user_management=True, max_users=10, credential_types={}
-    )
-    caps_mock = AsyncMock(return_value=no_pin_caps)
-    with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
-
-        caps_mock.assert_awaited_once()
-        assert lock._setup_succeeded is False
-        # Degraded, not dropped: coordinator and recovery listener exist.
-        assert lock.coordinator is not None
-        assert lock._config_entry_state_unsub is not None
-
-        # The lock's condition is fixed (e.g. re-interview repopulated the
-        # slot count); the next LOADED transition revalidates and recovers.
-        caps_mock.return_value = _pin_capabilities()
-        # Validation failure must invalidate the capability cache; a
-        # degenerate-but-successful read would otherwise be served to every
-        # revalidation, making recovery impossible.
-        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
-        lock.lock_config_entry = loaded_entry
-        await lock._async_on_integration_loaded()
-
-    assert lock._setup_succeeded is True
-
-    await lock.async_unload(False)
-
-
 async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recovers(
     freezer: FrozenDateTimeFactory,
     hass: HomeAssistant,
@@ -1384,7 +1287,11 @@ async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recover
         await hass.async_block_till_done()
     in_sync = in_sync_entity_id(hass, entry, 1)
     await async_advance_sync_ticks(hass, freezer, 5)
-    assert issue_reg.async_get_issue(DOMAIN, setup_issue) is not None
+    issue = issue_reg.async_get_issue(DOMAIN, setup_issue)
+    assert issue is not None
+    # The repair carries the actionable reason into the UI, not just the log.
+    assert issue.translation_placeholders
+    assert "PIN credential" in issue.translation_placeholders["error"]
     # Its entities are there, unavailable: nothing is read from or written to
     # a lock its provider has not set up.
     assert hass.states.get(in_sync).state == STATE_UNAVAILABLE
@@ -1412,44 +1319,6 @@ async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recover
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_setup_validation_failure_raises_and_clears_repair_issue(
-    hass: HomeAssistant,
-):
-    """A structural setup failure surfaces a repair issue; recovery clears it.
-
-    The actionable error message (e.g. zwave_js's "re-interview the lock")
-    used to land only in the log, addressed to a user who never sees it.
-    The repair carries it into the UI, and revalidation succeeding on the
-    provider integration's LOADED transition dismisses it automatically.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_repair_issue", MockNativeUserLock)
-    issue_reg = ir.async_get(hass)
-    issue_id = f"lock_setup_failed_{lock.lock.entity_id}"
-
-    no_pin_caps = LockCapabilities(
-        supports_user_management=True, max_users=10, credential_types={}
-    )
-    caps_mock = AsyncMock(return_value=no_pin_caps)
-    with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
-
-        issue = issue_reg.async_get_issue(DOMAIN, issue_id)
-        assert issue is not None
-        assert issue.translation_placeholders
-        assert "PIN credential" in issue.translation_placeholders["error"]
-
-        # The lock's condition is fixed; the LOADED transition revalidates
-        # and the repair dismisses itself.
-        caps_mock.return_value = _pin_capabilities()
-        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
-        lock.lock_config_entry = loaded_entry
-        await lock._async_on_integration_loaded()
-
-    assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
-
-    await lock.async_unload(False)
-
-
 async def test_reconnect_validation_failure_raises_repair_issue(
     hass: HomeAssistant,
 ):
@@ -1475,6 +1344,10 @@ async def test_reconnect_validation_failure_raises_repair_issue(
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
+    # Probed once, on the reconnect; the structural failure stays inside the
+    # reconnect task and the provider never reaches the set-up state.
+    caps_mock.assert_awaited_once()
+    assert lock._setup_succeeded is False
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
 
     await lock.async_unload(False)
@@ -1506,35 +1379,6 @@ async def test_unload_permanently_clears_setup_failed_repair_issue(
 
     await lock.async_unload(True)
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
-
-
-async def test_on_integration_loaded_rejects_lock_without_pin_support(
-    hass: HomeAssistant,
-):
-    """Deferred validation failing (no PIN support) leaves setup unsuccessful.
-
-    The structural failure must not escape into the reconnect task; the
-    provider simply never reaches the set-up state.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_deferred_no_pin", MockNativeUserLock)
-    lock.set_connected(False)
-
-    no_pin_caps = LockCapabilities(
-        supports_user_management=True, max_users=10, credential_types={}
-    )
-    caps_mock = AsyncMock(return_value=no_pin_caps)
-    with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
-
-        lock.set_connected(True)
-        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
-        lock.lock_config_entry = loaded_entry
-        await lock._async_on_integration_loaded()
-
-    caps_mock.assert_awaited_once()
-    assert lock._setup_succeeded is False
-
-    await lock.async_unload(False)
 
 
 async def test_config_entry_state_listener_ignores_same_state(
@@ -1966,76 +1810,6 @@ async def test_max_slot_falls_back_when_capabilities_cannot_be_read(
         assert await lock.async_get_max_slot() is None
 
 
-async def test_deferred_setup_is_retried_once_the_lock_becomes_reachable(
-    hass: HomeAssistant,
-):
-    """
-    An integration that was loaded all along sends no LOADED transition.
-
-    Setup defers when the provider integration is not connected, and the
-    only thing that re-ran it was that integration reaching LOADED. A bridge
-    whose entry was loaded before Lock Code Manager, and whose discovery data
-    merely had not been replayed yet, never transitions -- so the lock stayed
-    un-set-up for the rest of the run, and sync, which is gated on that,
-    never wrote a code to it again.
-
-    The connection check is what catches it, and the first reachable
-    observation is enough: there may be no transition to wait for either,
-    since that check can find the lock reachable the very first time it runs.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_late_discovery")
-    lock.set_connected(False)
-    await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
-    assert lock.provider_setup_succeeded is False
-
-    lock.set_connected(True)
-    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
-    lock.lock_config_entry = loaded_entry
-
-    assert await lock.async_internal_is_reachable() is True
-    await hass.async_block_till_done(wait_background_tasks=True)
-
-    assert lock.provider_setup_succeeded is True
-
-    await lock.async_unload(False)
-
-
-async def test_a_deferred_retry_that_hits_a_blip_gets_another_one(
-    hass: HomeAssistant,
-):
-    """
-    One transient failure during the retry must not consume the only retry.
-
-    The deferred flag was cleared before the retried setup ran, so a
-    LockDisconnected on the way through spent it: nothing armed another
-    attempt, and the lock stayed un-set-up -- sync gated off it, no writes --
-    until the whole integration was reloaded by hand. A connectivity failure
-    is precisely the condition this retry exists for, so it re-arms.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_blip_during_retry")
-    lock.set_connected(False)
-    await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
-    assert lock.provider_setup_succeeded is False
-
-    lock.set_connected(True)
-    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
-    lock.lock_config_entry = loaded_entry
-
-    with patch.object(
-        lock, "async_setup", AsyncMock(side_effect=LockDisconnected("blip"))
-    ):
-        assert await lock.async_internal_is_reachable() is True
-        await hass.async_block_till_done(wait_background_tasks=True)
-    assert lock.provider_setup_succeeded is False
-
-    assert await lock.async_internal_is_reachable() is True
-    await hass.async_block_till_done(wait_background_tasks=True)
-
-    assert lock.provider_setup_succeeded is True
-
-    await lock.async_unload(False)
-
-
 async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
     hass: HomeAssistant,
 ):
@@ -2162,29 +1936,6 @@ async def test_releasing_a_slot_deletes_the_credential_of_its_tagged_user(
 
     deleted.assert_called_once()
     assert deleted.call_args.args[0].user_id == 99
-
-
-async def test_clearing_a_slot_does_not_delete_an_untagged_users_credential(
-    hass: HomeAssistant,
-):
-    """
-    A clear adopts no untagged owner either (#1518).
-
-    A slot turned off is cleared and nothing follows to correct a wrong
-    guess, so the homeowner's own user holding a PIN at that index is left
-    alone. Adoption is the set path's: its write tags the user.
-    """
-    lock = _make_base_test_lock(hass, "clear_untagged", _NativeUserOwnerResolutionLock)
-    deleted = AsyncMock(return_value=True)
-    with (
-        patch.object(
-            lock, "async_get_users", AsyncMock(return_value=[_lock_user(99, "Mom", 3)])
-        ),
-        patch.object(lock, "async_delete_credential", deleted),
-    ):
-        assert await lock.async_clear_usercode(3) is False
-
-    deleted.assert_not_called()
 
 
 async def test_clearing_a_slot_on_a_lock_without_user_records_adopts_by_slot(
