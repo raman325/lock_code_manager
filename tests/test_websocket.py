@@ -3713,8 +3713,12 @@ async def _async_slot_payload(
 
 @pytest.mark.parametrize(
     ("knob", "label"),
-    [("write_only", "unreadable_code"), ("unanswered", "unanswered")],
-    ids=["withheld", "unanswered"],
+    [
+        ("write_only", "unreadable_code"),
+        ("unanswered", "unanswered"),
+        ("cannot_tell", "not_reported"),
+    ],
+    ids=["withheld", "unanswered", "not_reported"],
 )
 async def test_a_lock_that_gives_no_pin_back_is_never_shown_as_reporting_one(
     hass: HomeAssistant,

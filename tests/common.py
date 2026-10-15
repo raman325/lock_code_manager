@@ -1172,6 +1172,9 @@ class MockLCMLock(BaseLock):
         # the way an API-only Z-Wave JS UI lock does with a slot it cannot
         # read. Told to the core as that provider tells it.
         self.unanswered: set[int] = set()
+        # Slots this lock answers it cannot tell what they hold, as a Zigbee
+        # lock's user status Not Supported does (#1581).
+        self.cannot_tell: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
         self.call_order: list[str] = []
         # When each set, clear, and read reached the lock, on the monotonic
@@ -1529,7 +1532,8 @@ class MockLCMLock(BaseLock):
         # empty managed slot would hide the read the pending-write machinery
         # waits on.
         result = {**dict.fromkeys(scope, SlotCredential.empty()), **codes}
-        self.last_silent_slots = frozenset(self.unanswered)
+        self.last_cannot_tell_slots = frozenset(self.cannot_tell)
+        self.last_silent_slots = frozenset(self.unanswered | self.cannot_tell)
         if fault is not None:
             await fault.async_after("get")
         return result

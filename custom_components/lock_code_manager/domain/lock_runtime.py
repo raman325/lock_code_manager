@@ -691,10 +691,19 @@ def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | Slot
     """
     if (worker := lock_registry(hass).worker(lock_entity_id)) is None:
         return {}
-    codes = {slot: _label(reading) for slot, reading in worker.port.others.items()}
+    not_reported = worker.port.not_reported
+
+    def _label_of(slot: int, reading: Reading) -> str | SlotCode:
+        if slot in not_reported and reading in (Seen.SILENT, Seen.MASKED):
+            return SlotCode.NOT_REPORTED
+        return _label(reading)
+
+    codes = {
+        slot: _label_of(slot, reading) for slot, reading in worker.port.others.items()
+    }
     for slot_num, slot in worker.slots.items():
         if slot.seen is not None:
-            codes[slot_num] = _label(slot.seen)
+            codes[slot_num] = _label_of(slot_num, slot.seen)
         elif not slot.release:
             if worker.answered:
                 codes[slot_num] = SlotCode.CHECKING

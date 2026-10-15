@@ -186,6 +186,33 @@ describe('lock-codes card, rendered', () => {
         expect(root.querySelector('.lcm-code')?.textContent?.trim()).toBe('••••••');
     });
 
+    it.each([
+        [
+            'shows "Not reported" when nothing stands in',
+            { active: false, enabled: false, in_sync: true },
+            'Not reported',
+            "This lock can't report its codes"
+        ],
+        [
+            'stands the configured PIN in when in sync',
+            { configured_code_length: 4, in_sync: true },
+            '••••',
+            "Configured in Lock Code Manager — this lock can't report its codes"
+        ]
+    ])(
+        "says a lock that can't report a slot did answer (#1581): %s",
+        async (_label, fields, text, title) => {
+            // Zigbee user status Not Supported: the lock answered, so the slot
+            // is not "unanswered".
+            const root = await show([{ ...managed, code: 'not_reported', ...fields }]);
+
+            const code = root.querySelector<HTMLElement>('.lcm-code');
+            expect(code?.textContent?.trim()).toBe(text);
+            expect(code?.title).toBe(title);
+            expect(root.textContent).not.toContain("didn't answer");
+        }
+    );
+
     it('keeps codes masked in "masked" mode even when the reveal flag is set', async () => {
         card.setConfig({
             code_display: 'masked',
