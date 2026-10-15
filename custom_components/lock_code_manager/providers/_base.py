@@ -47,6 +47,7 @@ from ..domain.exceptions import (
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationError,
     LockOperationFailed,
     LockOperationUnsupported,
     ProviderNotImplementedError,
@@ -724,7 +725,7 @@ class BaseLock:
                     self.lock.entity_id,
                     self.operation_timeout_seconds,
                 )
-            except (LockDisconnected, LockOperationFailed) as err:
+            except LockOperationError as err:
                 # Re-armed like the reconnect path does: an integration that
                 # stays loaded (a Z-Wave node dead at boot) never brings the
                 # LOADED transition this would otherwise wait for.
@@ -919,7 +920,7 @@ class BaseLock:
         self._setup_running = True
         try:
             await self._async_run_provider_setup(self._lcm_config_entry)
-        except LockDisconnected, LockOperationFailed, TimeoutError:
+        except LockOperationError, TimeoutError:
             # TimeoutError because the capability probe is bounded: a lock that
             # answers nothing is a connectivity failure like any other, and it
             # has to re-arm the deferred flag. Letting it escape instead would
@@ -1481,7 +1482,7 @@ class BaseLock:
         """
         try:
             caps = await self._get_cached_capabilities()
-        except LockDisconnected, LockOperationFailed:
+        except LockOperationError:
             return None
         if not caps.supports_user_management or caps.max_user_name_length <= 0:
             return None

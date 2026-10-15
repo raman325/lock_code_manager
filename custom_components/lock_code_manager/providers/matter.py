@@ -51,6 +51,7 @@ from ..domain.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockDisconnected,
+    LockOperationError,
     LockOperationFailed,
 )
 from ..domain.models import SlotCredential
@@ -624,7 +625,7 @@ class MatterLock(BaseLock):
                     user_index=existing_user_index,
                     candidate_names=candidates,
                 )
-            except (LockDisconnected, LockOperationFailed, MatterError) as err:
+            except (LockOperationError, MatterError) as err:
                 # UPDATE tolerates any rename failure so the subsequent
                 # credential write still proceeds. The user record is
                 # still valid at ``existing_user_index`` -- only the
@@ -1149,7 +1150,7 @@ class MatterLock(BaseLock):
                     credential_index=credential_index,
                 ),
             )
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not verify which user holds credential %s "
                 "written for slot %s: %s",
@@ -1191,7 +1192,7 @@ class MatterLock(BaseLock):
                     credential_index=credential_index,
                 ),
             )
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockOperationError as err:
             LOGGER.warning(
                 "Lock %s: could not clear misfiled credential %s: %s",
                 self.lock.entity_id,
@@ -1461,7 +1462,7 @@ class MatterLock(BaseLock):
         """
         try:
             raw_users = await self._raw_lock_users()
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not resolve LockOperation userIndex=%s "
                 "credentialIndex=%s: %s",
@@ -1603,7 +1604,7 @@ class MatterLock(BaseLock):
                 raise LockDisconnected("not set up")
             # In the lock's turn: nothing reaches it once its worker stops.
             raw_users = await self.coordinator.async_in_turn(self._raw_lock_users)
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not read users to resolve LockUserChange "
                 "userIndex %s: %s",

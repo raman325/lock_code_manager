@@ -83,7 +83,17 @@ class DuplicateCodeError(CodeRejectedError):
         )
 
 
-class LockDisconnected(LockCodeManagerProviderError):
+class LockOperationError(LockCodeManagerProviderError):
+    """
+    Base for an operation on the lock that did not complete.
+
+    Either the lock could not be reached (``LockDisconnected``) or it was
+    and the operation failed there (``LockOperationFailed``); callers that
+    only need to know the operation did not happen catch this.
+    """
+
+
+class LockDisconnected(LockOperationError):
     """Raised when lock can't be communicated with."""
 
 
@@ -99,7 +109,7 @@ class LockBusy(LockCodeManagerProviderError):
     """
 
 
-class LockOperationFailed(LockCodeManagerProviderError):
+class LockOperationFailed(LockOperationError):
     """
     Raised when the lock is reachable but the operation failed.
 

@@ -27,7 +27,11 @@ from ..domain.credentials import (
     User,
     WriteResult,
 )
-from ..domain.exceptions import LockDisconnected, LockOperationFailed
+from ..domain.exceptions import (
+    LockDisconnected,
+    LockOperationError,
+    LockOperationFailed,
+)
 from ..domain.models import SlotCredential
 from ._mqtt import BaseMqttLock
 from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
@@ -1061,7 +1065,7 @@ class ZWaveJSUILock(BaseMqttLock):
             response = await self._async_api_call_at(
                 api_base, "getInfo", [], timeout=GATEWAY_LOCAL_TIMEOUT
             )
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockOperationError as err:
             LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
             return None
         result = response.get("result")
