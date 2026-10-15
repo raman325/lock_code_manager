@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from zwave_js_server.const import CommandClass, NodeStatus
+from zwave_js_server.const import NodeStatus
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
@@ -205,15 +205,6 @@ async def test_describe_link_health_none_when_node_unresolvable(
         side_effect=LockDisconnected("zwave_js entry reloading"),
     ):
         assert zwave_js_lock.describe_link_health() is None
-
-
-async def test_node_property(
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-) -> None:
-    """Test node property returns the correct Z-Wave node."""
-    node = zwave_js_lock.node
-    assert node.node_id == lock_schlage_be469.node_id
 
 
 async def test_node_raises_lock_disconnected_when_entry_not_loaded(
@@ -439,44 +430,6 @@ async def test_hard_refresh_codes_maps_ha_error_to_operation_failed(
 
 
 # Base orchestration integration tests
-
-
-async def test_async_get_usercodes_returns_projection_with_managed_slots(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Test that async_get_usercodes projects lock users to slot-keyed credentials.
-
-    The base implementation ensures every managed slot is present in the result
-    (starting from empty), and overlays any Personal Identification Number
-    credentials returned by async_get_users. With no users on the lock, all
-    managed slots are present and empty.
-
-    Managed slots 3 and 4 are used deliberately: the fixture reports them
-    ``userIdStatus=AVAILABLE``, so the User Code CC occupancy fallback has
-    nothing to contribute and the plain empty projection is what's under
-    test here. Slots 1 and 2 are ENABLED in the fixture and are covered by
-    ``test_async_get_usercodes_reports_occupied_uc_slot_as_unreadable``.
-    """
-    lcm_entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={CONF_LOCKS: [zwave_js_lock.lock.entity_id]},
-        subentries_data=user_subentries(
-            {"3": {CONF_NAME: "User 3"}, "4": {CONF_NAME: "User 4"}}
-        ),
-    )
-    lcm_entry.add_to_hass(hass)
-    # No users on the lock
-    mock_access_control.get_users_cached.return_value = []
-    mock_access_control.get_all_credentials_cached.return_value = []
-
-    codes = await zwave_js_lock.async_get_usercodes()
-
-    assert codes[3] == SlotCredential.empty()
-    assert codes[4] == SlotCredential.empty()
 
 
 async def test_async_get_usercodes_overlays_pin_credentials(
@@ -1085,63 +1038,6 @@ def _user_code_caps(num_slots: int) -> dict:
     }
 
 
-async def test_async_get_capabilities_zero_slots_recovers_via_users_count_query(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    A degenerate ``num_slots == 0`` probe recovers by re-querying the users count.
-
-    The driver derives a User Code CC lock's slot count from the cached
-    ``supportedUsers`` value, defaulting to 0 when it is missing from the value
-    DB (e.g. the interview completed while the lock was asleep after a
-    re-inclusion). ``UserCodeCC.refreshValues`` reads that same cached value, so
-    the only primitive that repopulates it is the CC API ``getUsersCount``
-    device query. The provider invokes it once and re-reads capabilities before
-    concluding the lock is unusable (issue #1298 follow-up).
-    """
-    mock_lock_helpers["async_get_credential_capabilities"].side_effect = [
-        _user_code_caps(num_slots=0),
-        _user_code_caps(num_slots=30),
-    ]
-    invoke = AsyncMock()
-    with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
-        caps = await zwave_js_lock.async_get_capabilities()
-
-    invoke.assert_awaited_once_with(CommandClass.USER_CODE, "getUsersCount")
-    assert caps.credential_types[CredentialType.PIN].num_slots == 30
-    assert mock_lock_helpers["async_get_credential_capabilities"].await_count == 2
-
-
-async def test_async_get_capabilities_zero_slots_raises_actionable_error(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    A degenerate ``num_slots == 0`` capability probe fails with an actionable error.
-
-    The unified API reports a PIN credential type but zero usable slots when the
-    node's interview is incomplete (values missing from the DB) or the connected
-    Z-Wave JS driver predates the spec-compliant capability fix (15.24.3). The
-    one-shot ``getUsersCount`` recovery query runs first; when the re-read is
-    still degenerate, the provider surfaces a structural
-    ``LockCodeManagerProviderError`` that points at the actual remedies:
-    re-interview the lock and update Z-Wave JS (see issue #1298).
-    """
-    mock_lock_helpers[
-        "async_get_credential_capabilities"
-    ].return_value = _user_code_caps(num_slots=0)
-    invoke = AsyncMock()
-    with patch.object(zwave_js_lock.node.endpoints[0], "async_invoke_cc_api", invoke):
-        with pytest.raises(LockCodeManagerProviderError, match="no usable PIN slots"):
-            await zwave_js_lock.async_get_capabilities()
-
-    invoke.assert_awaited_once_with(CommandClass.USER_CODE, "getUsersCount")
-    assert mock_lock_helpers["async_get_credential_capabilities"].await_count == 2
-
-
 async def test_async_get_capabilities_zero_slots_recovery_query_failure_still_raises(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
@@ -1371,74 +1267,6 @@ async def test_async_set_user_legacy_pass_skips_users_tagged_for_other_slots(
     )
 
 
-async def test_async_set_credential_returns_true_on_success(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Test async_set_credential returns True and calls the helper with the right args.
-
-    The helper is called with the node, user_id, PIN_CODE credential type, the
-    readable Personal Identification Number string, and the credential slot.
-    """
-    mock_lock_helpers["async_set_credential"].return_value = {
-        "credential_slot": 2,
-        "user_id": 1,
-    }
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=2, state=SlotCredential.known("5678")
-    )
-    result = await zwave_js_lock.async_set_credential(
-        user_id=1,
-        credential=credential,
-        pin="5678",
-        name="alice",
-        source="sync",
-    )
-
-    assert result is WriteResult.CONFIRMED
-    mock_lock_helpers["async_set_credential"].assert_called_once_with(
-        zwave_js_lock.node,
-        1,
-        UserCredentialType.PIN_CODE,
-        "5678",
-        credential_slot=2,
-    )
-
-
-async def test_async_set_credential_raises_duplicate_code_error(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Test async_set_credential raises DuplicateCodeError on duplicate rejection.
-
-    When the lock_helpers helper raises HomeAssistantError with
-    translation_key="credential_rejected_duplicate", the provider must re-raise
-    as DuplicateCodeError so the seam's orchestration can handle it correctly.
-    """
-    err = HomeAssistantError(translation_key="credential_rejected_duplicate")
-    mock_lock_helpers["async_set_credential"].side_effect = err
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=3, state=SlotCredential.known("1111")
-    )
-    with pytest.raises(DuplicateCodeError) as exc_info:
-        await zwave_js_lock.async_set_credential(
-            user_id=1,
-            credential=credential,
-            pin="1111",
-            name=None,
-            source="sync",
-        )
-
-    assert exc_info.value.code_slot == 3
-    assert exc_info.value.lock_entity_id == zwave_js_lock.lock.entity_id
-
-
 async def test_set_credential_confirmed_pushes_the_value_like_every_push_provider(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -1470,99 +1298,6 @@ async def test_set_credential_confirmed_pushes_the_value_like_every_push_provide
     )
 
 
-async def test_async_set_credential_raises_code_rejected_error_on_other_ha_error(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Test async_set_credential raises CodeRejectedError for definitive rejections.
-
-    When the lock_helpers helper raises HomeAssistantError with a definitive
-    rejection translation_key (for example "credential_rejected_manufacturer_rules"),
-    the provider must re-raise as CodeRejectedError.
-    """
-    err = HomeAssistantError(translation_key="credential_rejected_manufacturer_rules")
-    mock_lock_helpers["async_set_credential"].side_effect = err
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
-    )
-    with pytest.raises(CodeRejectedError) as exc_info:
-        await zwave_js_lock.async_set_credential(
-            user_id=1,
-            credential=credential,
-            pin="2222",
-            name=None,
-            source="sync",
-        )
-
-    assert exc_info.value.code_slot == 4
-    assert not isinstance(exc_info.value, DuplicateCodeError)
-
-
-async def test_async_set_credential_error_unknown_returns_optimistic(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    A driver ERROR_UNKNOWN (credential_rejected_unknown) is treated as a
-    completed set, not a rejection.
-
-    The driver returns ERROR_UNKNOWN when its post-write verification can't
-    confirm the code -- notably for locks that report the user code back
-    masked, where the write actually succeeded (issue #1251). The provider
-    must return OPTIMISTIC so the seam records it pending and lets a
-    confirmation (push/refresh) verify it, instead of raising CodeRejectedError
-    (which would permanently disable an accepted write).
-    """
-    mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
-        translation_key="credential_rejected_unknown"
-    )
-
-    credential = Credential(
-        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
-    )
-    result = await zwave_js_lock.async_set_credential(
-        user_id=1,
-        credential=credential,
-        pin="2222",
-        name=None,
-        source="sync",
-    )
-
-    assert result is WriteResult.OPTIMISTIC
-
-
-async def test_async_set_credential_maps_failed_command_to_lock_disconnected(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    A transient Z-Wave command failure routes to the retry path, not a suspend.
-
-    FailedZWaveCommand is not a HomeAssistantError; if it escaped, the sync
-    manager would treat it as an unexpected bug and suspend the slot. It must
-    surface as LockDisconnected so the lock is retried instead.
-    """
-    mock_lock_helpers["async_set_credential"].side_effect = FailedZWaveCommand(
-        "cmd", 1, "lock asleep"
-    )
-    credential = Credential(
-        type=CredentialType.PIN, slot=4, state=SlotCredential.known("2222")
-    )
-    with pytest.raises(LockDisconnected):
-        await zwave_js_lock.async_set_credential(
-            user_id=1,
-            credential=credential,
-            pin="2222",
-            name=None,
-            source="sync",
-        )
-
-
 async def test_async_delete_credential_maps_failed_command_to_lock_disconnected(
     zwave_js_lock: ZWaveJSLock,
     mock_access_control: MagicMock,
@@ -1584,7 +1319,8 @@ async def test_async_delete_credential_maps_failed_command_to_lock_disconnected(
         302,  # CC_NotSupported
         303,  # CC_NotImplemented
         304,  # CC_NoAPI
-        322,  # Argument_Invalid -- the out-of-range slot from issue #1398
+        # 322 (Argument_Invalid, the out-of-range slot from issue #1398) is
+        # driven end to end by test_e2e.py::TestSlotBeyondTheLock.
     ],
 )
 async def test_async_set_credential_maps_permanent_codes_to_unsupported(
@@ -1681,29 +1417,6 @@ async def test_async_delete_user_calls_helper(
 
     mock_lock_helpers["async_delete_user"].assert_called_once_with(
         zwave_js_lock.node, 7
-    )
-
-
-async def test_async_delete_credential_calls_helper_and_returns_true(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Test async_delete_credential calls the helper and returns True on success.
-
-    The helper is called with the node, user_id, PIN_CODE credential type, and
-    the credential slot resolved from the CredentialRef.
-    """
-    ref = CredentialRef(user_id=2, type=CredentialType.PIN, slot=5)
-    result = await zwave_js_lock.async_delete_credential(ref)
-
-    assert result is True
-    mock_lock_helpers["async_delete_credential"].assert_called_once_with(
-        zwave_js_lock.node,
-        2,
-        UserCredentialType.PIN_CODE,
-        5,
     )
 
 
@@ -1808,35 +1521,6 @@ async def test_set_usercode_user_code_cc_skips_set_user_and_writes_credential_on
     assert changed is WriteResult.CONFIRMED
     mock_lock_helpers["async_set_user"].assert_not_called()
     mock_lock_helpers["async_set_credential"].assert_called_once()
-
-
-async def test_async_set_user_writes_name_verbatim(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """
-    Provider primitive writes ``user.name`` as-is.
-
-    Truncation and tagging are the base orchestration's responsibility
-    (applied in ``_set_credential`` via ``_build_tagged_user_name``);
-    the provider receives a User with the name already shaped and
-    writes it verbatim. End-to-end truncation behavior is covered
-    through ``async_set_usercode`` below.
-    """
-    mock_access_control.get_users_cached.return_value = []
-    mock_access_control.get_all_credentials_cached.return_value = []
-    mock_lock_helpers["async_set_user"].return_value = {"user_id": 7}
-
-    user = User(user_id=1, name="lcm:1:alice", active=True)
-    await zwave_js_lock.async_set_user(user)
-
-    mock_lock_helpers["async_set_user"].assert_called_once_with(
-        zwave_js_lock.node,
-        user_id=None,
-        user_name="lcm:1:alice",
-        active=True,
-    )
 
 
 async def test_async_set_usercode_builds_tagged_name_within_lock_limit(
@@ -1946,21 +1630,6 @@ async def test_async_delete_user_maps_ha_error_to_operation_failed(
         await zwave_js_lock.async_delete_user(7)
 
 
-async def test_async_delete_credential_maps_ha_error_to_operation_failed(
-    zwave_js_lock: ZWaveJSLock,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A reachable-lock HomeAssistantError during delete-credential surfaces as LockOperationFailed."""
-    mock_lock_helpers["async_delete_credential"].side_effect = HomeAssistantError(
-        "nope"
-    )
-    with pytest.raises(LockOperationFailed):
-        await zwave_js_lock.async_delete_credential(
-            CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
-        )
-
-
 # ── Client-readiness gating ─────────────────────────────────────────
 
 
@@ -2005,6 +1674,10 @@ async def test_get_client_state_not_ready_when_driver_missing(
 
 # ---------------------------------------------------------------------------
 # Post-write reconciliation read tests (delete with the report shim; grep _uc_)
+#
+# These also carry the write primitives' own assertions (helper arguments,
+# the typed error's slot and lock). When the shim goes, drop only the
+# get_credential assertions and keep the rest.
 # ---------------------------------------------------------------------------
 
 
@@ -2030,6 +1703,13 @@ async def test_set_credential_success_triggers_reconcile_read(
     )
 
     assert result is WriteResult.CONFIRMED
+    mock_lock_helpers["async_set_credential"].assert_called_once_with(
+        zwave_js_lock.node,
+        1,
+        UserCredentialType.PIN_CODE,
+        "5678",
+        credential_slot=2,
+    )
     mock_access_control.get_credential.assert_awaited_once_with(
         UserCredentialType.PIN_CODE, 2
     )
@@ -2040,7 +1720,13 @@ async def test_set_credential_optimistic_skips_reconcile_read(
     mock_access_control: MagicMock,
     mock_lock_helpers: dict,
 ) -> None:
-    """An OPTIMISTIC set skips the read; the seam's confirmation read covers it."""
+    """
+    An OPTIMISTIC set skips the read; the seam's confirmation read covers it.
+
+    The driver answers ERROR_UNKNOWN when its post-write verification cannot
+    confirm the code, notably on a lock that reports codes masked, where the
+    write succeeded (issue #1251). It must be OPTIMISTIC, not a rejection.
+    """
     mock_lock_helpers["async_set_credential"].side_effect = HomeAssistantError(
         translation_key="credential_rejected_unknown"
     )
@@ -2067,7 +1753,7 @@ async def test_set_credential_rejection_triggers_reconcile_read(
         translation_key="credential_rejected_manufacturer_rules"
     )
 
-    with pytest.raises(CodeRejectedError):
+    with pytest.raises(CodeRejectedError) as exc_info:
         await zwave_js_lock.async_set_credential(
             user_id=1,
             credential=_pin_credential(4, "2222"),
@@ -2076,6 +1762,8 @@ async def test_set_credential_rejection_triggers_reconcile_read(
             source="sync",
         )
 
+    assert exc_info.value.code_slot == 4
+    assert not isinstance(exc_info.value, DuplicateCodeError)
     mock_access_control.get_credential.assert_awaited_once_with(
         UserCredentialType.PIN_CODE, 4
     )
@@ -2091,7 +1779,7 @@ async def test_set_credential_duplicate_triggers_reconcile_read(
         translation_key="credential_rejected_duplicate"
     )
 
-    with pytest.raises(DuplicateCodeError):
+    with pytest.raises(DuplicateCodeError) as exc_info:
         await zwave_js_lock.async_set_credential(
             user_id=1,
             credential=_pin_credential(3, "1111"),
@@ -2100,6 +1788,8 @@ async def test_set_credential_duplicate_triggers_reconcile_read(
             source="sync",
         )
 
+    assert exc_info.value.code_slot == 3
+    assert exc_info.value.lock_entity_id == zwave_js_lock.lock.entity_id
     mock_access_control.get_credential.assert_awaited_once_with(
         UserCredentialType.PIN_CODE, 3
     )
@@ -2178,6 +1868,9 @@ async def test_delete_credential_success_skips_reconcile_read(
     )
 
     assert result is True
+    mock_lock_helpers["async_delete_credential"].assert_called_once_with(
+        zwave_js_lock.node, 1, UserCredentialType.PIN_CODE, 2
+    )
     mock_access_control.get_credential.assert_not_called()
 
 
