@@ -87,10 +87,8 @@ class LockStore:
         A release is kept while it is still going, not once held: its repair
         brings it back. ``given_up_by`` names the entry that gave a slot up.
         """
-        key = self._key(lock)
-        if (kept := self._key_of(lock)) not in (None, key):
-            # Kept under its entity id before it had a registry id.
-            self._locks[key] = self._locks.pop(kept)
+        if (key := self._key(lock)) is None:
+            return  # gone from the entity registry: the lock is gone
         record = self._locks.get(key, {"answered": False, "slots": {}})
         slots = dict(record["slots"])
         for number, slot in worker.slots.items():
@@ -151,8 +149,7 @@ class LockStore:
         kept = {
             k: r
             for k, r in self._locks.items()
-            if r["entity_id"] in keep
-            and k in (r["entity_id"], self._key(r["entity_id"]))
+            if r["entity_id"] in keep and k == self._key(r["entity_id"])
         }
         dropped = [r for k, r in self._locks.items() if k not in kept]
         if dropped:
@@ -162,22 +159,18 @@ class LockStore:
 
     # Inside --------------------------------------------------------------------
 
-    def _key(self, lock: str) -> str:
-        """Return the key ``lock`` is kept under: its registry id, if it has one."""
+    def _key(self, lock: str) -> str | None:
+        """
+        Return the key ``lock`` is kept under: its registry id.
+
+        Every lock Lock Code Manager drives has one; one without is gone.
+        """
         entity = er.async_get(self._hass).async_get(lock)
-        return lock if entity is None else entity.id
+        return None if entity is None else entity.id
 
     def _key_of(self, lock: str) -> str | None:
-        """
-        Return the key ``lock``'s record is kept under, if it has one.
-
-        Its registry id, or its entity id if it was kept before it had one --
-        never another registry id: that was another lock's.
-        """
-        for key in (self._key(lock), lock):
-            if key in self._locks:
-                return key
-        return None
+        """Return the key ``lock``'s record is kept under, if it has one."""
+        return key if (key := self._key(lock)) in self._locks else None
 
     def _find(self, lock: str) -> Record | None:
         return None if (key := self._key_of(lock)) is None else self._locks[key]

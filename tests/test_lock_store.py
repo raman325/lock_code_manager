@@ -433,29 +433,6 @@ async def test_a_renamed_lock_keeps_its_record(
     assert store.prune({"lock.renamed"}) == []
 
 
-async def test_a_record_kept_by_entity_id_moves_to_the_registry_id(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """A lock with no registry entry is kept by entity id, and moved once it has one."""
-    store = LockStore(hass)
-    store._locks = {
-        LOCK_1_ENTITY_ID: {
-            "entity_id": LOCK_1_ENTITY_ID,
-            "answered": True,
-            "slots": {"5": {"wrote": CLEARED}},
-        }
-    }
-    await async_setup_lcm_entry(hass)
-    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
-
-    store.remember(LOCK_1_ENTITY_ID, worker, lambda slot: None)
-
-    entity = er.async_get(hass).async_get(LOCK_1_ENTITY_ID)
-    assert list(store._locks) == [entity.id]
-    assert store._locks[entity.id]["slots"]["5"] == {"wrote": CLEARED}
-    assert store.answered(LOCK_1_ENTITY_ID)
-
-
 async def test_a_slot_handed_off_is_forgotten(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
@@ -570,3 +547,52 @@ async def test_a_lock_registry_started_before_set_up_is_kept(
 
     assert lock_registry(hass) is registry
     assert _record(hass) is not None
+
+
+async def test_a_lock_gone_from_the_entity_registry_is_not_kept_twice(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Every lock Lock Code Manager drives has a registry entry: it is kept by that id.
+
+    One whose entry goes while its worker runs is not kept again by entity
+    id beside it: that record would outlive the next start's prune, which
+    drops the one kept by the registry id that is gone.
+    """
+    entry = await async_setup_lcm_entry(hass, TWO_LOCKS)
+    er.async_get(hass).async_remove(LOCK_2_ENTITY_ID)
+
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await hass.async_block_till_done()
+
+    store: LockStore = hass.data[DOMAIN][STORE_KEY]
+    assert [r["entity_id"] for r in store._locks.values()].count(LOCK_2_ENTITY_ID) == 1
+
+
+async def test_a_clear_owed_on_a_lock_only_a_disabled_entry_lists_is_sent(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Decision F: the disabled entry still lists the lock, and sets its provider up."""
+    entry = await async_setup_lcm_entry(hass, TWO_LOCKS)
+    disabled = await async_setup_lcm_entry(
+        hass, {CONF_LOCKS: [LOCK_2_ENTITY_ID], CONF_SLOTS: {}}, unique_id="disabled"
+    )
+    await hass.config_entries.async_set_disabled_by(
+        disabled.entry_id, ConfigEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+    mock_lock(entry, LOCK_2_ENTITY_ID).fail(None, error=LockDisconnected)
+    await _remove_user(hass, entry, 2)
+    hass.config_entries.async_update_entry(
+        entry, options={**TWO_LOCKS, CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+    assert _record(hass, LOCK_2_ENTITY_ID)["slots"]["2"]["release"] == entry.entry_id
+
+    built: list = []
+    with when_mock_lock_built(built.append):
+        await async_restart_lcm(hass, entry)
+
+    [lock_2] = [lock for lock in built if lock.lock.entity_id == LOCK_2_ENTITY_ID]
+    assert 2 not in lock_2.codes
+    assert _record(hass, LOCK_2_ENTITY_ID)["slots"].get("2") is None
