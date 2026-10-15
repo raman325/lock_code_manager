@@ -856,3 +856,31 @@ async def test_acknowledging_a_held_clear_on_a_lock_that_left_every_entry(
     )
     assert issue_id not in lcm_issue_ids(hass, "slot_suspended")
     assert lock_registry(hass).worker(LOCK_2_ENTITY_ID) is None
+
+
+async def test_a_user_removed_from_a_lock_whose_setup_crashed_is_let_go(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    A lock whose setup crashed is let go of, and the code left on it is logged.
+
+    Nothing retries a setup that raised an unexpected error short of a reload,
+    so a clear given to it would wait forever and keep the lock in service
+    after its entry unloads.
+    """
+    entry = current_entry("Crashed setup", {1: "1234", 2: "5678"})
+    entry.add_to_hass(hass)
+    with when_mock_lock_built(
+        lambda lock: lock.fail("setup", error=RuntimeError("provider bug"))
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        subentry = next(s for s in entry.subentries.values() if s.title == "user2")
+        hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+        await hass.async_block_till_done()
+
+    assert "Slot 2 on lock.test_1 was given up without clearing it" in caplog.text
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert lock_workers(hass) == []

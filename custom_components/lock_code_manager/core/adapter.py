@@ -125,6 +125,9 @@ class ProviderPort:
         self._closed = False
         # This port set the provider up, and owns its lifecycle.
         self._managed = False
+        # Its setup raised what no provider handler expects: nothing retries
+        # that short of a reload, so nothing can be sent to the lock.
+        self.setup_crashed = False
         self._unsubs: list[Callable[[], None]] = []
 
     @property
@@ -368,6 +371,9 @@ class ProviderPort:
         self._managed = True
         try:
             await provider.async_setup_internal(config_entry, _Coordinator(self))
+        except Exception:
+            self.setup_crashed = True
+            raise
         finally:
             # Even if setup raised: the poll reads the lock, and the
             # connection check is what retries a deferred setup.

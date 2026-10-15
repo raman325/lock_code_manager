@@ -320,15 +320,27 @@ def async_give_up(
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
-    if port_of(worker).provider.pin_unsupported and not worker.answered:
+    port = port_of(worker)
+    if clear and not worker.answered:
         # A lock with no PIN support holds no codes: no clear to wait on.
         # Every other failed setup (a node dead at boot, a slot count not
         # known until a re-interview, a retry under way) may hold codes, and
-        # the clear waits for it to recover.
-        clear = False
+        # the clear waits for it to recover -- except one that crashed, which
+        # nothing retries short of a reload: that clear would wait forever.
+        if port.provider.pin_unsupported:
+            clear = False
+        elif port.setup_crashed:
+            _LOGGER.warning(
+                "Slot %s on %s was given up without clearing it: the lock's "
+                "setup failed with an unexpected error, so nothing can be sent "
+                "to it. Any code left in that slot stays on the lock",
+                slot,
+                lock_entity_id,
+            )
+            clear = False
     try:
         if clear:
-            port_of(worker).releasing.add(slot)
+            port.releasing.add(slot)
             registry.give_up(lock_entity_id, entry.entry_id, slot)
             hass.data[DOMAIN][GIVEN_UP_KEY][lock_entity_id, slot] = (
                 entry.entry_id,
