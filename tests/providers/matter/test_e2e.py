@@ -23,7 +23,7 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
@@ -1035,6 +1035,63 @@ class TestOtherUsersOnTheLock:
             assert fake_matter_lock.owner(3) == user_index
             assert user_index is not None
             assert parse_tag(fake_matter_lock.users[user_index].name)[0] == 3
+
+    async def test_a_user_at_a_slot_s_index_the_lock_will_not_rename_is_named(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        No PIN goes on a user the slot cannot tag, and the repair says why.
+
+        Slot 3 is on, and the homeowner's user, made by another admin, holds
+        a PIN at credential index 3. Writing the slot adopts that user, but
+        Matter lets only the fabric that made a user rename it. A PIN written
+        onto a user left untagged could never be cleared (#1518), so none is
+        written; the slot was then held with "the lock did not take the code"
+        and advice about the Thread link, which pointed nowhere near the cause.
+        """
+        fake_matter_lock.program(7, "777777", name="Mom", credential_index=3)
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: True},
+        }
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [fake_matter_lock_entity.entity_id]},
+            subentries_data=user_subentries(slots),
+            unique_id="batch5_foreign_on",
+        )
+        entry.add_to_hass(hass)
+        # Not settled here: the slot's tries are paced by the clock.
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        try:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: bool(lcm_issue_ids(hass, "slot_suspended")),
+                max_ticks=20,
+                what="slot 3 held",
+            )
+
+            assert fake_matter_lock.holds(3) == "777777"
+            assert fake_matter_lock.users[7].name == "Mom"
+            assert "333333" not in fake_matter_lock.codes.values()
+            issue = ir.async_get(hass).async_get_issue(
+                DOMAIN,
+                f"slot_suspended_{entry.entry_id}_{fake_matter_lock_entity.entity_id}_3",
+            )
+            assert issue is not None
+            assert issue.translation_placeholders is not None
+            reason = issue.translation_placeholders["reason"]
+            assert reason.startswith("User 7 on the lock holds a PIN at this slot's")
+            assert "lock maker's app" in reason
+            # Advice about the Thread link points away from the cause.
+            assert "Thread" not in reason
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
 
 
 class TestOpenBugs:

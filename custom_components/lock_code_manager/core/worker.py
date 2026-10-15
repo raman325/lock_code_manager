@@ -534,7 +534,8 @@ class LockWorker[P: LockPort]:
         back; ``want`` forgot what the lock last said -- the write may have
         landed -- so the next sync reads before it decides. A refusal holds at once.
         Anything else, even a write that never left, is read back -- unless
-        the lock has just gone into backoff.
+        the lock has just gone into backoff -- and its message is kept, so a
+        slot held after its tries says what went wrong last.
         """
         pin = slot.want
         slot.wrote = None
@@ -571,9 +572,13 @@ class LockWorker[P: LockPort]:
             elif err.kind is ErrorKind.SLOT_REFUSED:
                 slot.refused(value=False, why=err.message)
                 return
+            else:
+                # Tried again; if it is held after its tries, this says why.
+                slot.why = err.message
         else:
             if not current():
                 return
+            slot.why = ""
             slot.released = slot.release
             if changed is not False:
                 slot.wrote_want(self.salt)

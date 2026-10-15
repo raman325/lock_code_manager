@@ -99,7 +99,8 @@ class Slot:
     fights: list[float] = field(default_factory=list)
     hold: Repair | None = None
     release: bool = False
-    # What the lock or its driver said when it refused the slot, if anything.
+    # What the lock or its driver said when it refused the slot, or when the
+    # last write failed, if anything.
     why: str = ""
     # A release has been sent and answered: it reaches the lock once.
     released: bool = False

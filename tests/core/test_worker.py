@@ -6,7 +6,7 @@ decisions, driven only through the worker's own API.
 """
 
 import asyncio
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 import contextlib
 from dataclasses import dataclass, field
 
@@ -354,6 +354,47 @@ async def test_a_write_the_lock_does_not_keep_is_held_after_three(
 
     assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
     assert len(rig.lock.writes) == 3
+
+
+def _failing_write(message: str) -> Callable[[], None]:
+    def _fail() -> None:
+        raise LockError(ErrorKind.TRANSIENT, message=message)
+
+    return _fail
+
+
+async def test_a_slot_held_after_failed_writes_says_what_failed_last(
+    rig_factory,
+) -> None:
+    """The provider's own words reach the repair, not a generic one."""
+    lock = FakeLock(during_write=[_failing_write("user 7 holds this index")])
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    for _ in range(5):
+        await rig.pass_()
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert rig.worker.slots[1].why == "user 7 holds this index"
+
+
+async def test_a_write_that_goes_through_forgets_why_the_last_failed(
+    rig_factory,
+) -> None:
+    """A later hold for another cause is not given a stale one."""
+    lock = FakeLock()
+    whys: list[str] = []
+
+    def _fail_once() -> None:
+        lock.during_write.clear()
+        _failing_write("busy")()
+
+    lock.during_write.append(_fail_once)
+    rig = rig_factory(lock)
+    lock.after_read.append(lambda: whys.append(rig.worker.slots[1].why))
+    await _started(rig, {1: "1234"})
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert "busy" in whys
+    assert rig.worker.slots[1].why == ""
 
 
 async def test_a_keypad_fight_trips_however_often_it_is_read(rig_factory) -> None:
