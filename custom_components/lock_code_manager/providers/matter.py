@@ -654,10 +654,11 @@ class MatterLock(BaseLock):
                     raise LockOperationBlocked(
                         f"User {existing_user_index} on the lock holds a PIN at "
                         f"this slot's credential index ({slot}) without a Lock "
-                        f"Code Manager tag, and the lock would not let Lock Code "
-                        f"Manager rename it to take it over ({err}). Remove or "
-                        f"rename that user in the lock maker's app or the "
-                        f"lock's own management, then try again."
+                        f"Code Manager tag, and the lock may not let Lock Code "
+                        f"Manager rename it to take it over ({err}). If this "
+                        f"keeps happening, check that user in the lock maker's "
+                        f"app, and remove or rename it there if it isn't one "
+                        f"you mean to keep."
                     ) from err
                 # UPDATE tolerates any rename failure so the subsequent
                 # credential write still proceeds. The user record is
