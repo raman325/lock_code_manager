@@ -11,7 +11,7 @@ from homeassistant.helpers import issue_registry as ir
 
 from .const import DOMAIN
 from .ha.locks import get_managed_lock
-from .ha.runtime import async_resume_slot, async_write_once
+from .ha.runtime import RE_PAIRED_WORK_DROPPED, async_resume_slot, async_write_once
 from .ha.unmanaged import UNMANAGED_ISSUE_KEY, unmanaged_issue_id
 from .sync.registry import SlotTaken
 
@@ -177,6 +177,7 @@ async def async_create_fix_flow(
             "slot_disabled_",
             "pin_required_",
             "slot_suspended_",
+            RE_PAIRED_WORK_DROPPED,
         )
     ):
         return AcknowledgeRepairFlow()

@@ -26,7 +26,7 @@ from homeassistant.const import (
     STATE_UNKNOWN,
 )
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
@@ -43,6 +43,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.ha.adapter import reading
 from custom_components.lock_code_manager.ha.runtime import (
+    RE_PAIRED_WORK_DROPPED,
     STORE_KEY,
     lock_codes,
     lock_reachable,
@@ -56,6 +57,7 @@ from custom_components.lock_code_manager.model.queries import subentry_id_for_sl
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
+from custom_components.lock_code_manager.repairs import async_create_fix_flow
 from custom_components.lock_code_manager.sync.slot import Reading
 from tests.common import (
     async_advance_clock,
@@ -1529,6 +1531,20 @@ class TestRePairedLock:
             assert bridge.sets_for(2) == []
             assert bridge.users[2] == (ENABLED, "0000")
             assert "the clear is dropped with the old device" in caplog.text
+
+            # The user is told to check the slot: it may be the same lock.
+            issue_id = f"{RE_PAIRED_WORK_DROPPED}_{lock_id}"
+            assert lcm_issue_ids(hass) == [issue_id]
+            issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+            assert issue.translation_placeholders == {
+                "lock_entity_id": lock_id,
+                "slots": "2",
+            }
+            flow = await async_create_fix_flow(hass, issue_id, None)
+            flow.hass = hass
+            assert (await flow.async_step_init({}))["type"] == "create_entry"
+            ir.async_delete_issue(hass, DOMAIN, issue_id)  # as Home Assistant does
+            assert bridge.sets_for(2) == []
             _assert_trouble_free(hass, lock_id)
 
     async def test_a_rename_is_no_rebuild(

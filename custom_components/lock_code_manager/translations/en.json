@@ -470,6 +470,17 @@
       "title": "Lock dropped: {lock_entity_id}",
       "description": "Lock Code Manager could not create a provider for `{lock_entity_id}`, so it has been dropped from this configuration entry: {error}\n\nNo entities were created for that lock and no codes are written to it; every other lock in the entry is unaffected. This usually means the entity belongs to a bridge no Lock Code Manager provider supports, or that its integration has changed what it publishes about the device. Remove it from the entry, or fix the underlying cause and reload Lock Code Manager. This issue will be automatically dismissed once the lock sets up."
     },
+    "lock_re_paired_work_dropped": {
+      "title": "Lock Code Manager: check slots {slots} on re-paired {lock_entity_id}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Check slots {slots} on re-paired {lock_entity_id}",
+            "description": "`{lock_entity_id}` was re-paired, so Home Assistant now sees it as a different device. Lock Code Manager was still clearing a code from, or writing a one-off PIN to, slots {slots} on the old device. That work was dropped with the old device.\n\nIf this is the same physical lock (for example, moved to another Zigbee integration, or re-joined after Home Assistant removed it), a removed user's code may still be in those slots and may still open the door. Check those slots on the lock, and clear any code that shouldn't be there: from the Lock Code Manager card, the unmanaged-code repairs, or the lock itself.\n\nLock Code Manager does not clear them on its own: on a new device, those slots may hold codes set at its keypad.\n\nClick **Submit** to acknowledge this issue."
+          }
+        }
+      }
+    },
     "unmanaged_code": {
       "title": "Unmanaged code on {lock} in slot {slot}",
       "fix_flow": {
