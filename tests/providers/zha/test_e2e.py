@@ -777,15 +777,23 @@ class TestClearStatus:
         door_lock: DoorLockStandIn,
         own_refusal: Any,
     ) -> None:
-        """A non-zero status in the clear's own reply leaves the code where it was."""
+        """
+        A non-zero status in the clear's own reply leaves the code where it was.
+
+        It is a refusal, not a failure to retry: the clear goes out once and
+        the slot is suspended, however long the lock is left.
+        """
         await _run_ticks(hass)
         door_lock.answers["clear_pin_code"] = lambda _request: own_refusal(
             door_lock.cluster
         )
 
         await _disable_slot_1(hass, lcm_config_entry)
-        await _run_ticks(hass)
+        for _ in range(4 * LIMIT):
+            await async_advance_time(hass, TICK_INTERVAL)
 
+        assert _writes(door_lock, "clear_pin_code").count(1) == 1
+        assert _slot_suspension(hass, lcm_config_entry, 1) is not None
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
         assert _seen(hass, lcm_config_entry, 1) == Holds(CONFIGURED_PINS[1])
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
