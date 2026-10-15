@@ -3274,6 +3274,44 @@ class TestSetUser:
         # The warning carries the LAST error message + the list of names.
         assert "slot-only rejected" in caplog.text
 
+    @pytest.mark.parametrize(
+        ("error", "raised"),
+        [
+            (UnknownError("InvalidCommand (0x85)"), LockOperationFailed),
+            (HomeAssistantError("500"), LockDisconnected),
+        ],
+    )
+    async def test_set_user_refuses_an_adopted_user_it_cannot_tag(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        error: Exception,
+        raised: type[Exception],
+    ) -> None:
+        """
+        An untagged user the rename cannot tag is not written to (#1518).
+
+        A clear finds only tagged users, so a PIN written onto a user that
+        stays untagged could never be cleared: the slot turned off would
+        leave it opening the door. The tolerance for a failed rename is for
+        a user already tagged.
+        """
+        mock_set_user = AsyncMock(side_effect=error)
+        with (
+            self._patch_users(
+                [
+                    {
+                        "user_index": 9,
+                        "user_name": "Legacy Carol",
+                        "credentials": [{"type": "pin", "index": 2}],
+                    },
+                ]
+            ),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
+            pytest.raises(raised),
+        ):
+            await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
 
 # =============================================================================
 # async_delete_user tests

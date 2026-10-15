@@ -603,17 +603,18 @@ class MatterLock(BaseLock):
         slot = self._slot_from_seam_user(user)
         client, node = self._require_client_and_node()
 
-        existing_user_index = await self._find_user_index_for_slot(slot)
+        found = await self._find_user_index_for_slot(slot)
 
-        if existing_user_index is not None:
+        if found is not None:
+            existing_user_index, adopted = found
             # UPDATE: rename via set_lock_user.
             #
-            # set_lock_user here is a metadata-only name update.
-            # Name-set failures must not block the subsequent credential
-            # write -- the user still exists at the known index and only
-            # the cosmetic name update is lost. The cascade tries each
-            # candidate name; if every one fails with MatterError we log
-            # a warning and fall through.
+            # For a user already tagged, set_lock_user is a metadata-only
+            # name update: a failure must not block the credential write --
+            # the tag survives and only the display is lost. The cascade
+            # tries each candidate name; if every one fails we log a
+            # warning and fall through. An adopted (untagged) user is the
+            # exception, below.
             candidates = self._user_name_candidates(slot, user.name)
             try:
                 (
@@ -627,6 +628,20 @@ class MatterLock(BaseLock):
                     candidate_names=candidates,
                 )
             except (LockOperationError, MatterError) as err:
+                if adopted:
+                    # The rename is what makes an adopted user ours: a clear
+                    # finds only tagged users (#1518), so a PIN written onto a
+                    # user still untagged could never be cleared again --
+                    # turning the slot off would leave it opening the door.
+                    # Write nothing; the slot retries, and is held if the
+                    # lock never takes the name.
+                    if isinstance(err, LockOperationError):
+                        raise
+                    raise LockOperationFailed(
+                        f"Matter set_lock_user could not tag the adopted user "
+                        f"{existing_user_index} for slot {slot} on "
+                        f"{self.lock.entity_id} (tried {candidates}): {err}"
+                    ) from err
                 # UPDATE tolerates any rename failure so the subsequent
                 # credential write still proceeds. The user record is
                 # still valid at ``existing_user_index`` -- only the
@@ -803,9 +818,11 @@ class MatterLock(BaseLock):
 
     async def _find_user_index_for_slot(
         self, slot: int, *, adopt_untagged: bool = True
-    ) -> int | None:
+    ) -> tuple[int, bool] | None:
         """
         Return the ``user_index`` of the user LCM owns for ``slot``, if any.
+
+        Returned with whether it was adopted (found by the second lookup).
 
         Two lookups, in priority order:
 
@@ -842,7 +859,7 @@ class MatterLock(BaseLock):
         users = await self.async_get_users()
         try:
             return next(
-                existing.user_id
+                (existing.user_id, False)
                 for existing in users
                 if existing.name and parse_tag(existing.name)[0] == slot
             )
@@ -851,7 +868,7 @@ class MatterLock(BaseLock):
                 return None
             return next(
                 (
-                    existing.user_id
+                    (existing.user_id, True)
                     for existing in users
                     if parse_tag(existing.name or "")[0] is None
                     for cred in existing.pin_credentials
@@ -893,15 +910,15 @@ class MatterLock(BaseLock):
         transport failures bubble up so the base wraps them in a warning
         and the teardown still completes.
         """
-        user_index = await self._find_user_index_for_slot(slot, adopt_untagged=False)
-        if user_index is None:
+        found = await self._find_user_index_for_slot(slot, adopt_untagged=False)
+        if found is None:
             LOGGER.debug(
                 "Lock %s: no LCM-owned user to release for slot %s",
                 self.lock.entity_id,
                 slot,
             )
             return
-        await self.async_delete_user(user_index)
+        await self.async_delete_user(found[0])
 
     async def _send_set_credential(
         self,
