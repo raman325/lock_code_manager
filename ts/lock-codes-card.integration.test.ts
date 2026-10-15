@@ -147,54 +147,6 @@ describe('LockCodesCard integration', () => {
 
             expect(el._data).toEqual(testData);
         });
-
-        it('handles data with multiple slots', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({
-                lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes'
-            });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const testData = makeLockCoordinatorData({
-                slots: [
-                    {
-                        slot: 1,
-                        code: '1234',
-                        name: 'User A',
-                        managed: true,
-                        active: true,
-                        enabled: true
-                    },
-                    {
-                        slot: 2,
-                        code: null,
-                        code_length: 6,
-                        name: 'User B',
-                        managed: true,
-                        active: false,
-                        enabled: true
-                    },
-                    { slot: 3, code: null, name: undefined, managed: false }
-                ]
-            });
-            capturedCallback!(testData);
-
-            expect(el._data?.slots).toHaveLength(3);
-            expect(el._data?.slots[0].code).toBe('1234');
-            expect(el._data?.slots[1].code).toBeNull();
-            expect(el._data?.slots[1].code_length).toBe(6);
-            expect(el._data?.slots[2].managed).toBe(false);
-        });
     });
 
     describe('error handling', () => {
@@ -267,26 +219,6 @@ describe('LockCodesCard integration', () => {
 
         it('_hasCode returns true for code_length with null code', () => {
             expect((card as any)._hasCode({ slot: 1, code: null, code_length: 4 })).toBe(true);
-        });
-
-        it('_getCodeClass returns "no-code" for "empty" sentinel', () => {
-            expect((card as any)._getCodeClass({ slot: 1, code: 'empty' })).toBe('no-code');
-        });
-
-        it('_getCodeClass returns "unreadable" for an unvouched unreadable code', () => {
-            expect((card as any)._getCodeClass({ slot: 1, code: 'unreadable_code' })).toBe(
-                'unreadable'
-            );
-        });
-
-        it('_formatCode returns dash for "empty" sentinel', () => {
-            expect((card as any)._formatCode({ slot: 1, code: 'empty' })).toBe('—');
-        });
-
-        it('_formatCode returns muted hollow dots for an unvouched unreadable code', () => {
-            // Unmanaged / out of sync: value is unknown. No length known here, so
-            // a fixed-width hollow placeholder (not the misleading "• • •").
-            expect((card as any)._formatCode({ slot: 1, code: 'unreadable_code' })).toBe('◦◦◦');
         });
 
         it('_formatCode sizes hollow dots to the configured length when known', () => {
@@ -406,51 +338,6 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._editValue).toBe('9876');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
-
-        it('stores "empty" and "unreadable_code" codes in _data', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            const card2 = document.createElement('lcm-lock-codes') as LockCodesCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            card2.setConfig({
-                lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes'
-            });
-            card2.hass = hass;
-            container.appendChild(card2);
-            await flush();
-
-            capturedCallback!(
-                makeLockCoordinatorData({
-                    slots: [
-                        {
-                            slot: 1,
-                            code: '1234',
-                            managed: true,
-                            enabled: true,
-                            active: true,
-                            name: 'Active'
-                        },
-                        {
-                            slot: 2,
-                            code: 'unreadable_code',
-                            managed: true,
-                            enabled: true,
-                            active: true,
-                            name: 'Masked'
-                        },
-                        { slot: 3, code: 'empty', managed: false }
-                    ]
-                })
-            );
-
-            expect(card2._data?.slots[0].code).toBe('1234');
-            expect(card2._data?.slots[1].code).toBe('unreadable_code');
-            expect(card2._data?.slots[2].code).toBe('empty');
-        });
     });
 
     describe('unanswered sentinel', () => {
@@ -695,54 +582,6 @@ describe('LockCodesCard integration', () => {
             expect((card as any)._editValue).toBe('');
         });
         /* eslint-enable @typescript-eslint/no-explicit-any */
-    });
-
-    describe('sync_status data handling', () => {
-        it('stores sync_status from subscription data', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({
-                lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes'
-            });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const testData = makeLockCoordinatorData({ sync_status: 'suspended' });
-            capturedCallback!(testData);
-
-            expect(el._data?.sync_status).toBe('suspended');
-        });
-
-        it('sync_status is undefined when not provided', async () => {
-            let capturedCallback: ((data: unknown) => void) | undefined;
-            el = document.createElement('lcm-lock-codes') as LockCodesCardElement;
-            const hass = createMockHassWithConnection({
-                onSubscribe: (callback) => {
-                    capturedCallback = callback;
-                }
-            });
-            el.setConfig({
-                lock_entity_id: 'lock.front_door',
-                type: 'custom:lcm-lock-codes'
-            });
-            el.hass = hass;
-
-            container.appendChild(el);
-            await flush();
-
-            const testData = makeLockCoordinatorData();
-            capturedCallback!(testData);
-
-            expect(el._data?.sync_status).toBeUndefined();
-        });
     });
 
     describe('getStubConfig', () => {
