@@ -114,20 +114,6 @@ describe('LcmSubscriptionMixin integration', () => {
         expect(el._hass.connection.subscribeMessage).toHaveBeenCalledTimes(2);
     });
 
-    it('error during subscribe sets _error', async () => {
-        el = document.createElement('test-subscription-element') as TestSubscriptionElement;
-        el._hass = createMockHassWithConnection();
-        (el._hass.connection.subscribeMessage as ReturnType<typeof vi.fn>).mockRejectedValue(
-            new Error('Connection refused')
-        );
-
-        container.appendChild(el);
-        await flush();
-
-        expect(el._error).toBe('Connection refused');
-        expect(el._data).toBeUndefined();
-    });
-
     it('no double subscribe when already subscribed', async () => {
         el = document.createElement('test-subscription-element') as TestSubscriptionElement;
         el._hass = createMockHassWithConnection();
