@@ -42,7 +42,7 @@ Supported lock integrations and code sources:
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | ✅ | ✅ | Some locks mask PINs |
-| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events |
+| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events; see ² for locks that cannot report PINs |
 | [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock |
 | [Z-Wave JS UI][wiki-zwave-js-ui] (MQTT)³ | Varies | ✅ | ✅ | Locks bridged via zwave-js-ui's MQTT gateway; some locks mask PINs |
 | [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec |
@@ -66,10 +66,15 @@ configuration is needed. Locks must be added to Home Assistant via MQTT discover
 (Zigbee2MQTT’s default).
 During LCM setup, choose your `lock.*` entity from **MQTT**.
 Some locks take PINs but cannot report them: they never answer a read, or answer that user
-status is not supported (`not_supported_255`). Lock Code Manager still sets and keeps the
-codes it manages on such a lock, but it cannot see a code programmed at the lock itself, so
-when it picks slots for new users (starting from slot 1) it may write over one. On these
-locks, add codes through Lock Code Manager only, or keep any others in the highest slots.
+status is not supported (`not_supported_255`; status 0xFF through ZHA, which is handled the
+same way). Lock Code Manager still sets and keeps the codes it manages on such a lock, but it
+cannot see a code programmed at the lock itself. So when it picks slots for new users
+(starting from slot 1), or when such a lock is added to an existing configuration, which
+then writes that configuration's codes to it, it may write over one. Setup tells you when a
+lock cannot report its codes, and which slots will be used. On these locks, add codes through
+Lock Code Manager only, or keep any others in the highest slots. A lock that reports its free
+slots and answers not supported only for occupied ones has those left alone, once Lock Code
+Manager has seen it report a free slot since Home Assistant started.
 
 ³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
 [zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket
