@@ -550,6 +550,8 @@ class LockCodeManagerFlowHandler(
         """Initialize config flow."""
         self.data: dict[str, Any] = {}
         self.title: str = ""
+        # Reauth: the locks submitted, held while the user reads ``cannot_report``.
+        self._locks: list[str] = []
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self._users_to_configure = 0
@@ -845,13 +847,34 @@ class LockCodeManagerFlowHandler(
                 except SlotAllocationError as err:
                     additional_errors = {"base": err.translation_key}
                     additional_placeholders = err.placeholders
+            # A lock swapped in gets the entry's numbers as the options flow
+            # adds one: checked for keypad codes in them, and said of when it
+            # cannot report any.
+            added = [
+                lock_entity_id
+                for lock_entity_id in user_input[CONF_LOCKS]
+                if lock_entity_id not in entry_config.locks
+            ]
+            if not additional_errors and added and existing_slots:
+                (
+                    additional_errors,
+                    additional_placeholders,
+                ) = await _async_check_existing_codes(
+                    self.hass, config_entry, added, existing_slots
+                )
+                if not additional_errors and (
+                    warning := _cannot_report(self.hass, added, existing_slots)
+                ):
+                    self._locks = user_input[CONF_LOCKS]
+                    return self.async_show_form(
+                        step_id="cannot_report",
+                        description_placeholders=warning,
+                        last_step=True,
+                    )
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
-                await _async_save_locks_and_reload(
-                    self.hass, config_entry, user_input[CONF_LOCKS]
-                )
-                return self.async_abort(reason="locks_updated")
+                return await self._async_reauth_save(user_input[CONF_LOCKS])
 
         return self.async_show_form(
             step_id="reauth_confirm",
@@ -866,6 +889,21 @@ class LockCodeManagerFlowHandler(
             description_placeholders=description_placeholders,
             last_step=True,
         )
+
+    async def async_step_cannot_report(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Save the swapped-in locks once the user has been told one cannot report."""
+        return await self._async_reauth_save(self._locks)
+
+    async def _async_reauth_save(self, locks: list[str]) -> dict[str, Any]:
+        """Save the entry's new locks and reload it."""
+        config_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        assert config_entry
+        await _async_save_locks_and_reload(self.hass, config_entry, locks)
+        return self.async_abort(reason="locks_updated")
 
     @staticmethod
     @callback
