@@ -73,17 +73,6 @@ WORKER = "custom_components.lock_code_manager.core.worker"
 class TestFullSetupLifecycle:
     """Verify LCM correctly discovers and sets up the Matter provider."""
 
-    async def test_provider_discovered_as_matter(
-        self,
-        hass: HomeAssistant,
-        lcm_config_entry: MockConfigEntry,
-        lock_entity: er.RegistryEntry,
-    ) -> None:
-        """Verify LCM discovers the Matter lock and creates a MatterLock."""
-        lock = lcm_config_entry.runtime_data.locks.get(lock_entity.entity_id)
-        assert lock is not None
-        assert isinstance(lock, MatterLock)
-
     async def test_coordinator_created(
         self,
         hass: HomeAssistant,
@@ -95,35 +84,6 @@ class TestFullSetupLifecycle:
 
 class TestSetAndClearUsercodes:
     """Verify set/clear operations call the correct Matter helpers via base orchestration."""
-
-    async def test_set_usercode(
-        self,
-        hass: HomeAssistant,
-        e2e_matter_lock: MatterLock,
-        matter_mock_helpers: dict[str, AsyncMock],
-    ) -> None:
-        """Set a code via the base orchestration and verify set_lock_credential was called."""
-        matter_mock_helpers["set_lock_credential"].reset_mock()
-        matter_mock_helpers["get_lock_users"].reset_mock()
-        matter_mock_helpers["set_lock_user"].reset_mock()
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                matter_mock_helpers["get_lock_users"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.set_lock_user",
-                matter_mock_helpers["set_lock_user"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.set_lock_credential",
-                matter_mock_helpers["set_lock_credential"],
-            ),
-        ):
-            result = await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
-
-        assert result is WriteResult.CONFIRMED
-        assert matter_mock_helpers["set_lock_credential"].call_count >= 1
 
     async def test_clear_usercode(
         self,
@@ -169,6 +129,7 @@ class TestSetAndClearUsercodes:
         async_set_credential; slot 4 is managed by no entry, so the push
         lands with the lock's untracked codes.
         """
+        matter_mock_helpers["set_lock_credential"].reset_mock()
         with (
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
@@ -183,8 +144,10 @@ class TestSetAndClearUsercodes:
                 matter_mock_helpers["set_lock_credential"],
             ),
         ):
-            await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
+            result = await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
 
+        assert result is WriteResult.CONFIRMED
+        assert matter_mock_helpers["set_lock_credential"].call_count >= 1
         worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
         assert worker is not None
         assert worker.port.others.get(4) is Seen.MASKED

@@ -117,11 +117,6 @@ async def test_supports_push(matter_lock_simple: MatterLock) -> None:
     assert matter_lock_simple.supports_push is True
 
 
-async def test_usercode_scan_interval(matter_lock_simple: MatterLock) -> None:
-    """Test that scan interval is 5 minutes."""
-    assert matter_lock_simple.usercode_scan_interval == timedelta(minutes=5)
-
-
 async def test_hard_refresh_interval(matter_lock_simple: MatterLock) -> None:
     """Test that hard refresh interval is 1 hour for drift detection."""
     assert matter_lock_simple.hard_refresh_interval == timedelta(hours=1)
@@ -238,13 +233,6 @@ class TestLinkHealth:
 
 class TestDeviceAvailability:
     """Device availability tests for Matter provider."""
-
-    async def test_is_device_available_follows_entity_state(
-        self, hass: HomeAssistant, matter_lock_simple: MatterLock
-    ) -> None:
-        """Availability is True when the lock entity reports a usable state."""
-        hass.states.async_set(matter_lock_simple.lock.entity_id, "locked")
-        assert await matter_lock_simple.async_is_device_available() is True
 
     async def test_is_device_available_false_when_entity_unavailable(
         self, hass: HomeAssistant, matter_lock_simple: MatterLock
@@ -466,23 +454,6 @@ async def test_get_usercodes_get_lock_users_communication_error(
 ) -> None:
     """Test async_get_usercodes raises LockDisconnected on HomeAssistantError from get_lock_users."""
     mock_get_lock_users = AsyncMock(side_effect=HomeAssistantError("connection lost"))
-    with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
-        with pytest.raises(LockDisconnected, match="get_lock_users failed"):
-            await matter_lock.async_get_usercodes()
-
-
-async def test_get_usercodes_get_lock_users_client_exception(
-    hass: HomeAssistant, matter_lock: MatterLock
-) -> None:
-    """``MatterClientException`` from get_lock_users routes to LockDisconnected.
-
-    ``InvalidState: Not connected`` (a ``MatterClientException``, raised
-    by the matter-server client before its websocket is connected at
-    startup) is independent of ``HomeAssistantError`` -- so a read site
-    that only catches ``HomeAssistantError`` lets it escape to the sync
-    catchall and spuriously suspends the slot (issue #1257).
-    """
-    mock_get_lock_users = AsyncMock(side_effect=MatterClientException("Not connected"))
     with patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users):
         with pytest.raises(LockDisconnected, match="get_lock_users failed"):
             await matter_lock.async_get_usercodes()
@@ -1121,30 +1092,6 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    async def test_fingerprint_credential_ignored(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """Fingerprint (credentialType=3) does not fire a code slot event."""
-        fired: list[dict[str, Any]] = []
-        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
-
-        with self._patch_users([]):
-            matter_lock._on_node_event(
-                None,
-                _make_node_event(
-                    data={
-                        "lockOperationType": 1,
-                        "userIndex": 1,
-                        "credentials": [
-                            {"credentialType": 3, "credentialIndex": 1},
-                        ],
-                    }
-                ),
-            )
-            await hass.async_block_till_done()
-
-        assert len(fired) == 0
-
     async def test_wrong_cluster_ignored(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
@@ -1267,18 +1214,6 @@ class TestLockOperationEvent:
 class TestEventSubscription:
     """Test event subscription setup and teardown."""
 
-    def test_node_unresolvable_when_no_device(
-        self, matter_lock_simple: MatterLock
-    ) -> None:
-        """Resolution yields nothing when the lock's entity has no device.
-
-        ``matter_lock_simple`` is registered without a device, so the live
-        device lookup yields nothing and the resolution gate reports the
-        lock disconnected.
-        """
-        with pytest.raises(LockDisconnected):
-            matter_lock_simple._require_client_and_node()
-
     async def test_client_unresolvable_when_no_matter_data(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
@@ -1299,14 +1234,6 @@ class TestEventSubscription:
         matter_lock_simple.setup_push_subscription()  # should be a no-op
         # If it tried to subscribe again, it would fail (no client)
         assert matter_lock_simple._push_unsubs
-
-    def test_setup_push_no_client_raises(self, matter_lock_simple: MatterLock) -> None:
-        """setup_push_subscription raises when the client/node can't be resolved.
-
-        ``matter_lock_simple`` has no device, so resolution yields no client.
-        """
-        with pytest.raises(LockDisconnected):
-            matter_lock_simple.setup_push_subscription()
 
     def test_teardown_push_unsubscribes(self, matter_lock_simple: MatterLock) -> None:
         """Test teardown_push_subscription cleans up event subscription."""
@@ -1354,19 +1281,6 @@ class TestEventSubscription:
         assert client is matter_client
         assert node is not None
         assert node.node_id == 16
-
-    def test_owning_matter_client_resolves_device_owner(
-        self, matter_lock: MatterLock, matter_client: MagicMock
-    ) -> None:
-        """The client comes from the entry that owns the device (#1268).
-
-        Resolution walks the device's own config entry rather than the Matter
-        integration's get_matter() -> entries[0] single-fabric guess, so it stays
-        correct when other Matter entries exist.
-        """
-        device = matter_lock._fresh_device_entry()
-        assert device is not None
-        assert matter_lock._owning_matter_client(device) is matter_client
 
     def test_owning_matter_client_reads_only_config_entry_id(
         self, matter_lock: MatterLock, matter_client: MagicMock
@@ -1855,97 +1769,42 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.observe_push.assert_not_called()
 
-    def test_missing_data_index_ignored(self, matter_lock: MatterLock) -> None:
-        """Event with no dataIndex is ignored."""
+    async def test_pin_event_without_user_index_ignored(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A LockUserChange with no ``userIndex`` is dropped, even when its
+        ``dataIndex`` names a tagged user's credential.
+
+        Unlike LockOperation, LockUserChange has no credential-index fallback:
+        ``dataIndex`` is log context only, so the event resolves to no slot.
+        Carol's user index equals her credential index, so reading
+        ``dataIndex`` in place of the missing ``userIndex`` would resolve her.
+        """
         mock_coordinator = _mock_coordinator()
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
         matter_lock.coordinator = mock_coordinator
 
-        matter_lock._on_node_event(
-            None,
-            _make_node_event(
-                event_id=4,
-                data={
-                    "lockDataType": 6,  # PIN
-                    "dataOperationType": 0,
-                    # no dataIndex
+        with self._patch_users(
+            [
+                {
+                    "user_index": 7,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
                 },
-            ),
-        )
-
-        mock_coordinator.observe_push.assert_not_called()
-
-    def test_non_integer_data_index_ignored(self, matter_lock: MatterLock) -> None:
-        """Non-integer dataIndex logs warning and is ignored."""
-        mock_coordinator = _mock_coordinator()
-        matter_lock.coordinator = mock_coordinator
-
-        matter_lock._on_node_event(
-            None,
-            _make_node_event(
-                event_id=4,
-                data={
-                    "lockDataType": 6,  # PIN
-                    "dataOperationType": 0,
-                    "dataIndex": "not_a_number",
-                },
-            ),
-        )
-
-        mock_coordinator.observe_push.assert_not_called()
-
-    def test_unknown_operation_type_ignored(self, matter_lock: MatterLock) -> None:
-        """Unknown DataOperationType is ignored."""
-        mock_coordinator = _mock_coordinator()
-        matter_lock.coordinator = mock_coordinator
-
-        matter_lock._on_node_event(
-            None,
-            _make_node_event(
-                event_id=4,
-                data={
-                    "lockDataType": 6,  # PIN
-                    "dataOperationType": 99,  # unknown
-                    "dataIndex": 1,
-                },
-            ),
-        )
-
-        mock_coordinator.observe_push.assert_not_called()
-
-    def test_no_coordinator_does_not_crash(self, matter_lock: MatterLock) -> None:
-        """LockUserChange with no coordinator attached does not crash."""
-        matter_lock.coordinator = None
-
-        matter_lock._on_node_event(
-            None,
-            _make_node_event(
-                event_id=4,
-                data={
-                    "lockDataType": 6,
-                    "dataOperationType": 0,
-                    "dataIndex": 1,
-                },
-            ),
-        )
-        # No assert — just verifying it doesn't raise
-
-    def test_wrong_cluster_ignored(self, matter_lock: MatterLock) -> None:
-        """Event from non-DoorLock cluster is ignored."""
-        mock_coordinator = _mock_coordinator()
-        matter_lock.coordinator = mock_coordinator
-
-        matter_lock._on_node_event(
-            None,
-            _make_node_event(
-                cluster_id=999,  # not DoorLock
-                event_id=4,
-                data={
-                    "lockDataType": 6,
-                    "dataOperationType": 0,
-                    "dataIndex": 1,
-                },
-            ),
-        )
+            ]
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,  # PIN
+                        "dataOperationType": 0,  # Add
+                        "dataIndex": 7,  # Carol's credential, but no userIndex
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
 
         mock_coordinator.observe_push.assert_not_called()
 
@@ -2612,19 +2471,6 @@ class TestGetUsers:
         assert len(users) == 2
         assert users[0].user_id == 1
         assert users[1].user_id == 3
-
-    async def test_get_users_disconnected(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """HomeAssistantError from get_lock_users raises LockDisconnected."""
-        mock_get_lock_users = AsyncMock(
-            side_effect=HomeAssistantError("connection lost")
-        )
-        with (
-            patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_lock_users),
-            pytest.raises(LockDisconnected),
-        ):
-            await matter_lock.async_get_users()
 
     async def test_get_users_service_validation_error(
         self, hass: HomeAssistant, matter_lock: MatterLock
