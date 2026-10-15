@@ -315,7 +315,13 @@
     },
     "hard_refresh_usercodes": {
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
-      "name": "Hard refresh usercodes"
+      "name": "Hard refresh usercodes",
+      "fields": {
+        "forget_reporting": {
+          "name": "Forget that the lock can report codes",
+          "description": "For a lock that can't report which codes it holds but is treated as one that can, so new users can't be placed: Lock Code Manager forgets that it saw the lock report a code, and asks it again."
+        }
+      }
     },
     "set_condition": {
       "name": "Set condition",

@@ -75,7 +75,9 @@ adding a lock and swapping one in (reauth) tell you when a lock cannot report it
 which slots will be used. On these locks, add codes through Lock Code Manager only, or keep
 any others in the highest slots. A lock that reports its free slots and answers not
 supported only for occupied ones has those left alone, once Lock Code Manager has seen it
-report a free slot; it remembers that across restarts.
+report a free slot; it remembers that across restarts. If a lock that can't report its codes
+is treated as one that can, so new users can't be placed, run **Hard refresh usercodes** with
+**Forget that the lock can report codes** (`forget_reporting`) enabled.
 
 ³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
 [zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket

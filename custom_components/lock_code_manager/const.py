@@ -87,6 +87,7 @@ class LockCodeManagerData(TypedDict, total=False):
 DATA: HassKey[LockCodeManagerData] = HassKey(DOMAIN)
 
 ATTR_CLEAR_CREDENTIALS = "clear_credentials"
+ATTR_FORGET_REPORTING = "forget_reporting"
 ATTR_SLOT = "slot"
 ATTR_SLOT_NUM = "slot_num"
 # Marks the final event of a slot subscription: the user is gone, and the

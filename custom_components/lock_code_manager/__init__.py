@@ -65,6 +65,7 @@ from .const import (
     ATTR_CODE,
     ATTR_CREDENTIAL_TYPE,
     ATTR_ENABLE_IF_DISABLED,
+    ATTR_FORGET_REPORTING,
     ATTR_LENGTH,
     ATTR_SOURCE,
     ATTR_TARGET,
@@ -642,7 +643,12 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             )
         # Through each lock's worker: in its turn, and every slot it tracks.
         results = await asyncio.gather(
-            *(async_hard_refresh(worker) for worker in workers),
+            *(
+                async_hard_refresh(
+                    worker, forget_reporting=service.data[ATTR_FORGET_REPORTING]
+                )
+                for worker in workers
+            ),
             return_exceptions=True,
         )
         errors = [err for err in results if isinstance(err, Exception)]
@@ -667,6 +673,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                     # are not entity IDs the target resolution can look up;
                     # refuse both.
                     vol.Optional(ATTR_ENTITY_ID): cv.entity_ids,
+                    vol.Optional(ATTR_FORGET_REPORTING, default=False): cv.boolean,
                 }
             ),
             cv.has_at_least_one_key(*cv.ENTITY_SERVICE_FIELDS),

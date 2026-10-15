@@ -125,6 +125,13 @@ class LockStore:
         self._put(key, {**record, "entity_id": lock, "reports": True})
 
     @callback
+    def unreported(self, lock: str) -> None:
+        """Forget that a read of ``lock`` has described a slot: it is asked again."""
+        if (key := self._key_of(lock)) is not None:
+            record = self._locks[key]
+            self._put(key, {k: v for k, v in record.items() if k != "reports"})
+
+    @callback
     def forget_slot(self, lock: str, slot: int) -> None:
         """Forget ``slot`` on ``lock``: it is done, or let go of for good."""
         if (key := self._key_of(lock)) is not None:
