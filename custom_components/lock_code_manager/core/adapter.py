@@ -92,13 +92,15 @@ class ProviderPort:
         provider: BaseLock,
         name_for: Callable[[int], str | None] = lambda slot: None,
         polling: Callable[[], bool] = lambda: True,
+        reports: dict[str, bool] | None = None,
     ) -> None:
         """
         Wrap ``provider``.
 
         ``name_for`` names the user a slot's PIN is written for; ``polling``
         says whether the lock is polled ("Disable polling" spares the drift
-        check).
+        check). ``reports`` is shared by every port for the run: lock ->
+        whether a read of it has described a slot (see ``read``).
         """
         self.provider = provider
         self.name_for = name_for
@@ -119,6 +121,9 @@ class ProviderPort:
         self.others: dict[int, Reading] = {}
         # Some read has said something about a slot: silence is now no answer.
         self._answered = False
+        # Every lock read this run -> whether a read described a slot of it.
+        # Kept past this port: a one-off read builds a port per read.
+        self.reports: dict[str, bool] = {} if reports is None else reports
         self._poll: asyncio.Task[None] | None = None
         self._poll_unsubs: list[Callable[[], None]] = []
         # Unloaded: nothing may start a poll or arm its timer again.
@@ -146,6 +151,10 @@ class ProviderPort:
         it said nothing about any of them, from a lock that has answered
         reads before, is no answer -- unless, of some, it answered that it
         cannot tell.
+
+        A slot it answered it cannot tell of is silent too (#1581), unless a
+        read has described some slot of the lock this run: a lock that can
+        report its codes and will not report this one holds a code there.
         """
         provider = self.provider
         if self._managed and not await self._set_up():
@@ -181,12 +190,15 @@ class ProviderPort:
             # A read that failed said nothing about any slot: no answer.
             raise LockError(ErrorKind.NO_ANSWER, message=str(err)) from err
         silent = provider.last_silent_slots & set(slots)
-        if (
-            self._answered
-            and silent >= set(slots)
-            and not provider.last_cannot_tell_slots & silent
-        ):
+        cannot_tell = provider.last_cannot_tell_slots & silent
+        if self._answered and silent >= set(slots) and not cannot_tell:
             raise LockError(ErrorKind.NO_ANSWER, message="the lock said nothing")
+        lock = provider.lock.entity_id
+        self.reports[lock] = self.reports.get(lock, False) or any(
+            slot in codes for slot in set(slots) - silent
+        )
+        if self.reports[lock]:
+            silent -= cannot_tell
         # The lock answered, but of a slot written too lately to show it yet:
         # left out (silent), so the write is trusted until a later read.
         silent |= self._lagging(slots)
