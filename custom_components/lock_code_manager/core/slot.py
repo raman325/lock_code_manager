@@ -134,6 +134,9 @@ class Slot:
         if isinstance(seen, Holds):
             return seen.pin == self.want
         # A lock that will not show the code, or says nothing: trust the write.
+        # A limit, not a bug: a write the lock dropped on a slot it never reads
+        # back looks the same from here as one it took. The views label such a
+        # slot withheld or unanswered, so the user sees it is trusted, not read.
         return seen in (Seen.MASKED, Seen.SILENT) and written
 
     def status(self, salt: bytes) -> Status:

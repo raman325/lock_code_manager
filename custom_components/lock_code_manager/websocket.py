@@ -103,7 +103,7 @@ from .const import (
 from .domain.config import parse_slot_unique_id
 from .domain.lock_runtime import lock_codes, lock_reachable, signal_lock_changed
 from .domain.locks import get_managed_locks
-from .domain.models import SlotCode, SlotCredential
+from .domain.models import SlotCode
 from .domain.queries import (
     entries_configuring,
     find_config_entry_by_title,
@@ -129,7 +129,7 @@ CALENDAR_ATTR_END_TIME = "end_time"
 
 
 def _slot_code_payload(
-    code: str | SlotCredential | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     code_key: str = ATTR_CODE,
@@ -138,18 +138,9 @@ def _slot_code_payload(
     """
     Build the masked/revealed payload fields for a code on a lock.
 
-    SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
-    regular codes are revealed verbatim or masked to ``None`` plus a length,
-    and ``None`` stays ``None``. A ``SlotCredential`` is collapsed to its
-    label (sentinel or PIN) before serialization.
+    SlotCode sentinels pass through as their labels, a PIN is revealed
+    verbatim or masked to ``None`` plus a length, and ``None`` stays ``None``.
     """
-    if isinstance(code, SlotCredential):
-        label = code.as_label()
-        if isinstance(label, SlotCode):
-            return {code_key: str(label)}
-        if reveal:
-            return {code_key: label}
-        return {code_key: None, length_key: len(label)}
     if isinstance(code, SlotCode):
         return {code_key: str(code)}
     if reveal or code is None:
@@ -471,7 +462,7 @@ async def get_config_entry_data(
 
 def _serialize_slot(
     slot: Any,
-    code: str | SlotCredential | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     name: str | None = None,

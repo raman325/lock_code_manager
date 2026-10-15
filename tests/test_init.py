@@ -2734,9 +2734,7 @@ async def test_an_entry_setting_up_while_another_unloads_joins_the_lock_it_holds
     assert old_lock.codes[3] == "2468"
     old_lock.codes[9] = "1357"
     await worker.read((9,))
-    assert lock_runtime.lock_codes(hass, LOCK_1_ENTITY_ID)[9] == SlotCredential.known(
-        "1357"
-    )
+    assert lock_runtime.lock_codes(hass, LOCK_1_ENTITY_ID)[9] == "1357"
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
     await hass.async_block_till_done()
@@ -2947,9 +2945,7 @@ async def test_a_shared_polled_lock_keeps_polling_after_the_entry_that_built_it_
     )
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    assert lock_runtime.lock_codes(hass, LOCK_2_ENTITY_ID)[9] == (
-        SlotCredential.known("1357")
-    )
+    assert lock_runtime.lock_codes(hass, LOCK_2_ENTITY_ID)[9] == "1357"
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
 

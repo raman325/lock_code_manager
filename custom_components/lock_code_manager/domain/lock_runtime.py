@@ -41,7 +41,7 @@ from ..providers import BaseLock
 from .exceptions import LockCodeManagerProviderError
 from .lock_store import LockStore
 from .locks import async_create_lock_instance
-from .models import SlotCredential
+from .models import SlotCode
 from .queries import (
     configured_owner,
     entries_configuring,
@@ -620,40 +620,38 @@ async def async_resume_slot(
         given_up[key] = (given_up[key][0], worker)
 
 
-def _credential(reading: Reading) -> SlotCredential | None:
-    """Return a reading as the credential shape views show; None if it said nothing."""
+def _label(reading: Reading) -> str | SlotCode:
+    """Return a reading as the views are told it: its PIN, or what the lock said."""
     if isinstance(reading, Holds):
-        return SlotCredential.known(reading.pin)
-    if reading is Seen.EMPTY:
-        return SlotCredential.empty()
-    if reading is Seen.MASKED:
-        return SlotCredential.unreadable()
-    return None
+        return reading.pin
+    return {
+        Seen.EMPTY: SlotCode.EMPTY,
+        Seen.MASKED: SlotCode.UNREADABLE_CODE,
+        Seen.SILENT: SlotCode.UNANSWERED,
+        Seen.DISABLED: SlotCode.DISABLED,
+    }[reading]
 
 
 @callback
-def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, SlotCredential]:
-    """Return every code the lock has told of: managed slots and the rest."""
+def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | SlotCode]:
+    """
+    Return every code the lock has told of: managed slots and the rest.
+
+    What the lock said, never the PIN a slot wants: a card stands the
+    configured PIN in for a slot in sync itself, marked as configured rather
+    than read (spec D, #1282).
+    """
     if (worker := lock_registry(hass).worker(lock_entity_id)) is None:
         return {}
-    codes = {
-        slot: credential
-        for slot, reading in port_of(worker).others.items()
-        if (credential := _credential(reading)) is not None
+    readings = {
+        **port_of(worker).others,
+        **{
+            slot_num: slot.seen
+            for slot_num, slot in worker.slots.items()
+            if slot.seen is not None
+        },
     }
-    for slot_num, slot in worker.slots.items():
-        if slot.seen is None:
-            continue
-        if (
-            slot.want is not None
-            and slot.seen in (Seen.MASKED, Seen.SILENT)
-            and worker.status(slot_num)[0] is Status.IN_SYNC
-        ):
-            # A lock that withholds its codes holds the one written (#1282).
-            codes[slot_num] = SlotCredential.known(slot.want)
-        elif (credential := _credential(slot.seen)) is not None:
-            codes[slot_num] = credential
-    return codes
+    return {slot: _label(reading) for slot, reading in readings.items()}
 
 
 async def async_hard_refresh(worker: LockWorker) -> None:

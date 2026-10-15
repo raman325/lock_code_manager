@@ -49,7 +49,7 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     lock_registry,
     port_of,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCode
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 from tests.common import (
     async_advance_clock,
@@ -146,7 +146,7 @@ class UserCodeTable:
         return {"success": True, "result": result}
 
 
-def held_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, SlotCredential]:
+def held_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | SlotCode]:
     """Return what the lock's worker last heard about each slot."""
     return lock_codes(hass, lock_entity_id)
 
@@ -441,9 +441,7 @@ class TestRefusedSet:
         assert user_code_table.codes == {}
         lock_entity_id = zui_lock.lock.entity_id
         for slot_num in E2E_SLOT_PINS:
-            assert held_codes(hass, lock_entity_id).get(slot_num) == (
-                SlotCredential.empty()
-            )
+            assert held_codes(hass, lock_entity_id).get(slot_num) == (SlotCode.EMPTY)
             entity_id = in_sync_entity_id(
                 hass, lcm_config_entry, slot_num, lock_entity_id
             )
@@ -537,9 +535,7 @@ class TestRefusedClear:
             await async_advance_time(hass, TICK_INTERVAL)
 
         assert user_code_table.codes == E2E_SLOT_PINS
-        assert held_codes(hass, lock_entity_id).get(1) == SlotCredential.known(
-            E2E_SLOT_PINS[1]
-        )
+        assert held_codes(hass, lock_entity_id).get(1) == (E2E_SLOT_PINS[1])
         in_sync = hass.states.get(entity_id)
         assert in_sync is not None
         assert in_sync.state == STATE_OFF
@@ -571,9 +567,7 @@ class TestPushUpdates:
         fire_zui_node_value(hass, f"99/0/userCode/{unmanaged_slot}", "4321")
         await hass.async_block_till_done()
 
-        assert held_codes(hass, lock_entity_id).get(
-            unmanaged_slot
-        ) == SlotCredential.known("4321")
+        assert held_codes(hass, lock_entity_id).get(unmanaged_slot) == "4321"
         assert send_commands(zui_api_responder)[before:] == []
 
         user_code_table.codes[1] = "4321"
@@ -614,7 +608,7 @@ class TestPushUpdates:
         await hass.async_block_till_done()
 
         assert held_codes(hass, zui_lock.lock.entity_id).get(unconfigured_slot) == (
-            SlotCredential.empty()
+            SlotCode.EMPTY
         )
 
     async def test_stale_available_does_not_unwind_a_synced_slot(
@@ -636,9 +630,7 @@ class TestPushUpdates:
         )
         await hass.async_block_till_done()
 
-        assert held_codes(hass, zui_lock.lock.entity_id).get(2) == SlotCredential.known(
-            E2E_SLOT_PINS[2]
-        )
+        assert held_codes(hass, zui_lock.lock.entity_id).get(2) == (E2E_SLOT_PINS[2])
 
     async def test_a_stale_available_leaves_a_synced_slot_alone(
         self,
@@ -734,9 +726,7 @@ class TestSharedLock:
             STATUS_AVAILABLE,
         )
         await hass.async_block_till_done()
-        assert held_codes(hass, zui_lock.lock.entity_id).get(
-            second_slot
-        ) == SlotCredential.known(second_pin)
+        assert held_codes(hass, zui_lock.lock.entity_id).get(second_slot) == second_pin
 
         for _ in range(3):
             await async_advance_time(hass, TICK_INTERVAL)
@@ -1270,8 +1260,8 @@ class DroppingUserCodeTable(UserCodeTable):
         return super().__call__(api_base, request)
 
 
-class TestApiOnlyOpenBugs:
-    """Open bugs on a lock reached only through the api (no node topic), each a strict xfail."""
+class TestApiOnlyUnreadableSlot:
+    """A slot a lock reached only through the api (no node topic) never reads back."""
 
     @pytest.fixture
     async def api_only_entry(
@@ -1307,7 +1297,7 @@ class TestApiOnlyOpenBugs:
         entry = MockConfigEntry(
             domain=DOMAIN,
             data=config,
-            unique_id="test_zui_manual_open_bugs",
+            unique_id="test_zui_manual_unreadable_slot",
             subentries_data=user_subentries(config[CONF_SLOTS]),
         )
         entry.add_to_hass(hass)
@@ -1333,13 +1323,6 @@ class TestApiOnlyOpenBugs:
         """A fresh table from the factory each test names by parameter."""
         return request.param()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: a write the lock dropped reads in sync when the read that "
-            "would confirm it goes unanswered while other slots answer"
-        ),
-    )
     @pytest.mark.parametrize(
         "user_code_table",
         [
@@ -1350,18 +1333,31 @@ class TestApiOnlyOpenBugs:
         indirect=True,
         ids=["drops_slot_1"],
     )
-    async def test_a_dropped_write_does_not_read_in_sync(
+    async def test_a_write_it_cannot_confirm_is_trusted_and_shown_as_not_read(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
         api_only_entry: MockConfigEntry,
         user_code_table: UserCodeTable,
     ) -> None:
-        """Slot 1's write never landed and can't be read back, so it is not in sync."""
+        """
+        A write the lock dropped on a slot it never reads back reads in sync.
+
+        A documented limit, not a bug (milestone 5, J): a lock that won't show
+        a slot's code, or says nothing of it, is trusted after a write, because
+        a healthy write there is indistinguishable from a dropped one. Not
+        trusting it would hold every such slot and raise ``slot_suspended``
+        for it. What keeps the user from mistaking trust for a reading is the
+        label: the gateway answers this slot's read with no result, so the card
+        is told the lock withholds the code, and marks the configured PIN as
+        configured rather than read.
+        """
         await async_advance_sync_ticks(hass, freezer, 15)
 
+        [lock_entity_id] = api_only_entry.data[CONF_LOCKS]
         assert 1 not in user_code_table.codes
-        assert self._in_sync(hass, api_only_entry, 1) != STATE_ON
+        assert self._in_sync(hass, api_only_entry, 1) == STATE_ON
+        assert held_codes(hass, lock_entity_id)[1] == SlotCode.UNREADABLE_CODE
 
 
 class DisabledUserCodeTable(UserCodeTable):

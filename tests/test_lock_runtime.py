@@ -30,7 +30,13 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.core.slot import Repair, Status
+from custom_components.lock_code_manager.core.slot import (
+    Holds,
+    Reading,
+    Repair,
+    Seen,
+    Status,
+)
 from custom_components.lock_code_manager.core.worker import BACKOFF_MAX, OFFLINE_AFTER
 from custom_components.lock_code_manager.domain.exceptions import (
     LockCodeManagerProviderError,
@@ -40,6 +46,7 @@ from custom_components.lock_code_manager.domain.exceptions import (
 from custom_components.lock_code_manager.domain.lock_runtime import (
     GIVEN_UP_KEY,
     ISSUES_KEY,
+    _label,
     async_give_up,
     async_resume_slot,
     async_want,
@@ -47,7 +54,7 @@ from custom_components.lock_code_manager.domain.lock_runtime import (
     port_of,
     signal_lock_changed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.domain.queries import get_entry_config
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 
@@ -884,3 +891,29 @@ async def test_a_user_removed_from_a_lock_whose_setup_crashed_is_let_go(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert lock_workers(hass) == []
+
+
+@pytest.mark.parametrize(
+    ("reading", "label"),
+    [
+        (Holds("1234"), "1234"),
+        (Seen.EMPTY, SlotCode.EMPTY),
+        (Seen.MASKED, SlotCode.UNREADABLE_CODE),
+        (Seen.SILENT, SlotCode.UNANSWERED),
+        (Seen.DISABLED, SlotCode.DISABLED),
+    ],
+    ids=["holds", "empty", "masked", "silent", "disabled"],
+)
+def test_the_views_are_told_exactly_what_the_lock_said(
+    reading: Reading, label: str
+) -> None:
+    """
+    Every reading reaches the views as itself (spec D, §12).
+
+    A slot the lock answered nothing about, or holds a code for that is not in
+    force, used to be left out, and the card drew it as holding nothing. A
+    withheld code the worker trusts used to be sent as the configured PIN, as
+    though the lock had reported it. The card decides the stand-in from
+    ``managed`` and ``in_sync``; the label never does.
+    """
+    assert _label(reading) == label

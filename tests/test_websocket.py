@@ -3328,7 +3328,7 @@ async def test_subscribe_code_slot_unsub_all_with_empty_state_ref(
 class TestSlotCodePayloadWithBareSlotCode:
     """A bare SlotCode reaching the payload builder serializes as its label."""
 
-    @pytest.mark.parametrize("sentinel", [SlotCode.EMPTY, SlotCode.UNREADABLE_CODE])
+    @pytest.mark.parametrize("sentinel", list(SlotCode))
     @pytest.mark.parametrize("reveal", [True, False])
     def test_bare_slot_code_serializes_as_label(
         self, sentinel: SlotCode, reveal: bool
@@ -3349,34 +3349,34 @@ class TestSerializeSlotWithSlotCode:
     """Test _serialize_slot passes SlotCode sentinels through as strings."""
 
     def test_empty_code_passes_through(self) -> None:
-        """SlotCredential.empty() should serialize as the string "empty"."""
-        result = _serialize_slot(1, SlotCredential.empty(), reveal=False)
+        """SlotCode.EMPTY should serialize as the string "empty"."""
+        result = _serialize_slot(1, SlotCode.EMPTY, reveal=False)
         assert result[ATTR_CODE] == "empty"
         assert ATTR_CODE_LENGTH not in result
 
     def test_empty_code_revealed_passes_through(self) -> None:
-        """SlotCredential.empty() with reveal=True should still be "empty"."""
-        result = _serialize_slot(1, SlotCredential.empty(), reveal=True)
+        """SlotCode.EMPTY with reveal=True should still be "empty"."""
+        result = _serialize_slot(1, SlotCode.EMPTY, reveal=True)
         assert result[ATTR_CODE] == "empty"
 
     def test_unreadable_code_passes_through(self) -> None:
-        """SlotCredential.unreadable() should serialize as the string "unreadable_code"."""
-        result = _serialize_slot(1, SlotCredential.unreadable(), reveal=False)
+        """SlotCode.UNREADABLE_CODE should serialize as the string "unreadable_code"."""
+        result = _serialize_slot(1, SlotCode.UNREADABLE_CODE, reveal=False)
         assert result[ATTR_CODE] == "unreadable_code"
         assert ATTR_CODE_LENGTH not in result
 
     def test_unreadable_code_includes_configured_code_when_revealed(self) -> None:
-        """SlotCredential.unreadable() with configured_code and reveal should include it."""
+        """SlotCode.UNREADABLE_CODE with configured_code and reveal should include it."""
         result = _serialize_slot(
-            1, SlotCredential.unreadable(), reveal=True, configured_code="1234"
+            1, SlotCode.UNREADABLE_CODE, reveal=True, configured_code="1234"
         )
         assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code"] == "1234"
 
     def test_unreadable_code_includes_configured_code_length_when_masked(self) -> None:
-        """SlotCredential.unreadable() without reveal should include configured_code_length."""
+        """SlotCode.UNREADABLE_CODE without reveal should include configured_code_length."""
         result = _serialize_slot(
-            1, SlotCredential.unreadable(), reveal=False, configured_code="1234"
+            1, SlotCode.UNREADABLE_CODE, reveal=False, configured_code="1234"
         )
         assert result[ATTR_CODE] == "unreadable_code"
         assert result["configured_code_length"] == 4
@@ -3384,21 +3384,21 @@ class TestSerializeSlotWithSlotCode:
     def test_in_sync_included_when_known(self) -> None:
         """``in_sync`` is serialized for both True and False so the card can gate on it."""
         assert (
-            _serialize_slot(1, SlotCredential.unreadable(), reveal=False, in_sync=True)[
+            _serialize_slot(1, SlotCode.UNREADABLE_CODE, reveal=False, in_sync=True)[
                 "in_sync"
             ]
             is True
         )
         assert (
-            _serialize_slot(
-                1, SlotCredential.unreadable(), reveal=False, in_sync=False
-            )["in_sync"]
+            _serialize_slot(1, SlotCode.UNREADABLE_CODE, reveal=False, in_sync=False)[
+                "in_sync"
+            ]
             is False
         )
 
     def test_in_sync_omitted_when_unknown(self) -> None:
         """``in_sync`` is omitted when None so the card treats it as not-in-sync."""
-        result = _serialize_slot(1, SlotCredential.unreadable(), reveal=False)
+        result = _serialize_slot(1, SlotCode.UNREADABLE_CODE, reveal=False)
         assert "in_sync" not in result
 
     def test_regular_code_revealed(self) -> None:
@@ -3869,23 +3869,51 @@ async def test_a_card_subscribed_before_its_slot_s_entities_exist_gets_them(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_a_lock_that_withholds_codes_tells_the_card_the_pin_length(
+async def _async_slot_payload(
+    hass: HomeAssistant, hass_ws_client: WebSocketGenerator, slot_num: int
+) -> dict[str, Any]:
+    """Return the lock-codes card's payload for one slot of the first lock."""
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "reveal": False,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    event = (await ws_client.receive_json())["event"]
+    [slot] = [s for s in event[CONF_SLOTS] if s[ATTR_SLOT] == slot_num]
+    return slot
+
+
+@pytest.mark.parametrize(
+    ("knob", "label"),
+    [("write_only", "unreadable_code"), ("unanswered", "unanswered")],
+    ids=["withheld", "unanswered"],
+)
+async def test_a_lock_that_gives_no_pin_back_is_never_shown_as_reporting_one(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,
     mock_lock_config_entry,
     hass_ws_client: WebSocketGenerator,
+    knob: str,
+    label: str,
 ) -> None:
     """
-    Regression for PR #1282, the backend half: the card is told a PIN's length.
+    A slot in sync on a lock that gives no PIN back is sent as what the lock said.
 
-    Matter and masking Z-Wave locks never report the digits, and the card drew
-    a fixed three dots for every such slot. Masked, the slot it is sent says
-    it is in sync and how long the configured PIN is;
-    ts/lock-codes-card.dom.test.ts renders that slot.
+    Matter and masking Z-Wave locks never report the digits; an API-only Z-Wave
+    JS UI lock leaves the slot out of its answer altogether. Either way the
+    configured PIN is only trusted, and spec D (§12) rules out sending it as
+    though the lock reported it: the card stands it in, italic, with a tooltip
+    saying where it came from. So the slot carries the lock's label, its sync
+    state, and the configured PIN's length for the stand-in (#1282).
     """
     entry = current_entry("Withheld Codes", {1: "123456"})
     entry.add_to_hass(hass)
-    with when_mock_lock_built(lambda lock: lock.write_only.add(1)):
+    with when_mock_lock_built(lambda lock: getattr(lock, knob).add(1)):
         assert await hass.config_entries.async_setup(entry.entry_id)
         await hass.async_block_till_done()
     in_sync = in_sync_entity_id(hass, entry, 1, LOCK_1_ENTITY_ID)
@@ -3898,22 +3926,12 @@ async def test_a_lock_that_withholds_codes_tells_the_card_the_pin_length(
     )
 
     # Opened only now: the frozen clock must not move while it is open.
-    ws_client = await hass_ws_client(hass)
-    await ws_client.send_json(
-        {
-            "id": 1,
-            "type": "lock_code_manager/subscribe_lock_codes",
-            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
-            "reveal": False,
-        }
-    )
-    assert (await ws_client.receive_json())["success"]
-    event = (await ws_client.receive_json())["event"]
+    slot = await _async_slot_payload(hass, hass_ws_client, 1)
 
-    [slot] = [s for s in event[CONF_SLOTS] if s[ATTR_SLOT] == 1]
-    assert slot[ATTR_CODE] is None
+    assert slot[ATTR_CODE] == label
+    assert ATTR_CODE_LENGTH not in slot
     assert slot["in_sync"] is True
-    assert slot["code_length"] == 6
+    assert slot["managed"] is True
     assert slot["configured_code_length"] == 6
     assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -3937,7 +3955,7 @@ async def test_a_code_removed_at_the_keypad_leaves_the_lock_card(
         blocking=True,
     )
     await hass.async_block_till_done()
-    assert lock_codes(hass, LOCK_1_ENTITY_ID)[7].pin == "4242"
+    assert lock_codes(hass, LOCK_1_ENTITY_ID)[7] == "4242"
 
     del lock.codes[7]  # deleted at the keypad
     await hass.services.async_call(
@@ -3948,5 +3966,4 @@ async def test_a_code_removed_at_the_keypad_leaves_the_lock_card(
     )
     await hass.async_block_till_done()
 
-    credential = lock_codes(hass, LOCK_1_ENTITY_ID).get(7)
-    assert credential is None or not credential.pin
+    assert lock_codes(hass, LOCK_1_ENTITY_ID).get(7) in (None, SlotCode.EMPTY)

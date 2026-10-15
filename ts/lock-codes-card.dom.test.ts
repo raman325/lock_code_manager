@@ -151,7 +151,7 @@ describe('lock-codes card, rendered', () => {
 
     it.each([
         [
-            'the masked slot the backend sends',
+            'a readable PIN, masked',
             {
                 code: null,
                 code_length: 6,
@@ -160,18 +160,26 @@ describe('lock-codes card, rendered', () => {
             }
         ],
         [
-            'an unreadable code with its configured length',
+            'a withheld code in sync',
             {
                 code: 'unreadable_code',
+                configured_code_length: 6,
+                in_sync: true
+            }
+        ],
+        [
+            "a slot in sync the lock didn't answer for",
+            {
+                code: 'unanswered',
                 configured_code_length: 6,
                 in_sync: true
             }
         ]
     ])('masks %s to the PIN length, not a fixed 3 dots (PR #1282)', async (_label, code) => {
         // Matter and masking Z-Wave locks never report the digits; the card
-        // showed a fixed three dots whatever the PIN's length. The first slot
-        // is what tests/test_websocket.py's
-        // test_a_lock_that_withholds_codes_tells_the_card_the_pin_length
+        // showed a fixed three dots whatever the PIN's length. The last two
+        // are what tests/test_websocket.py's
+        // test_a_lock_that_gives_no_pin_back_is_never_shown_as_reporting_one
         // receives from the backend.
         const root = await show([{ ...managed, ...code }]);
 

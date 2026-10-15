@@ -232,9 +232,9 @@ const lockCodesCardComponentStyles = css`
         padding: 2px 8px;
     }
 
-    /* Slot enabled but lock doesn't have the code yet — clock-icon prefix on
-       the name. Mirrors the .lcm-code.pending treatment. The disabled rule's
-       pill background takes precedence if a slot is somehow both. */
+    /* Managed slot out of sync, a write due — clock-icon prefix on the name.
+       Mirrors the .lcm-code.pending treatment. The disabled rule's pill
+       background takes precedence when a slot is both. */
     .slot-chip.pending .slot-name-pending-icon {
         --mdc-icon-size: 12px;
         color: var(--secondary-text-color);
