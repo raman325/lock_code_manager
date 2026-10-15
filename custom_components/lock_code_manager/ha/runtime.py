@@ -86,6 +86,9 @@ CORE_KEYS = (
     REBUILD_LOCK_KEY,
 )
 
+# The repair naming the slots whose clear or one-off write a re-pair dropped.
+RE_PAIRED_WORK_DROPPED: Final = "lock_re_paired_work_dropped"
+
 # How long a one-off write from a repair or the card is waited for.
 WRITE_ONCE_WAIT = 60.0
 
@@ -395,7 +398,9 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
     worker may have written there since the re-pair, and a fingerprint of a
     write to the old device must not pass for the new one's -- and the new
     device starts unknown to report. Clears owed to the old device are moot:
-    it is gone. Its record under the old registry id goes at the next start.
+    it is gone; a repair names their slots, which the same lock re-paired
+    may still hold. Its record under the old registry id goes at the next
+    start.
     """
     data = hass.data[DATA]
     registry = lock_registry(hass)
@@ -413,6 +418,23 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
         return
     _LOGGER.info("%s is a different device now (re-paired): starting it over", lock)
     moot = sorted(n for n, slot in worker.slots.items() if slot.release)
+    if moot:
+        # The same lock under a new registry id (moved between integrations)
+        # may still hold a removed user's code. Not replayed: on a new device
+        # the slot may hold a keypad code. The user checks.
+        async_create_issue(
+            hass,
+            DOMAIN,
+            per_lock_issue_id(RE_PAIRED_WORK_DROPPED, lock),
+            is_fixable=True,
+            is_persistent=True,
+            severity=IssueSeverity.WARNING,
+            translation_key=RE_PAIRED_WORK_DROPPED,
+            translation_placeholders={
+                "lock_entity_id": lock,
+                "slots": ", ".join(map(str, moot)),
+            },
+        )
     for slot in moot:
         _LOGGER.warning(
             "Slot %s on %s was still being cleared when the device was "
