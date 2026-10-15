@@ -5,7 +5,7 @@ import contextlib
 from datetime import datetime, timedelta
 import logging
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, PropertyMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
@@ -376,6 +376,57 @@ async def test_subscribe_lock_codes(
     ]
     assert codes[0] == {1: "9999", 2: "empty"}
     assert codes[-1] == {1: "1234", 2: "empty"}
+
+
+async def test_subscribe_lock_codes_shows_a_slot_being_checked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    hass_ws_client: WebSocketGenerator,
+) -> None:
+    """
+    A managed slot being checked is listed as checking and not in sync.
+
+    The lock-codes card shows it pending, as the slot card does, rather than
+    leaving the row out.
+    """
+    await hass.async_block_till_done()
+    worker = _lock_1_worker(hass)
+    worker.slots[1].seen = None
+    worker.on_change()
+    await hass.async_block_till_done()
+
+    ws_client = await hass_ws_client(hass)
+    await ws_client.send_json(
+        {
+            "id": 1,
+            "type": "lock_code_manager/subscribe_lock_codes",
+            ATTR_LOCK_ENTITY_ID: LOCK_1_ENTITY_ID,
+            "reveal": True,
+        }
+    )
+    assert (await ws_client.receive_json())["success"]
+    slots = {
+        slot[ATTR_SLOT]: slot
+        for slot in (await ws_client.receive_json())["event"][CONF_SLOTS]
+    }
+    assert slots[1][ATTR_CODE] == SlotCode.CHECKING
+    assert slots[1][ATTR_MANAGED] is True
+    assert slots[1][ATTR_IN_SYNC] is False
+
+
+async def test_lock_codes_leaves_out_a_slot_never_read_before_the_lock_answers(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A slot with no reading on a lock that has not answered has nothing to show."""
+    await hass.async_block_till_done()
+    _lock_1_worker(hass).slots[1].seen = None
+    with patch.object(
+        LockWorker, "answered", new_callable=PropertyMock, return_value=False
+    ):
+        assert 1 not in lock_codes(hass, LOCK_1_ENTITY_ID)
 
 
 async def test_subscribe_lock_codes_sync_status(
