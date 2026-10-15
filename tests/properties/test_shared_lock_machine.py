@@ -642,12 +642,26 @@ class SharedLockMachine(RuleBasedStateMachine):
         position = self.positions[index]
         assert position.entry is not None
         added = next(lock for lock in LOCKS if lock not in position.locks)
-        self._configure_locks(position.entry, (*position.locks, added))
-        position.locks = (*position.locks, added)
+        locks = (*position.locks, added)
+        if not self._ready(added):
+            # A lock whose provider never finished setting up cannot be read
+            # for codes in the way, and is refused rather than written blind.
+            result = self._submit_locks(position.entry, locks)
+            assert result["errors"] == {"base": "occupancy_unknown"}, result
+            return
+        if self.physical[added].get(index + 1):
+            # A code already in the entry's slot on that lock is refused, not
+            # written over (#1684). The user clears it at the keypad, as the
+            # refusal asks, and adds the lock again.
+            result = self._submit_locks(position.entry, locks)
+            assert result["errors"] == {"base": "existing_codes"}, result
+            del self.physical[added][index + 1]
+        self._configure_locks(position.entry, locks)
+        position.locks = locks
         position.holds.add(added)
 
-    def _configure_locks(self, entry: ConfigEntry, locks: tuple[str, ...]) -> None:
-        """Submit the options flow with ``locks`` and check the entry took it."""
+    def _submit_locks(self, entry: ConfigEntry, locks: tuple[str, ...]) -> Any:
+        """Submit the options flow with ``locks`` and return its result."""
 
         async def _submit() -> Any:
             started = await self.hass.config_entries.options.async_init(entry.entry_id)
@@ -655,7 +669,11 @@ class SharedLockMachine(RuleBasedStateMachine):
                 self.hass, started["flow_id"], {CONF_LOCKS: list(locks)}
             )
 
-        result = self._act(_submit, "options flow")
+        return self._act(_submit, "options flow")
+
+    def _configure_locks(self, entry: ConfigEntry, locks: tuple[str, ...]) -> None:
+        """Submit the options flow with ``locks`` and check the entry took it."""
+        result = self._submit_locks(entry, locks)
         assert result["type"] is FlowResultType.CREATE_ENTRY, result
         assert entry.data[CONF_LOCKS] == list(locks)
 

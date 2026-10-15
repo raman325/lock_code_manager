@@ -487,13 +487,6 @@ async def test_an_overlap_error_names_the_users_in_the_way(
     assert "Grandma" in rendered
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open (#1684): adding a lock in the options flow never reads it, so codes "
-        "already on it are overwritten"
-    ),
-)
 async def test_adding_a_lock_keeps_the_codes_already_on_it(
     hass: HomeAssistant,
     freezer: FrozenDateTimeFactory,

@@ -44,6 +44,7 @@ from .domain.allocation import (
     SlotAllocationError,
     async_allocate_for,
     async_check_slot_capacity,
+    async_read_occupancy,
 )
 from .domain.config import EntryConfig, async_write_entry_config
 from .domain.names import (
@@ -194,6 +195,32 @@ def _check_common_slots(
             "lock": lock,
             "entry_title": entry_title,
         }
+
+
+async def _async_check_existing_codes(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    locks: Sequence[str],
+    slots: Collection[int],
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """
+    Refuse a lock that already holds codes in the entry's slots.
+
+    The entry's numbers were issued before the lock joined it, so nothing
+    checked them against what the lock holds, and the first sync would write
+    over a code someone set at the keypad. Read as allocation reads, so a lock
+    that cannot answer is refused the way setup refuses it.
+    """
+    occupancy = await async_read_occupancy(hass, config_entry, locks, slots)
+    if not occupancy.is_known:
+        return {"base": "occupancy_unknown"}, {"locks": ", ".join(occupancy.unreadable)}
+    for lock in occupancy.locks:
+        if lock.constrains_allocation and lock.occupied:
+            return {"base": "existing_codes"}, {
+                "lock": lock.lock_entity_id,
+                "slots": ", ".join(str(slot) for slot in sorted(lock.occupied)),
+            }
+    return {}, {}
 
 
 async def _async_save_locks_and_reload(
@@ -855,19 +882,18 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             errors, description_placeholders = _check_unclaimed_mqtt_locks(
                 self.hass, user_input[CONF_LOCKS], config.locks
             )
+            # A lock added here arrives with numbers issued without looking
+            # at it. Only added locks: an overlap the entry already carries on
+            # a lock it holds must not refuse every later edit of its locks.
+            added = [
+                lock_entity_id
+                for lock_entity_id in user_input[CONF_LOCKS]
+                if lock_entity_id not in config.locks
+            ]
             if not errors:
-                # A lock added here arrives with numbers issued without looking
-                # at it, so another entry may already manage some of them on it.
-                # Only added locks: an overlap the entry already carries on a
-                # lock it holds must not refuse every later edit of its locks.
+                # Another entry may already manage some of them on it.
                 errors, description_placeholders = _check_common_slots(
-                    self.hass,
-                    [
-                        lock_entity_id
-                        for lock_entity_id in user_input[CONF_LOCKS]
-                        if lock_entity_id not in config.locks
-                    ],
-                    config.slot_numbers,
+                    self.hass, added, config.slot_numbers
                 )
             if not errors and config.slot_numbers:
                 # The users are not on this form, but the numbers they hold
@@ -884,6 +910,11 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 except SlotAllocationError as err:
                     errors = {"base": err.translation_key}
                     description_placeholders = err.placeholders
+            if not errors and added and config.slot_numbers:
+                # Or someone may have set codes in them at the keypad.
+                errors, description_placeholders = await _async_check_existing_codes(
+                    self.hass, self.config_entry, added, config.slot_numbers
+                )
             if not errors:
                 if self.config_entry.state in (
                     ConfigEntryState.SETUP_ERROR,
