@@ -193,10 +193,18 @@ class LockWorker[P: LockPort]:
         if (current := self.slots.get(slot)) is None:
             self.slots[slot] = Slot(pin, wrote=self.recall(slot), release=release)
         else:
-            if slot in self._unsure and current.seen is not Seen.SILENT:
-                # A write since the last reading may have landed: read first.
-                current.seen = None
             current.aim(pin, release=release)
+            if (
+                slot in self._unsure
+                and current.seen is not Seen.SILENT
+                and current.agrees(self.salt)
+            ):
+                # A write since the last reading may have landed, so a reading
+                # that agrees with the new target cannot vouch for it: read
+                # first. One that disagrees only leads to a write: the slot
+                # stays out of sync, pending, not unknown -- a read-back that
+                # failed is no reason to forget what the lock said.
+                current.seen = None
         self.request_sync((slot,))
         # Backing off with nothing to probe: probe this one.
         self._schedule_probe()

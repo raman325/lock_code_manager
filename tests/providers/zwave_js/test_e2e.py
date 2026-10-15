@@ -2863,3 +2863,67 @@ class TestRestartMidWrite:
             == STATE_ON
         )
         assert lcm_issue_ids(hass) == []
+
+
+class TestReEnableAfterUnconfirmedClear:
+    """A slot turned back on after its clear's read-back failed."""
+
+    @pytest.fixture(name="lock_schlage_be469_state")
+    def supervised_state_fixture(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC: the clear is not verified."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    async def test_the_slot_shows_pending_not_unknown(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Found on a production test: a slot turned back on went unavailable.
+
+        The user was turned off and the clear landed. The lock reported the
+        slot empty, then the read-back failed with a transient Z-Wave error
+        (ZW1405). Turned back on a few seconds later, the slot's sensors went
+        unavailable and the card showed the lock as unknown until the PIN
+        was back. They stay available, out of sync (pending) until then.
+        """
+        entry = fake_zwave_lock_entry
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        with fake_zwave_lock.fail(
+            "get",
+            1,
+            times=1,
+            error_code=1405,
+            error_message="The node failed to decode the message. (ZW1405)",
+        ) as fault:
+            fail = fault.async_before
+
+            async def _report_then_fail() -> None:
+                # The lock's report of the empty slot gets through, then the
+                # read-back fails.
+                fake_zwave_lock.report(1)
+                await fail()
+
+            fault.async_before = _report_then_fail  # type: ignore[method-assign]
+            await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+            # Less than the slot's wait before it tries again.
+            await async_advance_clock(hass, freezer, 8)
+        assert fault.hits == 1
+        assert fake_zwave_lock.holds(1) is None
+        assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "")
+
+        states = _record_slot_states(hass, entry, lock_entity, 1)
+        await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        await async_advance_clock(hass, freezer, 60)
+
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert states[0] == (STATE_OFF, "")
+        assert all(STATE_UNAVAILABLE not in seen for seen in states), states
+        assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "9999")

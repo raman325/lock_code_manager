@@ -1086,7 +1086,20 @@ async def test_a_stop_cut_off_does_not_hang_the_next(rig_factory) -> None:
     await rig.settle()
 
 
-async def test_a_write_retargeted_while_out_is_not_read_back(rig_factory) -> None:
+@pytest.mark.parametrize(
+    ("target", "reads_first"),
+    [
+        # What the lock last said agrees with the new target, but the old
+        # write may have landed: read first.
+        ("0000", True),
+        # It disagrees: the slot is written either way, so it stays out of
+        # sync (pending) rather than unknown, and the write goes at once.
+        ("5555", False),
+    ],
+)
+async def test_a_write_retargeted_while_out_is_not_read_back(
+    rig_factory, target, reads_first
+) -> None:
     """The old target's write is not checked: the new one is synced on its own."""
     lock = FakeLock({1: "0000"})
     rig = await _started(rig_factory(lock), {1: "0000"})
@@ -1098,19 +1111,21 @@ async def test_a_write_retargeted_while_out_is_not_read_back(rig_factory) -> Non
         return await original(slots)
 
     lock.read = _note  # type: ignore[method-assign]
+    statuses: list[Status] = []
 
     def _retarget() -> None:
         lock.during_write.clear()
-        rig.worker.want(1, "5555")
+        rig.worker.want(1, target)
+        statuses.append(rig.status(1)[0])
 
     lock.during_write.append(_retarget)
     rig.worker.want(1, "1234")
     await rig.settle()
 
-    assert lock.writes[-2:] == [(1, "1234"), (1, "5555")]
-    # The new target's sync reads first -- the old write may have landed --
-    # then reads its own write back.
-    assert reads == [(1,), (1,)]
+    assert lock.writes[-2:] == [(1, "1234"), (1, target)]
+    assert statuses == [Status.UNKNOWN if reads_first else Status.OUT_OF_SYNC]
+    # Then the new target's own write is read back.
+    assert reads == ([(1,), (1,)] if reads_first else [(1,)])
     assert rig.status(1) == (Status.IN_SYNC, None)
 
 
