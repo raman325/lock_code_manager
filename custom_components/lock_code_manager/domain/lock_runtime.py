@@ -731,3 +731,15 @@ def lock_reachable(hass: HomeAssistant, lock_entity_id: str) -> bool | None:
     """Return whether the lock is answering; None without a worker."""
     worker = lock_registry(hass).worker(lock_entity_id)
     return None if worker is None else worker.reachable
+
+
+@callback
+def locks_that_cannot_report(hass: HomeAssistant, locks: Iterable[str]) -> list[str]:
+    """
+    Return those of ``locks`` read this run that never described a slot (#1581).
+
+    Every slot read came back silent or cannot-tell, so a code set at the
+    keypad is invisible, and the slots handed out may hold one.
+    """
+    reports = hass.data.get(DATA, {}).get(REPORTS_KEY, {})
+    return [lock for lock in locks if reports.get(lock) is False]

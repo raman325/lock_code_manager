@@ -47,6 +47,7 @@ from .domain.allocation import (
     async_read_occupancy,
 )
 from .domain.config import EntryConfig, async_write_entry_config
+from .domain.lock_runtime import locks_that_cannot_report
 from .domain.names import (
     identity,
     name_error,
@@ -343,6 +344,14 @@ async def _async_validate_users_yaml(
             {**err.placeholders, "num_users": str(wanted)},
         )
     return parsed_users, {}, {}
+
+
+def _cannot_report(locks: Iterable[str], slots: Iterable[int]) -> dict[str, str]:
+    """Name the locks that cannot report their codes, and the slots at risk."""
+    return {
+        "lock": ", ".join(locks),
+        "slots": ", ".join(str(slot) for slot in sorted(slots)),
+    }
 
 
 _AllocationOutcome = tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]
@@ -699,10 +708,16 @@ class LockCodeManagerFlowHandler(
         config = EntryConfig.from_mapping(
             {**self.data, CONF_SLOT_ASSIGNMENT: dict(assignment.slots)}
         )
+        silent = locks_that_cannot_report(self.hass, self.data[CONF_LOCKS])
         return self.async_create_entry(
             title=self.title,
             data=config.to_dict(),
             subentries=config.subentries(),
+            # Said on the way out, not asked: any lock would get these slots.
+            description="cannot_report" if silent else None,
+            description_placeholders=(
+                _cannot_report(silent, assignment.slots.values()) if silent else None
+            ),
         )
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
@@ -863,6 +878,9 @@ class LockCodeManagerFlowHandler(
 class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
 
+    # The locks submitted, held while the user reads ``cannot_report``.
+    _locks: list[str]
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -915,33 +933,20 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 errors, description_placeholders = await _async_check_existing_codes(
                     self.hass, self.config_entry, added, config.slot_numbers
                 )
-            if not errors:
-                if self.config_entry.state in (
-                    ConfigEntryState.SETUP_ERROR,
-                    ConfigEntryState.SETUP_RETRY,
+                if not errors and (
+                    silent := locks_that_cannot_report(self.hass, added)
                 ):
-                    # Saved as reauth saves: with no update listener to apply
-                    # it, a save left in `options` reports success while the
-                    # entry stays failed. Written before the reload rather
-                    # than left to Home Assistant, which writes the options
-                    # only after this step returns -- after a reload started
-                    # here has already read the entry.
-                    # Only these two states. Both are reached after migration,
-                    # so the entry's data no longer holds its users, and both
-                    # are ones Home Assistant will reload. Any other state that
-                    # is not loaded may be an entry that never migrated, whose
-                    # users this rewrite of its data would delete.
-                    await _async_save_locks_and_reload(
-                        self.hass, self.config_entry, user_input[CONF_LOCKS]
+                    # Nothing seen in the way may still be a keypad code.
+                    self._locks = user_input[CONF_LOCKS]
+                    return self.async_show_form(
+                        step_id="cannot_report",
+                        description_placeholders=_cannot_report(
+                            silent, config.slot_numbers
+                        ),
+                        last_step=True,
                     )
-                    return self.async_abort(reason="locks_updated")
-                # Only the entry's own half. The users are untouched in their
-                # subentries, and `extra` carries whatever else the entry
-                # holds so a form with one field does not erase the rest.
-                return self.async_create_entry(
-                    title="",
-                    data={**dict(config.extra), CONF_LOCKS: user_input[CONF_LOCKS]},
-                )
+            if not errors:
+                return await self._async_save(user_input[CONF_LOCKS])
 
         return self.async_show_form(
             step_id="init",
@@ -956,6 +961,39 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
+        )
+
+    async def async_step_cannot_report(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Save the locks once the user has been told one cannot report its codes."""
+        return await self._async_save(self._locks)
+
+    async def _async_save(self, locks: list[str]) -> dict[str, Any]:
+        """Save the entry's locks."""
+        if self.config_entry.state in (
+            ConfigEntryState.SETUP_ERROR,
+            ConfigEntryState.SETUP_RETRY,
+        ):
+            # Saved as reauth saves: with no update listener to apply
+            # it, a save left in `options` reports success while the
+            # entry stays failed. Written before the reload rather
+            # than left to Home Assistant, which writes the options
+            # only after this step returns -- after a reload started
+            # here has already read the entry.
+            # Only these two states. Both are reached after migration,
+            # so the entry's data no longer holds its users, and both
+            # are ones Home Assistant will reload. Any other state that
+            # is not loaded may be an entry that never migrated, whose
+            # users this rewrite of its data would delete.
+            await _async_save_locks_and_reload(self.hass, self.config_entry, locks)
+            return self.async_abort(reason="locks_updated")
+        # Only the entry's own half. The users are untouched in their
+        # subentries, and `extra` carries whatever else the entry
+        # holds so a form with one field does not erase the rest.
+        config = get_entry_config(self.config_entry)
+        return self.async_create_entry(
+            title="", data={**dict(config.extra), CONF_LOCKS: locks}
         )
 
 

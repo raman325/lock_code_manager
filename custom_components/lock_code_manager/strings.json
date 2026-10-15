@@ -72,6 +72,9 @@
     },
     "progress": {
       "allocating": "Reading which slots your locks already hold, so no user is given a number that is taken. A lock that answers one slot at a time can take a minute or more per lock."
+    },
+    "create_entry": {
+      "cannot_report": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
     }
   },
   "entity": {
@@ -161,6 +164,10 @@
         },
         "description": "Update the locks this configuration manages. Users are managed individually, from the entry's page.",
         "title": "Lock Code Manager"
+      },
+      "cannot_report": {
+        "title": "This lock can't report its codes",
+        "description": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
       }
     }
   },
