@@ -1,25 +1,19 @@
 """Utility functions for lock_code_manager."""
 
 from collections.abc import Iterable
-import logging
 import re
 from typing import Any
 import zlib
 
-from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN, SERVICE_TURN_OFF
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
-    ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
-    CONF_ENABLED,
     CONF_PIN,
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
-from homeassistant.helpers.issue_registry import IssueSeverity, async_create_issue
 
-from ..const import DOMAIN
-from .config import EntryConfig, build_slot_unique_id
+from .config import EntryConfig
 
 
 @callback
@@ -55,8 +49,6 @@ def lock_display_name(hass: HomeAssistant, lock_entity_id: str) -> str:
     # lock's own entity id was slugged from in the first place.
     return lock_entity_id.split(".", 1)[-1].replace("_", " ")
 
-
-_LOGGER = logging.getLogger(__name__)
 
 # Every repair issue keyed on a lock entity id. Creation sites live in
 # different layers (lock_offline in the coordinator, lock_setup_failed in
@@ -153,60 +145,3 @@ def deobfuscate_pins(text: str, table: dict[str, str]) -> tuple[str, dict[str, A
         "unmatched_tokens": sorted(unmatched),
     }
     return deobfuscated, summary
-
-
-async def async_disable_slot(
-    hass: HomeAssistant,
-    ent_reg: er.EntityRegistry,
-    config_entry_id: str,
-    slot_num: int,
-    *,
-    reason: str | None = None,
-    lock_name: str | None = None,
-    lock_entity_id: str | None = None,
-) -> bool:
-    """
-    Disable a slot via the enabled switch and optionally create a repair issue.
-
-    Returns True if the switch was found and turned off, False otherwise.
-    When reason is provided, a repair issue is created so the user can
-    acknowledge it through the Home Assistant repairs dashboard.
-    """
-    enabled_entity_id = ent_reg.async_get_entity_id(
-        SWITCH_DOMAIN,
-        DOMAIN,
-        build_slot_unique_id(config_entry_id, slot_num, CONF_ENABLED),
-    )
-    if not enabled_entity_id:
-        lock_context = f" on {lock_name} ({lock_entity_id})" if lock_name else ""
-        _LOGGER.warning(
-            "Cannot disable slot %s%s — switch entity not found",
-            slot_num,
-            lock_context,
-        )
-        return False
-
-    await hass.services.async_call(
-        SWITCH_DOMAIN,
-        SERVICE_TURN_OFF,
-        {ATTR_ENTITY_ID: enabled_entity_id},
-        blocking=True,
-    )
-
-    if reason:
-        issue_id = f"slot_disabled_{config_entry_id}_{slot_num}"
-        async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=True,
-            is_persistent=True,
-            severity=IssueSeverity.WARNING,
-            translation_key="slot_disabled",
-            translation_placeholders={
-                "slot_num": str(slot_num),
-                "reason": reason,
-            },
-        )
-
-    return True

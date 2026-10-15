@@ -21,12 +21,6 @@ entry's:
 - ``configured_owner``: the entry holding one slot, first match wins.
   Duplicate-code attribution, and crediting a credential use to an entry.
 
-Enabled entries in a load state that keeps their slots, the only ones whose
-slots are wanted on the lock:
-
-- ``syncing_owner``: the entry holding one slot. The credential Lock Code
-  Manager wants there (``desired_credential``).
-
 Entries that are not ignored, in any load state, disabled ones included:
 
 - ``another_entry_configures``: whether one other than the one asking lists
@@ -34,18 +28,9 @@ Entries that are not ignored, in any load state, disabled ones included:
   what the core remembers when a lock leaves an entry.
 - ``every_configured_lock``: every lock one lists. What the core remembers
   is kept for these alone.
-
-Who holds a live lock instance is a different question, about runtime
-objects rather than configuration:
-
-- ``entries_holding``: every entry holding one lock instance, in any state.
-  Release (``_lock_instance_held_by_another_entry`` in ``__init__``), and
-  whether the lock's coordinator honours "Disable polling". Acquisition asks
-  a narrower question (``_find_shared_lock_instance`` in ``__init__``).
 """
 
 from collections.abc import Iterable, Iterator
-from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -54,9 +39,6 @@ from homeassistant.util import slugify
 
 from ..const import CONF_SLOT, DOMAIN, SUBENTRY_TYPE_USER
 from .config import EntryConfig
-
-if TYPE_CHECKING:
-    from ..providers import BaseLock
 
 # The states in which an entry's ``runtime_data`` is the one its last setup
 # completed with. Home Assistant only starts unloading a loaded entry.
@@ -107,46 +89,14 @@ def subentry_id_for_slot(entry: ConfigEntry, slot_num: int) -> str | None:
     )
 
 
-# Load states in which an enabled entry keeps its slots: loaded, or on its way
-# there. A reload passes through UNLOAD_IN_PROGRESS and NOT_LOADED without
-# anybody releasing the slots, and an entry syncs them before its setup
-# finishes. An entry whose setup, migration or unload failed syncs nothing
-# until the user acts, so its slots are not wanted on the lock.
-_KEEPS_ITS_SLOTS_STATES = frozenset(
-    {
-        ConfigEntryState.LOADED,
-        ConfigEntryState.SETUP_IN_PROGRESS,
-        ConfigEntryState.SETUP_RETRY,
-        ConfigEntryState.NOT_LOADED,
-        ConfigEntryState.UNLOAD_IN_PROGRESS,
-    }
-)
-
-
 def _every_entry(hass: HomeAssistant) -> list[ConfigEntry]:
     """Every entry, in any load state, disabled and ignored ones included."""
     return hass.config_entries.async_entries(DOMAIN)
 
 
-def _enabled_entries(hass: HomeAssistant) -> list[ConfigEntry]:
-    """Every entry that is neither disabled nor ignored, in any load state."""
-    return hass.config_entries.async_entries(
-        DOMAIN, include_disabled=False, include_ignore=False
-    )
-
-
 def _listing_entries(hass: HomeAssistant) -> list[ConfigEntry]:
     """Every entry that is not ignored, in any load state, disabled ones included."""
     return hass.config_entries.async_entries(DOMAIN, include_ignore=False)
-
-
-def _syncing_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:
-    """Every enabled entry in a load state that keeps its slots."""
-    return (
-        entry
-        for entry in _enabled_entries(hass)
-        if entry.state in _KEEPS_ITS_SLOTS_STATES
-    )
 
 
 def _configuring(
@@ -227,19 +177,6 @@ def configured_owner(
     return _owner(_every_entry(hass), lock_entity_id, code_slot)
 
 
-def syncing_owner(
-    hass: HomeAssistant, lock_entity_id: str, code_slot: int | str
-) -> ConfigEntry | None:
-    """
-    Return the entry whose user holds the slot on the lock, if it syncs it.
-
-    Only an enabled entry in a state that keeps its slots
-    (``_KEEPS_ITS_SLOTS_STATES``) counts: it is the only kind whose slots are
-    wanted on the lock.
-    """
-    return _owner(_syncing_entries(hass), lock_entity_id, code_slot)
-
-
 def another_entry_configures(
     hass: HomeAssistant, config_entry: ConfigEntry, lock_entity_id: str
 ) -> bool:
@@ -249,9 +186,8 @@ def another_entry_configures(
     Counts every entry that is not ignored, in any load state, disabled ones
     included: a lock a disabled entry lists has not left Lock Code Manager,
     and enabling the entry again finds what was kept for it -- the per-lock
-    repairs, the provider's stored state, what was last written. Anything
-    that tears down live objects asks ``_lock_instance_held_by_another_entry``
-    in ``__init__`` instead.
+    repairs, the provider's stored state, what was last written. Who holds
+    a live lock instance is the lock registry's question instead.
     """
     return any(
         entry.entry_id != config_entry.entry_id
@@ -266,26 +202,6 @@ def every_configured_lock(hass: HomeAssistant) -> set[str]:
         for entry in _listing_entries(hass)
         for lock in get_entry_config(entry).locks
     }
-
-
-def entries_holding(
-    hass: HomeAssistant, lock_entity_id: str, lock: BaseLock
-) -> Iterator[ConfigEntry]:
-    """
-    Yield every entry holding this very lock instance, in any state.
-
-    An entry holds an instance while it sits in the entry's
-    ``runtime_data.locks``: put there when the entry builds or shares it,
-    taken out when the entry lets go. Asked by identity, not configuration:
-    an entry can list a lock it does not hold, and an entry setting up while
-    another unloads can hold a second instance for the same lock.
-    """
-    return (
-        entry
-        for entry in _every_entry(hass)
-        if (runtime_data := getattr(entry, "runtime_data", None)) is not None
-        and runtime_data.locks.get(lock_entity_id) is lock
-    )
 
 
 def iter_loaded_lcm_entries(hass: HomeAssistant) -> Iterator[ConfigEntry]:

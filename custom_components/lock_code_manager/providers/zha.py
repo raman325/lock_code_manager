@@ -150,7 +150,6 @@ class ZHALock(BaseLock):
     """
 
     _door_lock_cluster: DoorLock | None = field(init=False, default=None)
-    _endpoint_id: int | None = field(init=False, default=None)
     _supports_programming_events: bool | None = field(init=False, default=None)
 
     # One ZCL command per slot, each of them slow; see _WORST_CASE_ZCL_COMMAND.
@@ -204,7 +203,6 @@ class ZHALock(BaseLock):
         """
         self.unsubscribe_push_updates()
         self._door_lock_cluster = None
-        self._endpoint_id = None
         await super().async_setup(config_entry)
         self._supports_programming_events = (
             await self._async_check_programming_event_support()
@@ -248,7 +246,6 @@ class ZHALock(BaseLock):
             for cluster in endpoint.in_clusters.values():
                 if cluster.cluster_id == DoorLock.cluster_id:
                     self._door_lock_cluster = cluster
-                    self._endpoint_id = endpoint_id
                     _LOGGER.debug(
                         "Found DoorLock cluster on endpoint %s for %s",
                         endpoint_id,

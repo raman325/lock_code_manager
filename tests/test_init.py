@@ -77,7 +77,6 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
-    ENTITY_IDS_RENAMED_ISSUE,
     EVENT_CREDENTIAL_USED,
     SERVICE_DELETE_USER,
     SERVICE_DEOBFUSCATE_LOG,
@@ -4873,7 +4872,9 @@ async def test_migration_leaves_an_entity_that_already_has_the_right_id(
         == "text.all_locks_raman_pin"
     )
     # Nothing moved, so the user is not told anything moved.
-    assert ir.async_get(hass).async_get_issue(DOMAIN, ENTITY_IDS_RENAMED_ISSUE) is None
+    assert f"{DOMAIN}_entity_ids_renamed" not in hass.data.get(
+        "persistent_notification", {}
+    )
 
     await hass.config_entries.async_unload(entry.entry_id)
 

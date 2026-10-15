@@ -62,9 +62,7 @@ ATTR_MANAGED = "managed"
 # which on the condition commands means the condition entity itself.
 ATTR_USER_ENTITY_ID = "user_entity_id"
 
-# One repair for the whole entity-ID rename, however many entries moved.
-ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
-# Where the migration accumulates those renames while entries migrate.
+# Where the migration accumulates the entity-ID renames while entries migrate.
 RENAMES_KEY: Final = "migration_renames"
 
 
@@ -241,26 +239,9 @@ CONDITION_ENTITY_DOMAINS = [
 # These create switch/binary_sensor entities but their states don't map to access control
 EXCLUDED_CONDITION_PLATFORMS = frozenset({"scheduler"})
 
-# Coordinator backoff
-BACKOFF_FAILURE_THRESHOLD: int = 3
-BACKOFF_INITIAL_SECONDS: int = 60
-BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
-
-# Poll failure alerting
-POLL_FAILURE_ALERT_THRESHOLD: int = 12
-
-# How long a write waits to be seen on the lock before it is given up and
-# re-synced. The coordinator reads the lock back on its own schedule while it
-# waits, so this does not have to span a polled lock's scan interval -- and
-# must not be long: a write the lock never keeps is given up by the first
-# look at or after the deadline, so one failed cycle is this plus up to
-# CONFIRM_READ_INTERVAL plus the read and the re-set, and the breaker only
-# trips when three such failures land inside SYNC_ATTEMPT_WINDOW.
+# How long a cloud lock (Schlage) may keep reading back the table from before
+# a write: the provider's ``read_lag``.
 PENDING_WRITE_TTL: float = 60.0
-# How often the coordinator reads the lock back while a write is pending: four
-# looks inside one time to live, so a write that landed late is seen well
-# before the deadline and a lock that never keeps it is asked, not hammered.
-CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
 
 
 # Defaults

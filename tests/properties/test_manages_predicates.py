@@ -50,7 +50,6 @@ from custom_components.lock_code_manager.domain.queries import (
     entries_configuring,
     get_entry_config,
     slots_configured_on,
-    syncing_owner,
 )
 
 from ..common import user_subentries
@@ -58,17 +57,6 @@ from ..common import user_subentries
 LOCKS = ("lock.front", "lock.back", "lock.side")
 SLOTS = tuple(range(1, 6))
 
-# Written out rather than imported: the oracle states which load states keep
-# an entry's slots wanted on the lock, so it cannot borrow the answer.
-KEEPS_ITS_SLOTS = frozenset(
-    {
-        ConfigEntryState.LOADED,
-        ConfigEntryState.SETUP_IN_PROGRESS,
-        ConfigEntryState.SETUP_RETRY,
-        ConfigEntryState.NOT_LOADED,
-        ConfigEntryState.UNLOAD_IN_PROGRESS,
-    }
-)
 CACHE_IS_CURRENT = frozenset(
     {ConfigEntryState.LOADED, ConfigEntryState.UNLOAD_IN_PROGRESS}
 )
@@ -98,16 +86,6 @@ class EntrySpec:
         if self.cached is not None and self.state in CACHE_IS_CURRENT:
             return self.cached
         return self.stored
-
-    @property
-    def enabled(self) -> bool:
-        """Neither disabled nor ignored, in any load state."""
-        return not self.disabled and not self.ignored
-
-    @property
-    def keeps_its_slots(self) -> bool:
-        """Enabled, and in a load state whose slots are wanted on the lock."""
-        return self.enabled and self.state in KEEPS_ITS_SLOTS
 
     def configures(self, lock: str) -> bool:
         """Whether this entry lists ``lock``."""
@@ -316,31 +294,6 @@ def test_configured_owner_is_the_first_entry_listing_the_slot(
                 )
                 actual = configured_owner(hass, lock, slot)
                 assert actual is _frozen_find_entry_for_lock_slot(hass, lock, slot)
-                assert actual is expected
-
-    _with_entries(specs, probe)
-
-
-@given(specs=ENTRY_SETS)
-def test_syncing_owner_counts_only_entries_keeping_their_slots(
-    specs: list[EntrySpec],
-) -> None:
-    """Only an enabled entry in a state that keeps its slots owns one."""
-
-    def probe(hass: HomeAssistant, entries: list[MockConfigEntry]) -> None:
-        for lock in LOCKS:
-            for slot in SLOTS:
-                expected = _first(
-                    specs,
-                    entries,
-                    lambda spec: (
-                        spec.keeps_its_slots and spec.configures_slot(lock, slot)
-                    ),
-                )
-                actual = syncing_owner(hass, lock, slot)
-                assert actual is _frozen_find_entry_for_lock_slot(
-                    hass, lock, slot, keeping_slots=True
-                )
                 assert actual is expected
 
     _with_entries(specs, probe)

@@ -1109,7 +1109,7 @@ async def test_async_setup_clears_cached_state(
 
     # The cluster was re-discovered (cache cleared then re-populated)
     # Verify the cache was cleared by checking it went through discovery again
-    assert zha_lock._endpoint_id is not None
+    assert zha_lock._door_lock_cluster is cluster
 
 
 async def test_async_setup_is_idempotent(

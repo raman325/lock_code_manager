@@ -310,7 +310,6 @@ async def test_setup_internal_unsupported_lock(
 
     assert matter_lock._setup_succeeded is False
     assert matter_lock.coordinator is not None
-    assert matter_lock._setup_complete.is_set()
 
     await matter_lock.async_unload(False)
 

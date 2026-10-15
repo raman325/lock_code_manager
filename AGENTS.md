@@ -76,11 +76,11 @@ entities.
   and `async_call_service()` helper (wraps HA service calls with `LockDisconnected` error handling)
 - Config questions -- which entry's configuration lists this lock or slot -- go through the named
   questions in `domain/queries.py` (`entries_configuring`, `slots_configured_on`, `configured_owner`,
-  `syncing_owner`, `another_enabled_entry_configures`). Each counts a different set of entries;
+  `another_entry_configures`, `every_configured_lock`). Each counts a different set of entries;
   ask the one you mean rather than filtering `async_entries` by hand. Live lock-instance ownership
-  is a separate question and filters by load state on purpose: `_find_shared_lock_instance` and
-  `_lock_instance_held_by_another_entry` in `__init__.py`, and `iter_loaded_lcm_entries` /
-  `get_managed_locks` for the locks loaded entries hold
+  is a separate question and filters by load state on purpose: the lock registry
+  (`core/registry.py`), and `iter_loaded_lcm_entries` / `get_managed_locks` for the locks loaded
+  entries hold
 
 **Coordinator** (`coordinator.py`)
 
