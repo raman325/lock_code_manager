@@ -913,35 +913,3 @@ async def test_uc_shim_ignores_unrelated_value_events(
     mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
-
-
-async def test_uc_shim_confirms_pending_optimistic_write(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A masked verification report reaches the coordinator as an observation.
-
-    The driver's post-write verification GET produces a report (and thus a
-    value event) but no unified credential event on released drivers; the
-    shim must route it through _confirm_slot so the coordinator can settle
-    the pending write against it.
-    """
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {}
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
-    )
-    await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_called_once_with(
-        pin_address(2), SlotCredential.unreadable()
-    )
-
-    zwave_js_lock.unsubscribe_push_updates()

@@ -77,7 +77,6 @@ def test_a_supervision_fail_refuses_the_write(operation):
         _raise_on_supervision_fail(operation, 3, {"status": 2})
 
 
-@pytest.mark.parametrize("operation", ["set", "clear"])
 @pytest.mark.parametrize(
     "result",
     [
@@ -100,6 +99,11 @@ def test_a_supervision_fail_refuses_the_write(operation):
         pytest.param(2, id="bare_number"),
     ],
 )
-def test_any_other_result_leaves_the_write_standing(operation, result):
-    """Only an explicit Fail changes what a successful api call means."""
-    _raise_on_supervision_fail(operation, 3, result)
+def test_any_other_result_leaves_the_write_standing(result):
+    """
+    Only an explicit Fail changes what a successful api call means.
+
+    The operation name is read only to word the refusal, so ``set`` stands in
+    for ``clear`` too.
+    """
+    _raise_on_supervision_fail("set", 3, result)
