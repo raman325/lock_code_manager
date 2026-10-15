@@ -571,9 +571,10 @@ class MatterLock(BaseLock):
             supports_user_management=bool(info.get("supports_user_management")),
             max_users=info.get("max_users") or 0,
             credential_types=credential_types,
-            # Matter DoorLock spec caps UserName at 32 bytes UTF-8;
-            # ``matter.lock_helpers`` does not yet surface the attribute.
-            max_user_name_length=32,
+            # The Matter DoorLock cluster limits UserName to 10 characters, not
+            # 32, and some locks (Aqara U400) accept exactly 10 but then fail
+            # every GetUser walk. Names of 9 or fewer work, so advertise 9.
+            max_user_name_length=9,
         )
 
     @override
