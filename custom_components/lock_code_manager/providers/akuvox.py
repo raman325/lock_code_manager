@@ -29,7 +29,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
-    LockOperationFailed,
+    LockOperationError,
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -281,7 +281,7 @@ class AkuvoxLock(BaseLock):
             tagged_name = _make_tagged_name(slot_num, original_name)
             try:
                 await self._async_modify_user(device_id, name=tagged_name)
-            except (LockDisconnected, LockOperationFailed) as err:
+            except LockOperationError as err:
                 LOGGER.error(
                     "Lock %s: failed to tag user '%s' for slot %d: %s",
                     self.lock.entity_id,

@@ -37,7 +37,7 @@ from ..domain.exceptions import (
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
-    LockOperationFailed,
+    LockOperationError,
     LockOperationUnsupported,
 )
 from ..domain.models import SlotCredential
@@ -75,7 +75,7 @@ def lock_error(
         kind = ErrorKind.SLOT_REFUSED if clearing else ErrorKind.VALUE_REFUSED
     elif isinstance(err, LockOperationUnsupported):
         kind = ErrorKind.SLOT_REFUSED
-    elif isinstance(err, (LockOperationFailed, LockDisconnected, LockBusy)):
+    elif isinstance(err, (LockOperationError, LockBusy)):
         kind = ErrorKind.NO_ANSWER
     else:
         return None

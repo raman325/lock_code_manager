@@ -36,7 +36,7 @@ from ..domain.credentials import (
 from ..domain.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
-    LockOperationFailed,
+    LockOperationError,
 )
 from ..domain.models import SlotCredential
 from ._base import BaseLock
@@ -249,7 +249,7 @@ class SchlageLock(BaseLock):
 
             try:
                 await self._async_add_code(tagged_name, pin)
-            except (LockDisconnected, LockOperationFailed) as err:
+            except LockOperationError as err:
                 LOGGER.error(
                     "Lock %s: failed to tag code '%s' for slot %d: %s",
                     self.lock.entity_id,
@@ -263,7 +263,7 @@ class SchlageLock(BaseLock):
 
             try:
                 await self._async_delete_code(original_name)
-            except (LockDisconnected, LockOperationFailed) as err:
+            except LockOperationError as err:
                 LOGGER.warning(
                     "Lock %s: tagged code added but failed to delete original '%s' "
                     "for slot %d: %s, attempting rollback",
@@ -276,7 +276,7 @@ class SchlageLock(BaseLock):
                     first_disconnect = err
                 try:
                     await self._async_delete_code(tagged_name)
-                except (LockDisconnected, LockOperationFailed) as rollback_err:
+                except LockOperationError as rollback_err:
                     LOGGER.error(
                         "Lock %s: rollback failed for tagged code '%s', "
                         "lock may have duplicate entries: %s",
@@ -411,12 +411,12 @@ class SchlageLock(BaseLock):
             names_to_delete = {n for n in (existing_full_name, tagged_name) if n}
             for code_name in names_to_delete:
                 # code may not exist — that's fine
-                with contextlib.suppress(LockDisconnected, LockOperationFailed):
+                with contextlib.suppress(LockOperationError):
                     await self._async_delete_code(code_name)
 
             try:
                 await self._async_add_code(tagged_name, pin)
-            except (LockDisconnected, LockOperationFailed) as err:
+            except LockOperationError as err:
                 # Schlage's cloud API has eventual consistency: a delete may not
                 # propagate before the add, causing "already exists".  Since Personal
                 # Identification Numbers are write-only we can't verify the value,
