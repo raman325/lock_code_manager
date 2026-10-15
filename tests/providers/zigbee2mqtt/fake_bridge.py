@@ -16,7 +16,8 @@ What it models:
 
 - The lock's PIN table, one ``(userstatus, pincodevalue)`` per user id, in
   the Door Lock cluster's terms (``CN:340-344``: 0 available, 1 enabled,
-  3 disabled).
+  3 disabled). Any other status is published as ``not_supported_<status>``
+  (``FZ:388-390``).
 - ``/set`` with ``pin_code`` (``TZ:430-455``): no code clears the user
   (``clearPinCode``); a code sets it enabled, or disabled when
   ``user_enabled`` is false (``setPinCode``). A user outside
@@ -55,6 +56,8 @@ from homeassistant.core import HomeAssistant
 AVAILABLE = 0
 ENABLED = 1
 DISABLED = 3
+# The cluster's "Not Supported": the lock cannot report its users.
+NOT_SUPPORTED = 0xFF
 _STATUS_NAMES = {AVAILABLE: "available", ENABLED: "enabled", DISABLED: "disabled"}
 
 # lockSourceName (CN:290-296).
@@ -76,6 +79,9 @@ class FakeZ2MBridge:
     # Reads never answered (a bridge or lock that cannot read codes back);
     # writes still land.
     silent: bool = False
+    # Reads answered, but every one with user status Not Supported and no
+    # code (#1581); writes still land.
+    cannot_tell: bool = False
     # The lock reports an attribute after each write, so Zigbee2MQTT
     # republishes its cache, users entries as last read included (#1335).
     # The report goes out once the write's publish has returned, as a real
@@ -167,7 +173,11 @@ class FakeZ2MBridge:
 
     def _answer_get_pin_code(self, user: int) -> None:
         """Answer ``getPinCode`` through ``lock_pin_code_response`` (``FZ:380-400``)."""
-        status, code = self.users.get(user, (AVAILABLE, None))
+        status, code = (
+            (NOT_SUPPORTED, None)
+            if self.cannot_tell
+            else self.users.get(user, (AVAILABLE, None))
+        )
         entry: dict[str, Any] = {
             "status": _STATUS_NAMES.get(status, f"not_supported_{status}")
         }
