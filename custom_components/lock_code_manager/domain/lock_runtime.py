@@ -733,16 +733,28 @@ def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | Slot
     return codes
 
 
-async def async_hard_refresh(worker: LockWorker[ProviderPort]) -> None:
+async def async_hard_refresh(
+    worker: LockWorker[ProviderPort], *, forget_reporting: bool = False
+) -> None:
     """
     Re-read the whole lock, past any cache, in its turn: the hard refresh service.
 
     The probe brings a lock that is backing off back; the provider's unscoped
     hard refresh re-reads every slot (codes nobody here manages included);
     the read after it brings what it found into view.
+
+    ``forget_reporting`` first stops taking the lock for one that can report
+    its codes (#1581): a write-only lock that once seemed to describe a slot
+    has every slot it cannot tell of taken for good otherwise. Only asked
+    for: a lock that can report shows it again only at a read that describes
+    a slot, and the slots read here are its own, which may describe none.
     """
-    await worker.read(probe=True)
     provider = worker.port.provider
+    if forget_reporting:
+        worker.port.reports.pop(provider.lock.id, None)
+        if (store := provider.hass.data.get(DATA, {}).get(STORE_KEY)) is not None:
+            store.unreported(provider.lock.entity_id)
+    await worker.read(probe=True)
 
     async def _walk() -> None:
         try:

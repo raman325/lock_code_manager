@@ -46,6 +46,7 @@ from custom_components.lock_code_manager.core.slot import Reading
 from custom_components.lock_code_manager.domain.config import build_slot_unique_id
 from custom_components.lock_code_manager.domain.events import CredentialOperation
 from custom_components.lock_code_manager.domain.lock_runtime import (
+    STORE_KEY,
     lock_codes,
     lock_reachable,
     lock_registry,
@@ -695,6 +696,27 @@ async def _until_settled(
     )
 
 
+async def _hard_refresh(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    lock_id: str,
+    **data: Any,
+) -> None:
+    """Call the hard refresh service on ``lock_id``, stepping the clock it waits on."""
+    await _on_the_clock(
+        hass,
+        freezer,
+        hass.services.async_call(
+            DOMAIN,
+            SERVICE_HARD_REFRESH_USERCODES,
+            data,
+            target={"entity_id": lock_id},
+            blocking=True,
+        ),
+        "hard refresh",
+    )
+
+
 def _assert_trouble_free(hass: HomeAssistant, lock_id: str) -> None:
     """Assert no repair, no lock taken for offline, and the lock still there."""
     assert lcm_issue_ids(hass) == []
@@ -1011,6 +1033,71 @@ class TestWriteOnlyLock:
             "entry unload",
         )
 
+    async def test_a_hard_refresh_forgets_that_the_lock_seemed_to_report(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        A lock that once described a slot, and now cannot, is asked again.
+
+        Remembered across a restart as able to report, it would have every
+        slot it answers Not Supported for taken, for good: adding users
+        would walk the whole lock and fail. A hard refresh asked to forget
+        that does, in memory and in the store, and the users land in the
+        next slots.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            bridge.cannot_tell = True
+            await _on_the_clock(
+                hass,
+                freezer,
+                async_restart_lcm(hass, entry, settle=False),
+                "restart",
+            )
+            await async_advance_clock(hass, freezer, 600, settle=False)
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            store = hass.data[DOMAIN][STORE_KEY]
+            assert store.reports(lock_id)
+            assert locks_that_cannot_report(hass, [lock_id]) == []
+
+            await _hard_refresh(hass, freezer, lock_id, forget_reporting=True)
+
+            assert not store.reports(lock_id)
+            assert locks_that_cannot_report(hass, [lock_id]) == [lock_id]
+            flow = await hass.config_entries.subentries.async_init(
+                (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+            )
+            flow = await hass.config_entries.subentries.async_configure(
+                flow["flow_id"], {"next_step_id": "several"}
+            )
+            result = await _on_the_clock(
+                hass,
+                freezer,
+                hass.config_entries.subentries.async_configure(
+                    flow["flow_id"],
+                    {
+                        CONF_USERS: {
+                            "user3": {CONF_ENABLED: True, CONF_PIN: "9012"},
+                            "user4": {CONF_ENABLED: True, CONF_PIN: "3456"},
+                        }
+                    },
+                ),
+                "adding users",
+            )
+
+            assert result["reason"] == "users_added_cannot_report"
+            assert result["description_placeholders"]["slots"] == "3, 4"
+            pins = {**pins, 3: "9012", 4: "3456"}
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            _assert_trouble_free(hass, lock_id)
+
     @pytest.mark.parametrize(
         ("before", "after"),
         [
@@ -1046,17 +1133,7 @@ class TestWriteOnlyLock:
             setattr(bridge, after, True)
             reads_before = len(_read_slots(bridge))
 
-            await _on_the_clock(
-                hass,
-                freezer,
-                hass.services.async_call(
-                    DOMAIN,
-                    SERVICE_HARD_REFRESH_USERCODES,
-                    target={"entity_id": lock_id},
-                    blocking=True,
-                ),
-                "hard refresh",
-            )
+            await _hard_refresh(hass, freezer, lock_id)
             await async_advance_clock(hass, freezer, 120, settle=False)
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
 
@@ -1216,19 +1293,22 @@ class TestLockThatReportsOnlyFreeSlots:
         assert result["description_placeholders"]["slots"] == "2"
         assert bridge.sets_for(2) == []
 
-    async def test_a_restart_remembers_the_lock_can_report(
+    @pytest.mark.parametrize("between", ["restart", "hard_refresh"])
+    async def test_the_lock_is_still_known_to_report(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
         mqtt_lock_discovered,
         free_slots_only_bridge: FakeZ2MBridge,
+        between: str,
     ) -> None:
         """
-        After a restart the lock's first reads are of its own slots: Not Supported.
+        After a restart or a hard refresh, its own slots read Not Supported.
 
-        They show nothing, so only what an earlier run saw -- the lock
-        describing a free slot -- keeps the keypad code at 3 from being taken
-        as free by the next user added.
+        They show nothing, so only what was seen before -- the lock
+        describing a free slot, remembered across a restart and kept by a
+        plain hard refresh -- keeps the keypad code at 3 from being taken as
+        free by the next user added.
         """
         bridge = free_slots_only_bridge
         bridge.set_user(3, "3333")
@@ -1236,12 +1316,15 @@ class TestLockThatReportsOnlyFreeSlots:
         pins = {1: "1234", 2: "5678"}
         async with _bridge_entry(hass, freezer, lock_id) as entry:
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
-            await _on_the_clock(
-                hass,
-                freezer,
-                async_restart_lcm(hass, entry, settle=False),
-                "restart",
-            )
+            if between == "restart":
+                await _on_the_clock(
+                    hass,
+                    freezer,
+                    async_restart_lcm(hass, entry, settle=False),
+                    "restart",
+                )
+            else:
+                await _hard_refresh(hass, freezer, lock_id)
             await async_advance_clock(hass, freezer, 600, settle=False)
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
 

@@ -3,6 +3,11 @@ hard_refresh_usercodes:
   target:
     entity:
       domain: lock
+  fields:
+    forget_reporting:
+      default: false
+      selector:
+        boolean:
 
 add_user:
   fields:
