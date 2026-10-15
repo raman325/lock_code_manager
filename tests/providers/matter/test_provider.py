@@ -3389,6 +3389,79 @@ class TestReleaseManagedSlot:
         mock_clear_user.assert_not_called()
 
 
+    async def test_release_falls_back_to_the_recorded_index_when_listing_fails(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """
+        A lock that cannot list its users still releases the slot it recorded.
+
+        Some locks fail every GetUser walk while one particular user exists, and
+        finding the user to release needs that listing. The index recorded when
+        the user was created is enough to clear it.
+        """
+        matter_lock._slot_by_user_index[6] = 6
+        mock_get_users = AsyncMock(side_effect=HomeAssistantError("Failure (code 1)"))
+        mock_clear_user = AsyncMock(return_value=None)
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_users),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
+        ):
+            await matter_lock.async_release_managed_slot(6)
+
+        mock_clear_user.assert_called_once()
+        call = mock_clear_user.call_args
+        assert 6 in call.args or call.kwargs.get("user_index") == 6
+        assert 6 not in matter_lock._slot_by_user_index
+
+    async def test_release_does_not_guess_when_nothing_is_recorded(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """With no recorded index and no listing there is nothing safe to clear."""
+        mock_get_users = AsyncMock(side_effect=HomeAssistantError("Failure (code 1)"))
+        mock_clear_user = AsyncMock(return_value=None)
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_users),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock.async_release_managed_slot(6)
+
+        mock_clear_user.assert_not_called()
+
+    async def test_release_does_not_guess_between_two_recorded_indexes(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Two indexes recorded for one slot cannot both be right, so neither is cleared."""
+        matter_lock._slot_by_user_index.update({6: 6, 7: 6})
+        mock_get_users = AsyncMock(side_effect=HomeAssistantError("Failure (code 1)"))
+        mock_clear_user = AsyncMock(return_value=None)
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", mock_get_users),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock.async_release_managed_slot(6)
+
+        mock_clear_user.assert_not_called()
+
+    async def test_release_prefers_the_listing_over_the_recorded_index(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """When the lock can list its users, a stale record is never acted on."""
+        matter_lock._slot_by_user_index[99] = 5  # stale: the index was reused
+        mock_clear_user = AsyncMock(return_value=None)
+        with (
+            self._patch_users(
+                [{"user_index": 42, "user_name": "lcm:5:Carol", "credentials": []}]
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        mock_clear_user.assert_called_once()
+        call = mock_clear_user.call_args
+        assert 42 in call.args or call.kwargs.get("user_index") == 42
+
 # =============================================================================
 # async_set_credential tests
 # =============================================================================
