@@ -89,6 +89,10 @@ CORE_KEYS = (
 # The repair naming the slots whose clear or one-off write a re-pair dropped.
 RE_PAIRED_WORK_DROPPED: Final = "lock_re_paired_work_dropped"
 
+# The repair asking for a reload: a one-off read kept a re-paired lock's old
+# worker through its rebuild.
+RE_PAIRED_RELOAD: Final = "lock_re_paired_reload"
+
 # How long a one-off write from a repair or the card is waited for.
 WRITE_ONCE_WAIT = 60.0
 
@@ -319,10 +323,10 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             hass, lock_entity_id, worker
         )
         if leaving:
-            # Nothing will answer it now: the lock is gone from here.
-            async_delete_issue(
-                hass, DOMAIN, per_lock_issue_id("lock_offline", lock_entity_id)
-            )
+            # Nothing will answer it now: the lock is gone from here. Nor is
+            # it re-paired and still in use.
+            for key in ("lock_offline", RE_PAIRED_RELOAD):
+                async_delete_issue(hass, DOMAIN, per_lock_issue_id(key, lock_entity_id))
             if (store := data.get(STORE_KEY)) is not None:
                 store.forget_lock(lock_entity_id)
             data[REPORTS_KEY].pop(port.provider.lock.id, None)
@@ -468,6 +472,24 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
             _LOGGER.error(
                 "Unloading %s for re-paired %s failed: %s", entry.title, lock, result
             )
+    if registry.worker(lock) is worker:
+        # A one-off read still holds it: the entries take it back, and the
+        # lock stays on the old device until they set up again. Not retried
+        # when the read is done: nothing says when that is.
+        _LOGGER.warning(
+            "%s was re-paired, but a read of it was still going: reload Lock "
+            "Code Manager to use the new device",
+            lock,
+        )
+        async_create_issue(
+            hass,
+            DOMAIN,
+            per_lock_issue_id(RE_PAIRED_RELOAD, lock),
+            is_fixable=False,
+            severity=IssueSeverity.WARNING,
+            translation_key=RE_PAIRED_RELOAD,
+            translation_placeholders={"lock_entity_id": lock},
+        )
     for entry in holders:
         # One set up again meanwhile (a reload), or not unloaded, is left be.
         if entry.state is not ConfigEntryState.NOT_LOADED:
