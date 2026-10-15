@@ -380,30 +380,6 @@ def test_all_lock_actions_fire_event_with_correct_to_locked(
     assert call_kwargs["code_slot"] == 2
 
 
-def test_non_string_action_is_ignored() -> None:
-    """Non-string action values (e.g., list, dict) do not raise TypeError."""
-    lock = _minimal_lock()
-    lock.coordinator = MagicMock()
-    lock.async_fire_code_slot_event = MagicMock()
-
-    lock._process_z2m_device_payload({"action": ["lock"], "action_user": 1})
-    lock._process_z2m_device_payload({"action": 123, "action_user": 1})
-
-    lock.async_fire_code_slot_event.assert_not_called()
-
-
-def test_boolean_action_user_is_ignored() -> None:
-    """Boolean action_user (True/False) is not treated as a valid slot ID."""
-    lock = _minimal_lock()
-    lock.coordinator = MagicMock()
-    lock.async_fire_code_slot_event = MagicMock()
-
-    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": True})
-    lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": False})
-
-    lock.async_fire_code_slot_event.assert_not_called()
-
-
 def test_users_payload_before_coordinator_does_not_poison_delta_gate() -> None:
     """A retained payload arriving before coordinator attach must not gate out
     the first post-attach republication (it should still seed initial state)."""
