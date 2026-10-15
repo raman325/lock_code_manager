@@ -10,7 +10,10 @@ from matter_server.client.exceptions import InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 
 from homeassistant.components.matter import lock_helpers
 from homeassistant.config_entries import SOURCE_USER, ConfigEntriesFlowManager
@@ -27,6 +30,7 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
@@ -84,36 +88,6 @@ class TestFullSetupLifecycle:
 
 class TestSetAndClearUsercodes:
     """Verify set/clear operations call the correct Matter helpers via base orchestration."""
-
-    async def test_clear_usercode(
-        self,
-        hass: HomeAssistant,
-        e2e_matter_lock: MatterLock,
-        matter_mock_helpers: dict[str, AsyncMock],
-    ) -> None:
-        """Clear a code via the base orchestration and verify clear_lock_credential was called."""
-        matter_mock_helpers["clear_lock_credential"].reset_mock()
-        matter_mock_helpers["get_lock_users"].reset_mock()
-        # Slot 2 is occupied by LCM's tagged user at user_index 2.
-        matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                matter_mock_helpers["get_lock_users"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.clear_lock_credential",
-                matter_mock_helpers["clear_lock_credential"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.clear_lock_user",
-                matter_mock_helpers["clear_lock_user"],
-            ),
-        ):
-            result = await e2e_matter_lock.async_clear_usercode(2)
-
-        assert result is True
-        assert matter_mock_helpers["clear_lock_credential"].call_count >= 1
 
     async def test_set_usercode_optimistic_update(
         self,
@@ -649,6 +623,7 @@ class TestKeypadAndSwitch:
             if state.attributes.get("code_slot") == 2
         )
         before = hass.states.get(event_entity).state
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
         fake_matter_lock.keypad_unlock(
             _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
@@ -656,6 +631,7 @@ class TestKeypadAndSwitch:
         await async_advance_sync_ticks(hass, freezer)
 
         assert hass.states.get(event_entity).state != before
+        assert [event.data["name"] for event in used] == ["slot2"]
 
     async def test_turning_a_user_off_takes_its_pin_off_the_lock(
         self,

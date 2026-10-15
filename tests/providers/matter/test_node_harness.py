@@ -15,10 +15,7 @@ from freezegun.api import FrozenDateTimeFactory
 from matter_server.common.errors import NodeNotResolving, UnknownError
 from matter_server.common.models import EventType
 import pytest
-from pytest_homeassistant_custom_component.common import (
-    MockConfigEntry,
-    async_capture_events,
-)
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.matter import lock_helpers
 from homeassistant.const import STATE_ON
@@ -26,7 +23,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.const import BUS_EVENT_CREDENTIAL_USED
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
@@ -857,24 +853,3 @@ class TestThroughTheProvider:
                 ).state
                 == config["pin"]
             )
-
-    async def test_a_keypad_use_is_credited_to_its_user(
-        self,
-        hass: HomeAssistant,
-        freezer: FrozenDateTimeFactory,
-        fake_matter_lock: FakeMatterLock,
-        fake_matter_lock_entry: MockConfigEntry,
-    ) -> None:
-        """A LockOperation reaches Lock Code Manager as a use of that slot's code."""
-        await async_advance_sync_ticks(hass, freezer, 6)
-        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-        index = next(
-            i
-            for i, pin in fake_matter_lock.codes.items()
-            if pin == FAKE_MATTER_SLOTS[2]["pin"]
-        )
-
-        fake_matter_lock.keypad_unlock(index)
-        await async_advance_sync_ticks(hass, freezer)
-
-        assert [event.data["name"] for event in used] == ["slot2"]

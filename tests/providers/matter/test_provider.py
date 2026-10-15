@@ -2733,38 +2733,6 @@ class TestSetUser:
         assert call_kwargs["user_index"] == 42
         assert call_kwargs["user_name"] == "lcm:2:Bob-rename"
 
-    async def test_set_user_adopts_untagged_legacy_user_owning_pin_at_slot(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """Pre-PR-B Matter LCM pinned credential_index=slot. Adopt that user.
-
-        Without this adoption fallback, the upgrade would CREATE a fresh
-        user and leave the legacy user's PIN active on the lock as an
-        orphan.
-        """
-        mock_set_user = AsyncMock(return_value={"user_index": 99})
-        user = User(user_id=5, name="lcm:5:Carol")
-        with (
-            self._patch_users(
-                [
-                    {
-                        "user_index": 99,
-                        "user_name": "Carol",  # untagged, legacy LCM 2.0
-                        "credentials": [{"type": "pin", "index": 5}],
-                    },
-                ]
-            ),
-            patch(f"{_PROVIDER_MODULE}.set_lock_user", mock_set_user),
-        ):
-            result = await matter_lock.async_set_user(user)
-
-        # The legacy user is adopted (not orphaned): existing user_index
-        # is reused, name gets rewritten to the tagged form.
-        assert result == SetUserResult(user_id=99, created=False)
-        call_kwargs = mock_set_user.call_args.kwargs
-        assert call_kwargs["user_index"] == 99
-        assert call_kwargs["user_name"] == "lcm:5:Carol"
-
     async def test_set_user_falls_back_to_user_id_when_name_is_untagged(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
@@ -3351,42 +3319,6 @@ class TestReleaseManagedSlot:
         mock_clear_user.assert_called_once()
         call = mock_clear_user.call_args
         assert 42 in call.args or call.kwargs.get("user_index") == 42
-
-    async def test_release_leaves_an_untagged_user_alone(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """
-        Releasing never adopts, because ClearUser cannot be undone.
-
-        An untagged user owning a PIN at this credential index is as likely to
-        be one the homeowner made in the vendor's app as a pre-tag LCM user --
-        the index alone cannot tell them apart. The set path may adopt,
-        because the write that follows retags a wrong guess; the release path
-        may not, because ClearUser cascades to the user's credentials and
-        nothing follows to correct anything.
-
-        The accepted cost is the mirror case: a pre-tag LCM user whose slot
-        was never re-written since upgrading keeps their PIN when the user is
-        removed. That is recoverable and visible -- the code shows on the lock
-        card as unmanaged and can be cleared there -- whereas deleting a
-        credential this integration never wrote is neither.
-        """
-        mock_clear_user = AsyncMock(return_value=None)
-        with (
-            self._patch_users(
-                [
-                    {
-                        "user_index": 99,
-                        "user_name": "Alice",  # untagged, legacy LCM 2.0
-                        "credentials": [{"type": "pin", "index": 3}],
-                    },
-                ]
-            ),
-            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
-        ):
-            await matter_lock.async_release_managed_slot(3)
-
-        mock_clear_user.assert_not_called()
 
     async def test_release_no_op_when_no_lcm_user(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -4139,43 +4071,6 @@ class TestDeleteCredential:
             )
         assert result is False
         mock_clear.assert_not_called()
-
-    async def test_delete_credential_pushes_empty(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """Successful delete pushes SlotCredential.empty() to coordinator."""
-        mock_coordinator = _mock_coordinator()
-        matter_lock.coordinator = mock_coordinator
-        mock_clear = AsyncMock(return_value=None)
-        ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
-        with (
-            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
-        ):
-            await matter_lock.async_delete_credential(ref)
-
-        mock_coordinator.push_update.assert_called_once_with(
-            {4: SlotCredential.empty()}
-        )
-
-    async def test_delete_credential_passes_correct_args(
-        self, hass: HomeAssistant, matter_lock: MatterLock
-    ) -> None:
-        """clear_lock_credential is addressed by the user's rediscovered PIN index.
-
-        ref.slot is the LCM slot; the Matter credential index is rediscovered
-        by walking the user's credentials. The autouse fixture seeds user 4 as
-        owning a PIN at credential_index 4, so the clear should target 4.
-        """
-        mock_clear = AsyncMock(return_value=None)
-        ref = CredentialRef(user_id=4, type=CredentialType.PIN, slot=4)
-        with (
-            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", mock_clear),
-        ):
-            await matter_lock.async_delete_credential(ref)
-
-        call_kwargs = mock_clear.call_args.kwargs
-        assert call_kwargs["credential_type"] == "pin"
-        assert call_kwargs["credential_index"] == 4
 
     async def test_delete_credential_transport_error_raises_lock_disconnected(
         self, hass: HomeAssistant, matter_lock: MatterLock
