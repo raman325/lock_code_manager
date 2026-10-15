@@ -3388,7 +3388,6 @@ class TestReleaseManagedSlot:
 
         mock_clear_user.assert_not_called()
 
-
     async def test_release_falls_back_to_the_recorded_index_when_listing_fails(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
@@ -3461,6 +3460,7 @@ class TestReleaseManagedSlot:
         mock_clear_user.assert_called_once()
         call = mock_clear_user.call_args
         assert 42 in call.args or call.kwargs.get("user_index") == 42
+
 
 # =============================================================================
 # async_set_credential tests
