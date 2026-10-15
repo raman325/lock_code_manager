@@ -719,12 +719,15 @@ class LockCodesCard extends LockCodesCardBase {
      * italicized with a tooltip so it reads as "configured by LCM", not as a
      * value read back from the lock (which could differ if changed at the keypad).
      * A code disabled on the lock is never stood in for: the lock said what it
-     * holds, and the configured PIN is not in force there.
+     * holds, and the configured PIN is not in force there. Nor is a PIN meant to
+     * be off the lock (switched off, or held off by its condition): in sync then
+     * means the clear is trusted, not that the PIN is there.
      */
     private _isProxyCode(slot: LockCoordinatorSlotData): boolean {
         return (
             this._isWithheld(slot) &&
             slot.managed === true &&
+            slot.active === true &&
             slot.in_sync === true &&
             (!!slot.configured_code || !!slot.configured_code_length)
         );
