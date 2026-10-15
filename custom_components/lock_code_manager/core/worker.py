@@ -475,9 +475,13 @@ class LockWorker[P: LockPort]:
             unsure[0] is not slot or unsure[1] != slot.epoch
         ):
             # A write for another target since the last reading may have
-            # landed, and a report may be a cache older than it: it cannot
-            # vouch for this target. Read first.
-            slot.seen = None
+            # landed, and a report may be a cache older than it: one that
+            # agrees with this target cannot vouch for it, so read first. One
+            # that disagrees only leads to a write, as in ``want``: the slot
+            # shows out of sync, pending, not unknown.
+            slot.seen = job.reading
+            if slot.agrees(self.salt):
+                slot.seen = None
         else:
             slot.observe(job.reading, self.salt, self.clock(), fresh=False)
         self.request_sync((job.slot,))
@@ -545,8 +549,9 @@ class LockWorker[P: LockPort]:
 
         What was sent is what is recorded; if the slot changed hands or wants
         another PIN by the time the write is back, nothing is recorded or read
-        back; ``want`` forgot what the lock last said -- the write may have
-        landed -- so the next sync reads before it decides. A refusal holds at once.
+        back; the write may have landed, so ``want`` forgot what the lock
+        last said if it agrees with the new target, and the next sync reads
+        before it decides. A refusal holds at once.
         Anything else, even a write that never left, is read back -- unless
         the lock has just gone into backoff -- and a cause the provider named
         is kept, so a slot held after its tries says it.
