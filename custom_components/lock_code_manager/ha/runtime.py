@@ -17,7 +17,7 @@ from typing import Final
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
@@ -46,6 +46,7 @@ from ..sync.registry import LockRegistry, SlotTaken
 from ..sync.slot import Holds, Reading, Repair, Seen, Status, Want
 from ..sync.worker import LockWorker
 from .adapter import ProviderPort, lock_error
+from .entry import LockCodeManagerConfigEntry
 from .lock_store import LockStore
 from .locks import async_create_lock_instance
 
@@ -68,6 +69,8 @@ STORE_KEY: Final = "lock_store"
 # first reads after one are of the slots Lock Code Manager wrote, and may show
 # nothing.
 REPORTS_KEY: Final = "locks_reporting"
+# Locks whose worker is checked for a device re-paired under their entity id.
+REBUILDS_KEY: Final = "locks_rebuilding"
 # Everything the core keeps for one run of Home Assistant.
 CORE_KEYS = (
     REGISTRY_KEY,
@@ -76,6 +79,7 @@ CORE_KEYS = (
     ISSUES_KEY,
     STORE_KEY,
     REPORTS_KEY,
+    REBUILDS_KEY,
 )
 
 # How long a one-off write from a repair or the card is waited for.
@@ -165,6 +169,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
     data[GIVEN_UP_KEY] = {}
     data[ISSUES_KEY] = {}
     data[REPORTS_KEY] = {}
+    data[REBUILDS_KEY] = set()
 
     def _make(lock_entity_id: str) -> LockWorker[ProviderPort]:
         # A config flow's read before the integration has set up remembers nothing.
@@ -333,6 +338,91 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
 
     hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, _stop)
     return registry
+
+
+@callback
+def async_listen_for_re_pairs(
+    hass: HomeAssistant, entry: LockCodeManagerConfigEntry
+) -> CALLBACK_TYPE:
+    """
+    Rebuild the worker of ``entry``'s lock whose entity id names another device.
+
+    A device re-paired under the same entity id (a Zigbee2MQTT lock re-joined
+    under the same friendly name) has a new registry id. The worker's
+    provider is bound to the old one, so the lock looks offline until the
+    entries holding it set up again. Checked at each registry event for the
+    lock, except while a check or rebuild of it is under way. A removal
+    alone, or a rename (the same registry id), is no rebuild; a removal
+    followed by a creation is one, once the creation is in.
+    """
+    pending: set[str] = hass.data[DATA][REBUILDS_KEY]
+
+    @callback
+    def _changed(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        lock = event.data["entity_id"]
+        if lock not in entry.runtime_data.locks or lock in pending:
+            return
+        pending.add(lock)
+
+        async def _check() -> None:
+            try:
+                await _async_rebuild_if_re_paired(hass, lock)
+            finally:
+                pending.discard(lock)
+
+        hass.async_create_task(_check(), f"Re-pair check of {lock}")
+
+    return hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, _changed)
+
+
+async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
+    """
+    Start ``lock``'s worker over if its entity id now names another device.
+
+    The entries holding it unload together, as a reload would, so its last
+    holder stops the worker; they set up again, building a new provider and
+    worker with every slot they want. It leaves as a lock leaving Lock Code
+    Manager does: what the store kept under the entity id goes -- the old
+    worker may have written there since the re-pair, and a fingerprint of a
+    write to the old device must not pass for the new one's -- and the new
+    device starts unknown to report. Clears owed to the old device are moot:
+    it is gone. Its record under the old registry id goes at the next start.
+    """
+    data = hass.data[DATA]
+    registry = lock_registry(hass)
+    entity = er.async_get(hass).async_get(lock)
+    if (worker := registry.worker(lock)) is None or entity is None:
+        return  # not running, or removed: nothing to rebuild yet
+    if entity.id == worker.port.provider.lock.id:
+        return  # the same device, perhaps renamed
+    holders = [
+        entry
+        for entry in iter_loaded_lcm_entries(hass)
+        if lock in entry.runtime_data.locks
+    ]
+    if not holders:
+        return
+    _LOGGER.info("%s is a different device now (re-paired): starting it over", lock)
+    moot = sorted(n for n, slot in worker.slots.items() if slot.release)
+    for slot in moot:
+        _LOGGER.warning(
+            "Slot %s on %s was still being cleared when the device was "
+            "replaced: the clear is dropped with the old device",
+            slot,
+            lock,
+        )
+        worker.forget(slot)
+        data[GIVEN_UP_KEY].pop((lock, slot), None)
+    data[LEAVING_KEY].add(lock)
+    await asyncio.gather(
+        *(hass.config_entries.async_unload(entry.entry_id) for entry in holders)
+    )
+    if registry.worker(lock) is worker:
+        # A one-off read still holds it, and the entries take it back: not
+        # taken for a lock leaving when it stops. A reload rebuilds it.
+        data[LEAVING_KEY].discard(lock)
+    for entry in holders:
+        await hass.config_entries.async_setup(entry.entry_id)
 
 
 async def async_hold_lock(
