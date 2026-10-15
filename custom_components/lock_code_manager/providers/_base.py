@@ -1960,9 +1960,16 @@ class BaseLock:
         that user instead; the cascade defined by the lock's protocol
         removes its credentials, so they must not also clear here.
         """
-        # Never adopts: see ``async_clear_usercode``. A slot LCM no longer
-        # manages has no claim on whoever owns the credential at that index.
-        await self.async_internal_clear_usercode(slot, adopt_untagged=False)
+        # Adopts no untagged user (see ``async_clear_usercode``): a slot LCM
+        # no longer manages has no claim on whoever owns the credential at
+        # that index. Unless the lock keeps no user records (a Z-Wave User
+        # Code lock): no user there can carry a tag, the slot is the
+        # identity, and it was this integration's until now.
+        await self.async_internal_clear_usercode(
+            slot,
+            adopt_untagged=self.supports_native_users
+            and not await self._supports_user_records(),
+        )
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """

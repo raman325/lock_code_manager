@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Iterable
+import copy
 from datetime import timedelta
 import itertools
 import re
@@ -70,6 +71,7 @@ from custom_components.lock_code_manager.domain.credentials import (
 )
 from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.domain.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
@@ -89,6 +91,7 @@ from tests.providers.zwave_js.conftest import (
     get_zwave_lock,
 )
 from tests.providers.zwave_js.fake_node import (
+    USER_CREDENTIAL_CC_ID,
     FakeZWaveLock,
     supervised_lock_state,
     user_credential_lock_state,
@@ -2388,3 +2391,68 @@ class TestOpenBugs:
         await hass.config_entries.async_unload(entry.entry_id)
         assert len(clears) <= 1
         assert states == (STATE_ON, "")
+
+
+_BOTH = "User Code lock advertising User Credential"
+
+
+class TestUserRemoved:
+    """A user deleted from the entry: their code leaves the lock."""
+
+    @pytest.fixture(params=["user_code", "user_credential", "both"])
+    def lock_schlage_be469_state(
+        self, request: pytest.FixtureRequest, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        A User Code lock (the BE469), a User Credential one, or one with both.
+
+        The last advertises User Credential CC beside User Code CC but reports
+        no User Credential users, so the driver sends User Code (AC:269-288).
+        """
+        if request.param == "user_credential":
+            return user_credential_lock_state(lock_schlage_be469_state)
+        if request.param == "both":
+            state = copy.deepcopy(lock_schlage_be469_state)
+            state["label"] = _BOTH
+            state["endpoints"][0]["commandClasses"].append(
+                {"id": USER_CREDENTIAL_CC_ID, "name": "User Credential", "version": 1}
+            )
+            return state
+        return lock_schlage_be469_state
+
+    @pytest.fixture
+    def fake_zwave_lock_options(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The lock with both reports no User Credential users."""
+        return {"max_users": 0} if lock_schlage_be469_state["label"] == _BOTH else {}
+
+    async def test_a_deleted_user_s_code_is_cleared(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+    ) -> None:
+        """
+        Removing a user takes their PIN off the lock.
+
+        A User Code slot is its own nameless user and never carries Lock
+        Code Manager's tag, so a release that adopts no untagged user found
+        no owner and sent nothing: the deleted user's PIN kept opening the
+        door.
+        """
+        entry = fake_zwave_lock_entry
+        await async_advance_sync_ticks(hass, freezer, 5)
+        assert fake_zwave_lock.holds(2) == "1234"
+        if fake_zwave_lock.node.label == _BOTH:
+            assert not fake_zwave_lock.uses_user_credential_cc
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(1) == "9999"
