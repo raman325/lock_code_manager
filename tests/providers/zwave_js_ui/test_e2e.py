@@ -1498,6 +1498,9 @@ class DuplicateRefusingUserCodeTable(UserCodeTable):
     Both arrive on the node topic before the api answers. A masking lock
     reads every code back as asterisks. Nothing shows Lock Code Manager the
     PIN on the hidden slot before the lock refuses it.
+
+    A lock that supervises the set answers it with Fail instead, and the
+    driver, writing nothing, announces nothing.
     """
 
     def __init__(self, hass: HomeAssistant, *, masked: bool, parameters: Any) -> None:
@@ -1506,6 +1509,7 @@ class DuplicateRefusingUserCodeTable(UserCodeTable):
         self.hass = hass
         self.masked = masked
         self.parameters = parameters
+        self.supervised = False
         self.refused: list[tuple[int, str]] = []
 
     def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
@@ -1517,9 +1521,13 @@ class DuplicateRefusingUserCodeTable(UserCodeTable):
                 held == code for other, held in self.codes.items() if other != slot_num
             ):
                 self.refused.append((slot_num, code))
-                fire_zui_node_value(self.hass, f"99/0/userCode/{slot_num}", code)
+                if not self.supervised:
+                    fire_zui_node_value(self.hass, f"99/0/userCode/{slot_num}", code)
                 fire_zui_node_value(self.hass, DUPLICATE_REFUSAL, self.parameters)
-                return {"success": True, "result": None}
+                return {
+                    "success": True,
+                    "result": SUPERVISION_FAIL if self.supervised else None,
+                }
         response = super().__call__(api_base, request)
         if (
             method == "get"
@@ -1558,6 +1566,7 @@ class TestDuplicateRefusedByUserCodeLock:
             hass, masked=code_display == "masked", parameters=parameters
         )
 
+    @pytest.mark.parametrize("supervised", [False, True], ids=["ack", "fail"])
     async def test_a_refused_pin_disables_the_slot(
         self,
         hass: HomeAssistant,
@@ -1566,6 +1575,7 @@ class TestDuplicateRefusedByUserCodeLock:
         zui_lock: ZWaveJSUILock,
         zui_api_responder: ZWaveJSUIApiResponder,
         user_code_table: DuplicateRefusingUserCodeTable,
+        supervised: bool,
     ) -> None:
         """
         The refusal disables the slot, as it does on Z-Wave JS.
@@ -1573,8 +1583,11 @@ class TestDuplicateRefusedByUserCodeLock:
         Unheard, the acknowledged set reads as the lock taking the PIN: a
         masking lock's read-back cannot say otherwise, so the slot shows in
         sync with a PIN the lock never took. A lock that shows its codes
-        reads back the old one, and the PIN is sent again and again.
+        reads back the old one, and the PIN is sent again and again. A
+        supervising lock's Fail says only that the set failed, which is
+        retried the same way.
         """
+        user_code_table.supervised = supervised
         lock_entity_id = zui_lock.lock.entity_id
         entry = lcm_config_entry
         enabled_id = slot_entity_id(hass, SWITCH_DOMAIN, entry, 2, CONF_ENABLED)
