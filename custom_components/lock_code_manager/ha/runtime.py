@@ -475,10 +475,12 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
             _LOGGER.error(
                 "Unloading %s for re-paired %s failed: %s", entry.title, lock, result
             )
-    if registry.worker(lock) is worker:
-        # A one-off read still holds it: the entries take it back, and the
-        # lock stays on the old device until they set up again. Not retried
-        # when the read is done: nothing says when that is.
+    if registry.worker(lock) is worker and all(result is True for result in unloaded):
+        # Every holder let go, and a one-off read still holds it: the entries
+        # take it back, and the lock stays on the old device until they set
+        # up again. Not retried when the read is done: nothing says when
+        # that is. (A holder not unloaded -- a reload under way -- is not a
+        # read: it lets go, and sets up on the new device, on its own.)
         _LOGGER.warning(
             "%s was re-paired, but a read of it was still going: reload Lock "
             "Code Manager to use the new device",
