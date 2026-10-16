@@ -59,7 +59,7 @@ from .common import (
     MockLCMPushLock,
     when_mock_lock_built,
 )
-from .sync.test_worker import FakeLock, _started, rig_factory  # noqa: F401  (rig_factory is a fixture)
+from .sync.test_worker import Clock, FakeLock, _started, rig_factory  # noqa: F401  (rig_factory is a fixture)
 
 SALT = b"salt"
 
@@ -1054,8 +1054,10 @@ async def test_a_silent_lock_backs_off_doubling_to_the_cap_then_starts_over(
     assert backoffs[0] == (BACKOFF_MIN, False)
 
 
-async def _fast(_: float) -> None:
-    await asyncio.sleep(0)
+def _fast(worker: LockWorker) -> None:
+    """Run ``worker`` on a fake clock: every pause and backoff ends at once."""
+    clock = Clock()
+    worker.clock, worker.sleep = clock, clock.sleep
 
 
 async def test_a_slot_past_capacity_is_no_answer_from_a_dead_lock(ports) -> None:  # noqa: F811
@@ -1068,7 +1070,7 @@ async def test_a_slot_past_capacity_is_no_answer_from_a_dead_lock(ports) -> None
     paid, and the lock never goes offline. The outage holds a normal slot.
     """
     _, worker, lock = await ports()
-    worker.sleep = _fast
+    _fast(worker)
 
     async def capacity(self, slot: int) -> None:
         if slot > 30:
@@ -1101,7 +1103,7 @@ async def test_a_lock_with_only_slots_past_capacity_holds_them_at_once(
 ) -> None:
     """Its reads ask nothing: each slot is held, the lock is not taken for gone."""
     _, worker, lock = await ports()
-    worker.sleep = _fast
+    _fast(worker)
 
     async def capacity(self, slot: int) -> None:
         if slot > 30:
