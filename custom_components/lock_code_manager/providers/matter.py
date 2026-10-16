@@ -842,7 +842,7 @@ class MatterLock(BaseLock):
         return user.user_id
 
     async def _find_user_index_for_slot(
-        self, slot: int, *, adopt_untagged: bool = True
+        self, slot: int
     ) -> tuple[int, bool] | None:
         """
         Return the ``user_index`` of the user LCM owns for ``slot``, if any.
@@ -871,14 +871,6 @@ class MatterLock(BaseLock):
            PIN at index ``B``; matching on ``cred.slot == slot`` alone
            would mis-adopt slot-A's user as slot-B's anchor.
 
-        ``adopt_untagged`` turns the second lookup off. The set path wants it:
-        the slot is ours, and the write that follows rewrites the name to the
-        tagged form, so a wrong guess corrects itself. The release path must
-        not have it -- ``ClearUser`` cascades to the user's credentials,
-        nothing follows to correct anything, and the untagged user holding a
-        PIN at that index is as likely to be one the homeowner made in the
-        vendor's app as one of ours.
-
         Returns ``None`` when neither lookup matches.
         """
         users = await self.async_get_users()
@@ -889,8 +881,6 @@ class MatterLock(BaseLock):
                 if existing.name and parse_tag(existing.name)[0] == slot
             )
         except StopIteration:
-            if not adopt_untagged:
-                return None
             return next(
                 (
                     (existing.user_id, True)
@@ -921,31 +911,120 @@ class MatterLock(BaseLock):
         self, slot: int, *, written: bool = False
     ) -> None:
         """
-        Tear down the LCM-owned user that anchors ``slot``.
+        Remove LCM's PIN from the user tagged for ``slot``; the user too if nothing else is on it.
 
-        Called by the base teardown path when the slot is removed from
-        LCM config (see ``__init__.py``'s ``pairs_removed`` loop). Looks
-        up the lock-side user by its ``lcm:<slot>:`` tag ONLY, never by
-        adoption, then deletes it. Matter's ClearUser cascade then removes
-        the user's PIN credential automatically -- which is exactly why
-        adoption is forbidden here: it would irreversibly delete a
-        credential this integration never created.
+        Called when the slot leaves LCM's management. The lock-side user is
+        found by its ``lcm:<slot>:`` tag ONLY, never by adoption: an untagged
+        user is never touched here (#1518/#1694).
 
-        Tolerates "no user found": the slot may have never had an LCM
-        user on this lock (e.g. the user was already removed out-of-band,
-        or the slot was configured but never written). Lock-side
-        transport failures bubble up so the base wraps them in a warning
-        and the teardown still completes.
+        LCM wrote only that user's PIN, so only that PIN is LCM's to remove.
+        The user may also hold credentials someone added in the vendor's app
+        (an RFID card, a fingerprint, another PIN); ``ClearUser`` would
+        cascade to them. So, by the user's own credentials list (GetUser):
+
+        - LCM's PIN is all it holds (or it holds nothing): ``ClearUser``,
+          whose cascade takes the PIN -- one exchange.
+        - It holds more: ``ClearCredential`` for LCM's PIN only, then the
+          user is renamed without LCM's tag, so a later write of this slot
+          does not take it -- and its card -- for its own. A rename that
+          fails is logged; the PIN is gone either way.
+
+        LCM's PIN is the user's first, the one the set path writes over
+        (``_find_pin_credential_index_for_user``).
+
+        No tagged user: nothing is removed. If LCM had written a PIN there
+        (``written``), it says so at WARNING: the code may still be on the
+        lock under a user renamed in the vendor's app. Otherwise there was
+        nothing of LCM's to find.
+
+        Lock-side transport failures bubble up so the base wraps them in a
+        warning and the teardown still completes.
         """
-        found = await self._find_user_index_for_slot(slot, adopt_untagged=False)
-        if found is None:
-            LOGGER.debug(
-                "Lock %s: no LCM-owned user to release for slot %s",
+        user = next(
+            (
+                raw_user
+                for raw_user in await self._raw_lock_users()
+                if raw_user.get("user_index") is not None
+                and raw_user.get("user_name")
+                and parse_tag(raw_user["user_name"])[0] == slot
+            ),
+            None,
+        )
+        if user is None:
+            if written:
+                LOGGER.warning(
+                    "Lock %s: released slot %s, but no user on the lock "
+                    "carries LCM's tag for it, so nothing was removed. A code "
+                    "may remain that LCM cannot identify as its own (for "
+                    "example, if its user was renamed in the lock vendor's "
+                    "app); remove it there if it should not open the door",
+                    self.lock.entity_id,
+                    slot,
+                )
+            else:
+                LOGGER.debug(
+                    "Lock %s: no LCM-owned user to release for slot %s",
+                    self.lock.entity_id,
+                    slot,
+                )
+            return
+        user_index: int = user["user_index"]
+        credentials = user.get("credentials") or []
+        pin = next(
+            (
+                cred
+                for cred in credentials
+                if cred.get("type") == "pin" and cred.get("index") is not None
+            ),
+            None,
+        )
+        if len(credentials) == (pin is not None):
+            await self.async_delete_user(user_index)
+            return
+        client, node = self._require_client_and_node()
+        if pin is not None:
+            await self._invoke_sdk(
+                "clear_lock_credential",
+                clear_lock_credential(
+                    client, node, credential_type="pin", credential_index=pin["index"]
+                ),
+            )
+        name = await self._untagged_name(user["user_name"], user_index)
+        try:
+            await self._invoke_sdk(
+                "set_lock_user",
+                set_lock_user(client, node, user_index=user_index, user_name=name),
+            )
+        except LockOperationError as err:
+            LOGGER.warning(
+                "Lock %s: released slot %s and removed its PIN, but user %s "
+                "keeps other credentials and could not be renamed to %r to "
+                "drop LCM's tag (%s). If slot %s is used again, LCM will take "
+                "that user for its own; rename it in the lock vendor's app",
                 self.lock.entity_id,
+                slot,
+                user_index,
+                name,
+                err,
                 slot,
             )
             return
-        await self.async_delete_user(found[0])
+        self._slot_by_user_index.pop(user_index, None)
+
+    async def _untagged_name(self, tagged: str, user_index: int) -> str:
+        """
+        Return the name a kept user goes by once LCM lets go of it.
+
+        The display part of its tag, cut to the lock's name limit on a UTF-8
+        boundary; ``User<index>`` if nothing is left, or what is left would
+        still read as a slot tag (a bare number, ``lcm<n>``).
+        """
+        limit = (await self._get_cached_capabilities()).max_user_name_length
+        _, display = parse_tag(tagged)
+        name = display.encode()[:limit].decode(errors="ignore").strip()
+        if name and parse_tag(name)[0] is None:
+            return name
+        return f"User{user_index}"
 
     async def _send_set_credential(
         self,

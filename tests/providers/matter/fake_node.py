@@ -472,6 +472,29 @@ class FakeMatterLock:
         """
         self._clear_user(user_index, announce=False)
 
+    def enroll(
+        self,
+        user_index: int,
+        kind: int = DoorLock.Enums.CredentialTypeEnum.kRfid,
+        index: int = 1,
+    ) -> None:
+        """
+        Add a credential of ``kind`` to a user, as the vendor's app does, and announce it.
+
+        An RFID card by default: the user holds it beside whatever it had.
+        """
+        self.users[user_index].credentials.append((kind, index))
+        self.credentials[(kind, index)] = LockCredential(
+            b"card", created_by=OTHER_FABRIC, modified_by=OTHER_FABRIC
+        )
+        self._log_user_change(
+            DoorLock.Enums.LockDataTypeEnum.kRfid,
+            DoorLock.Enums.DataOperationTypeEnum.kAdd,
+            user_index,
+            index,
+            source=DoorLock.Enums.OperationSourceEnum.kKeypad,
+        )
+
     def keypad_unlock(
         self, credential_index: int, *, user_index: int | None = None
     ) -> None:
