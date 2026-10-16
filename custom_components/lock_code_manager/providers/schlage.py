@@ -18,7 +18,6 @@ service returns masked PINs (``****``), so occupied slots report
 """
 
 from collections.abc import Collection
-import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Literal, override
@@ -412,7 +411,10 @@ class SchlageLock(BaseLock):
 
             # Clear any existing code on this slot before adding. Schlage rejects
             # add_code with a duplicate name, and eventual consistency in the cloud
-            # API means get_codes may not reflect a recently-added code.
+            # API means get_codes may not reflect a recently-added code. A name
+            # not on the lock is a quiet success in core's delete_code, so a
+            # failure here is real: it propagates before the add, or the old
+            # code stays live beside (or, same name, in place of) the new one.
             names_to_delete = {n for n in (existing_full_name, tagged_name) if n}
             deleted_pins = {
                 code_data.get("code")
@@ -420,9 +422,7 @@ class SchlageLock(BaseLock):
                 if code_data.get("name") in names_to_delete
             }
             for code_name in names_to_delete:
-                # code may not exist — that's fine
-                with contextlib.suppress(LockOperationError):
-                    await self._async_delete_code(code_name)
+                await self._async_delete_code(code_name)
 
             try:
                 await self._async_add_code(tagged_name, pin, code_slot)
