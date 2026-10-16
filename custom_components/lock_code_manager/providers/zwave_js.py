@@ -14,6 +14,7 @@ import logging
 import time
 from typing import Any, Literal, override
 
+from awesomeversion import AwesomeVersion, AwesomeVersionCompareException
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
@@ -72,6 +73,12 @@ from ._base import BaseLock
 from ._util import is_masked_code, parse_tag
 
 _LOGGER = logging.getLogger(__name__)
+
+# The first driver with zwave-js/zwave-js#8927: from it on, the driver persists
+# a supervised User Code Command Class write to its value database and reads
+# the slot back after a failed one, so the post-write single-slot read
+# (_async_uc_reconcile_value_db) would only add a radio round trip to each write.
+DRIVER_RECONCILES_USER_CODE_WRITES = AwesomeVersion("15.25.2")
 
 
 @contextlib.contextmanager
@@ -907,7 +914,8 @@ class ZWaveJSLock(BaseLock):
     # driver 15.25.2 (zwave-js/zwave-js#8927): before that, supervised
     # User Code CC writes through the unified API never persisted to
     # (success) or reconciled (failure) the driver's value database,
-    # so cached reads served stale slots until the next report.
+    # so cached reads served stale slots until the next report. It is
+    # skipped once the connected driver reports 15.25.2 or later.
     #
     # To remove the whole section once the minimum supported driver
     # includes #8930 (which implies #8927):
@@ -1043,12 +1051,18 @@ class ZWaveJSLock(BaseLock):
         the report shim above; on a User Credential CC lock the driver
         dispatches natively and the read is merely redundant.
 
+        Skipped on a driver that reconciles these writes itself (15.25.2
+        on); an unknown driver version keeps the read.
+
         Best-effort by design: the write already concluded (the caller
         returns or raises on its own evidence), so a failed read must not
         change the outcome -- the next hard refresh or sync tick reconciles
         instead.
         """
-        if not self._node_advertises_user_code_cc():
+        if (
+            not self._node_advertises_user_code_cc()
+            or self._driver_reconciles_user_code_writes()
+        ):
             return
         try:
             with _timed(self.lock.entity_id, code_slot, "post-write single-slot read"):
@@ -1075,6 +1089,23 @@ class ZWaveJSLock(BaseLock):
                 self.lock.entity_id,
                 code_slot,
             )
+
+    def _driver_reconciles_user_code_writes(self) -> bool:
+        """
+        Return whether the connected driver includes zwave-js/zwave-js#8927.
+
+        Read on every write rather than cached: the client sets its version
+        on each connect, so this follows a driver upgraded under a running
+        Home Assistant, and parsing it costs nothing next to the radio
+        round trip it saves. A missing or unparsable version answers False,
+        so the read the older drivers need is kept.
+        """
+        # The client holds no version until it has connected.
+        driver = getattr(self.node.client.version, "driver_version", "")
+        try:
+            return AwesomeVersion(driver) >= DRIVER_RECONCILES_USER_CODE_WRITES
+        except AwesomeVersionCompareException:
+            return False
 
     @callback
     @override

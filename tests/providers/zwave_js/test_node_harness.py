@@ -473,7 +473,7 @@ class TestSupervisedNode:
         The code is still announced; only a fresh read repairs the cache.
         """
         fake_zwave_lock.supervision = SupervisionStatus.SUCCESS
-        fake_zwave_lock.driver_before_15_25_2 = True
+        fake_zwave_lock.driver_version = "15.25.1"
         seen = record(lock_schlage_be469)
 
         await lock_helpers.async_set_credential(
@@ -489,7 +489,7 @@ class TestSupervisedNode:
     ) -> None:
         """Before zwave-js#8927 (15.25.2) a supervised Fail was Error_Unknown, unread."""
         fake_zwave_lock.supervision = SupervisionStatus.SUCCESS
-        fake_zwave_lock.driver_before_15_25_2 = True
+        fake_zwave_lock.driver_version = "15.25.1"
         fake_zwave_lock.refuse("set", 3)
         fake_zwave_lock.refuse("clear", 2)
 
