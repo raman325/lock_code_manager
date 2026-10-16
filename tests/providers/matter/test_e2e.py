@@ -1247,6 +1247,72 @@ class TestReleaseKeepsWhatLCMDidNotWrite:
                 kept or f"User{user_index}"
             )
 
+    async def test_lcm_s_pin_is_cleared_where_the_lock_filed_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The PIN cleared is the one at the lock's credential index, not the slot's number.
+
+        The lock allocates the index itself: slot 3's PIN, the only one, is
+        filed at index 1.
+        """
+        slots = {3: {CONF_NAME: "Ann", CONF_PIN: "333333", CONF_ENABLED: True}}
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_pin_index"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            index = _index_of(fake_matter_lock, "333333")
+            assert index != 3
+            user_index = fake_matter_lock.owner(index)
+            assert user_index is not None
+            fake_matter_lock.enroll(user_index)
+            await async_advance_sync_ticks(hass, freezer)
+            sent = len(fake_matter_lock.commands)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert "333333" not in fake_matter_lock.codes.values()
+            assert fake_matter_lock.users[user_index].credentials == [
+                (DoorLock.Enums.CredentialTypeEnum.kRfid, 1)
+            ]
+            assert [
+                (exchange.command, exchange.index)
+                for exchange in fake_matter_lock.commands[sent:]
+                if exchange.command == "ClearCredential"
+            ] == [("ClearCredential", index)]
+
+    async def test_a_second_pin_added_in_the_vendor_app_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Another PIN on LCM's user is not LCM's: only LCM's own is cleared."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.enroll(
+            user_index, DoorLock.Enums.CredentialTypeEnum.kPin, index=5
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        user = fake_matter_lock.users[user_index]
+        assert user.credentials == [(DoorLock.Enums.CredentialTypeEnum.kPin, 5)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert parse_tag(user.name)[0] is None
+        assert fake_matter_lock.sent("ClearUser") == []
+
     async def test_a_user_the_lock_will_not_rename_still_loses_lcm_s_pin(
         self,
         hass: HomeAssistant,
