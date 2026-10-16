@@ -2856,6 +2856,98 @@ class TestReleaseOnAShortNameLock:
         assert fake_zwave_lock.holds(1) == "9999"
 
 
+class TestReleaseKeepsWhatLCMDidNotWrite:
+    """A User Credential lock: LCM's tagged user may hold credentials LCM never wrote."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """A lock that also takes RFID tags and DESFire cards."""
+        return {
+            "other_credential_types": (
+                UserCredentialType.RFID_CODE,
+                UserCredentialType.DESFIRE,
+            )
+        }
+
+    async def test_a_user_holding_only_lcm_s_pin_is_deleted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Nothing but LCM's PIN on the user: the user goes, and the PIN with it."""
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (user_id,) = _users_tagged_for(fake_zwave_lock, 2)
+        assert [
+            key
+            for key, (owner, _) in fake_zwave_lock.credentials.items()
+            if owner == user_id
+        ] == [(int(UserCredentialType.PIN_CODE), 2)]
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert user_id not in fake_zwave_lock.users
+        assert not any(
+            owner == user_id for owner, _ in fake_zwave_lock.credentials.values()
+        )
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(1) == "9999"
+
+    @pytest.mark.parametrize(
+        "kind",
+        [UserCredentialType.RFID_CODE, UserCredentialType.DESFIRE],
+        ids=["rfid", "desfire"],
+    )
+    async def test_a_credential_added_in_the_vendor_app_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        kind: UserCredentialType,
+    ) -> None:
+        """
+        LCM's PIN goes; the user and the card someone added to it stay.
+
+        Deleting the user would cascade to the card. DESFire is a type LCM
+        has no name for, so ``async_get_users`` drops it: the release must
+        still see it.
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (user_id,) = _users_tagged_for(fake_zwave_lock, 2)
+        name = fake_zwave_lock.users[user_id].user_name
+        fake_zwave_lock.enroll(user_id, kind, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.holds(2) is None
+        assert (int(UserCredentialType.PIN_CODE), 2) not in fake_zwave_lock.credentials
+        assert fake_zwave_lock.users[user_id].user_name == name
+        assert fake_zwave_lock.credentials[(int(kind), 5)] == (user_id, "04A2B3C4")
+        assert fake_zwave_lock.holds(1) == "9999"
+
+
 class TestRestartMidWrite:
     """The entry going down (a restart, a reload) with a write out to the lock."""
 
