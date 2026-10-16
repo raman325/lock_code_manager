@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable, Collection
 import contextlib
 from datetime import datetime, timedelta
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -149,7 +150,43 @@ class ProviderPort:
 
     # LockPort ----------------------------------------------------------------
 
+    async def _timed[T](
+        self, op: str, slots: Any, call: Callable[[], Awaitable[T]]
+    ) -> T:
+        """Run one provider call, logging its start and how long it took."""
+        entity_id = self.provider.lock.entity_id
+        _LOGGER.debug("%s slot %s: provider %s start", entity_id, slots, op)
+        start = time.monotonic()
+        outcome = "ok"
+        try:
+            return await call()
+        except BaseException as err:
+            kind = getattr(err, "kind", None)
+            outcome = kind.value if isinstance(kind, ErrorKind) else type(err).__name__
+            raise
+        finally:
+            _LOGGER.debug(
+                "%s slot %s: provider %s %s in %.0f ms",
+                entity_id,
+                slots,
+                op,
+                outcome,
+                (time.monotonic() - start) * 1000,
+            )
+
     async def read(self, slots: Collection[int]) -> dict[int, Reading]:
+        """Ask the lock about ``slots`` now (see ``_read``), timed for the logs."""
+        op = (
+            "read (hard refresh)"
+            if self.provider.fresh_read_is_hard_refresh
+            else "read (get usercodes)"
+        )
+        where = tuple(slots)
+        return await self._timed(
+            op, where[0] if len(where) == 1 else where, lambda: self._read(slots)
+        )
+
+    async def _read(self, slots: Collection[int]) -> dict[int, Reading]:
         """
         Ask the lock about ``slots`` now.
 
@@ -264,6 +301,11 @@ class ProviderPort:
         )
 
     async def write(self, slot: int, pin: str | None) -> bool | None:
+        """Put ``pin`` in ``slot``, or clear it (see ``_write``), timed for the logs."""
+        op = "clear" if pin is None else "set"
+        return await self._timed(op, slot, lambda: self._write(slot, pin))
+
+    async def _write(self, slot: int, pin: str | None) -> bool | None:
         """
         Put ``pin`` in ``slot``, or clear it for None.
 

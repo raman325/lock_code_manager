@@ -284,6 +284,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             on_disable=_on_disable,
             recall=lambda slot: store.wrote(lock_entity_id, slot) if store else None,
             answered_before=store is not None and store.answered(lock_entity_id),
+            name=lock_entity_id,
         )
         port.worker = worker
         return worker
