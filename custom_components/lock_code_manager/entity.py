@@ -85,7 +85,9 @@ class BaseLockCodeManagerEntity(Entity):
         self._hass = hass
         self.config_entry = config_entry
         self.entry_id = self.base_unique_id = config_entry.entry_id
-        self.locks: list[BaseLock] = list(config_entry.runtime_data.locks.values())
+        # The entry's locks, taken when the entity is added (see
+        # ``_register_callbacks``), then kept by the lock added/removed handlers.
+        self.locks: list[BaseLock] = []
         self.slot_num = slot_num
         self.key = key
         self.ent_reg = ent_reg
@@ -212,6 +214,9 @@ class BaseLockCodeManagerEntity(Entity):
         self.async_on_remove(
             callbacks.register_lock_removed_handler(self._handle_remove_lock)
         )
+        # Taken here, with the handler that keeps it current: a lock held
+        # earlier, even since this entity was made, announced itself before.
+        self.locks = list(self.config_entry.runtime_data.locks.values())
         self.async_on_remove(
             callbacks.register_lock_added_handler(self._handle_add_locks)
         )

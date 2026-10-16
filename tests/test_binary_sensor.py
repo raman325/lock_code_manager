@@ -307,8 +307,8 @@ async def test_codes_already_on_the_lock_are_neither_cleared_nor_set_on_start(
 
     Every start cleared each slot and set it again before the slot's state
     had loaded, though the lock held exactly the codes configured. The slot
-    sensors report a state throughout, never unavailable, which is how
-    #358's sensors acting before they were added showed.
+    sensors, once they show a state, never go unavailable again, which is
+    how #358's sensors acting before they were added showed.
     """
     calendar_1, _ = mock_calendars
     now = dt_util.utcnow()
@@ -349,11 +349,13 @@ async def test_codes_already_on_the_lock_are_neither_cleared_nor_set_on_start(
             code_entity_id(hass, entry, slot_num, lock_entity_id),
         )
     }
-    assert [
-        state
-        for state in written
-        if state.entity_id in slot_sensors and state.state == STATE_UNAVAILABLE
-    ] == []
+    # Unavailable only until the lock first answers: a slot sensor is made
+    # as soon as its lock is held, and a slot never read has nothing to show.
+    # Once it has shown a state it never goes back.
+    for entity_id in slot_sensors:
+        states = [state.state for state in written if state.entity_id == entity_id]
+        shown = next(i for i, state in enumerate(states) if state != STATE_UNAVAILABLE)
+        assert STATE_UNAVAILABLE not in states[shown:], (entity_id, states)
 
     await hass.config_entries.async_unload(entry.entry_id)
 

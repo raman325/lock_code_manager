@@ -19,6 +19,7 @@ from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigEntryDisabler,
     ConfigEntryState,
+    ConfigSubentry,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -43,8 +44,10 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialRef,
@@ -355,6 +358,49 @@ class TestCredentialUseRecording:
         assert recorded.state != state.state
         assert recorded.attributes[ATTR_EVENT_TYPE] == CredentialType.PIN
         assert recorded.attributes[ATTR_TARGET] == VIRTUAL_LOCK_ENTITY_ID
+
+    async def test_a_user_added_later_learns_what_the_lock_reports(
+        self,
+        hass: HomeAssistant,
+        virtual_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A use recorder made for a lock already held follows that lock's probe.
+
+        The virtual lock is asked what it can hold only by its first write,
+        which comes after the new user's entities are added. The kinds the
+        recorder publishes widen then, not at the next recorded use.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID], CONF_SLOTS: {}},
+            unique_id="test_virtual_added_user",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        lock = get_virtual_lock(hass, entry)
+        assert lock.cached_capabilities is None
+
+        [subentry] = user_subentries(
+            {1: {CONF_NAME: "late", CONF_PIN: "1234", CONF_ENABLED: True}}
+        )
+        hass.config_entries.async_add_subentry(entry, ConfigSubentry(**subentry))
+        await hass.async_block_till_done()
+        async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL)
+        await hass.async_block_till_done()
+
+        assert lock.cached_capabilities is not None
+        event_entity = er.async_get(hass).async_get_entity_id(
+            "event",
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, 1, EVENT_CREDENTIAL_USED),
+        )
+        assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == sorted(
+            set(MANAGED_CREDENTIAL_TYPES)
+            | set(lock.cached_capabilities.credential_types)
+        )
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
     @pytest.mark.parametrize("pin", ["1", "9" * 64])
     async def test_advertised_capabilities_reject_no_pin_length(

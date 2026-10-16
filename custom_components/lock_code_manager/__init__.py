@@ -168,6 +168,9 @@ from .websocket import async_setup as async_websocket_setup
 
 _LOGGER = logging.getLogger(__name__)
 
+# How long a lock's setup goes unanswered before the log says so.
+SETUP_WAIT_WARNING_SECONDS = 60
+
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 # Either identifier names the same entry, so an action can be pointed at one
@@ -1774,6 +1777,17 @@ async def _async_setup_new_locks(
             slot_num: coordinator.want
             for slot_num, coordinator in runtime_data.slot_coordinators.items()
         }
+        # Holding waits on the lock's provider setup, which has the operation
+        # deadline to answer; said long before that.
+        still_waiting = hass.loop.call_later(
+            SETUP_WAIT_WARNING_SECONDS,
+            _LOGGER.warning,
+            "%s (%s): still waiting for %s to answer its setup; its "
+            "entities come once it does",
+            entry_id,
+            entry_title,
+            lock_entity_id,
+        )
         try:
             lock = await async_hold_lock(hass, config_entry, lock_entity_id, wants)
         except Exception as err:
@@ -1799,11 +1813,26 @@ async def _async_setup_new_locks(
                 # sends them to remove a lock that works.
                 _async_report_dropped_lock(hass, lock_entity_id, err)
             return None
+        finally:
+            still_waiting.cancel()
         runtime_data.locks[lock_entity_id] = lock
         _LOGGER.debug("%s (%s): Holding lock %s", entry_id, entry_title, lock_entity_id)
         async_delete_issue(
             hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
         )
+        # This lock's entities now, not once every lock is held: holding waits
+        # on the lock's provider setup, which a lock that does not answer can
+        # stretch to the operation deadline.
+        for slot_num in new_config.slot_numbers:
+            _LOGGER.debug(
+                "%s (%s): Adding lock %s slot %s sensor and event entity",
+                entry_id,
+                entry_title,
+                lock_entity_id,
+                slot_num,
+            )
+            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
+        callbacks.invoke_lock_added_handlers([lock])
         return lock
 
     # Set up locks concurrently. Each lock's initial usercode fetch can take
@@ -1817,21 +1846,9 @@ async def _async_setup_new_locks(
             tg.create_task(_setup_one_lock(lock_entity_id))
             for lock_entity_id in locks_to_add
         ]
-    added_locks = [lock for task in tasks if (lock := task.result()) is not None]
-
-    for lock in added_locks:
-        for slot_num in new_config.slot_numbers:
-            _LOGGER.debug(
-                "%s (%s): Adding lock %s slot %s sensor and event entity",
-                entry_id,
-                entry_title,
-                lock.lock.entity_id,
-                slot_num,
-            )
-            callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
-
-    if added_locks:
-        callbacks.invoke_lock_added_handlers(added_locks)
+    for task in tasks:
+        # A task group lets a cancelled child go: Home Assistant stopping.
+        task.result()
 
 
 async def async_update_listener(
@@ -2037,19 +2054,12 @@ async def _async_apply_entry_update_locked(
         runtime_data.slot_coordinators[slot_num] = coordinator
         coordinator.async_start()
 
-    if locks_to_add:
-        await _async_setup_new_locks(
-            hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
-        )
-
     # For each new slot: add the standard entities and, for the locks that
     # already had their per-lock entities, the ones that view them; then start
-    # the managers on those locks (new locks got theirs above).
-    existing_locks = {
-        lock_entity_id: lock
-        for lock_entity_id, lock in runtime_data.locks.items()
-        if lock_entity_id not in locks_to_add
-    }
+    # the managers on those locks (new locks get theirs as they are held,
+    # below). Before the new locks are set up, which can take as long as the
+    # slowest of them takes to answer: none of these wait on a lock.
+    existing_locks = dict(runtime_data.locks)
     for slot_num in slots_to_add:
         _LOGGER.debug(
             "%s (%s): Adding standard entities for slot %s",
@@ -2069,6 +2079,11 @@ async def _async_apply_entry_update_locked(
             )
             callbacks.invoke_lock_slot_adders(lock, slot_num, ent_reg)
     _async_push_wants(runtime_data, list(existing_locks), slot_nums=slots_to_add)
+
+    if locks_to_add:
+        await _async_setup_new_locks(
+            hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
+        )
 
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
