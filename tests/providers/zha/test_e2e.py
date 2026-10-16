@@ -622,7 +622,9 @@ class TestWriteStatus:
                 id="own_response",
             ),
             pytest.param(
-                lambda _cluster: default_response(_SET_PIN_CODE_ID, Status.FAILURE),
+                lambda _cluster: default_response(
+                    _SET_PIN_CODE_ID, Status.INVALID_VALUE
+                ),
                 id="default_response_naming_the_set",
             ),
         ],
@@ -765,7 +767,9 @@ class TestClearStatus:
                 id="own_response",
             ),
             pytest.param(
-                lambda _cluster: default_response(_CLEAR_PIN_CODE_ID, Status.FAILURE),
+                lambda _cluster: default_response(
+                    _CLEAR_PIN_CODE_ID, Status.INVALID_VALUE
+                ),
                 id="default_response_naming_the_clear",
             ),
         ],
@@ -1012,22 +1016,31 @@ class TestRefusedClear:
 _GET_PIN_CODE_ID = DoorLock.ServerCommandDefs.get_pin_code.id
 
 
-class TestOpenBugs:
-    """Open ZHA bugs, each pinned by a strict xfail."""
+_TRANSIENT_STATUSES = pytest.mark.parametrize(
+    "status",
+    [Status.FAILURE, Status.HARDWARE_FAILURE, Status.SOFTWARE_FAILURE],
+    ids=["failure", "hardware_failure", "software_failure"],
+)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: a transient failure status in the Default Response to a set "
-            "disables the slot as if the lock rejected the code"
-        ),
-    )
-    @pytest.mark.parametrize(
-        "status",
-        [Status.FAILURE, Status.HARDWARE_FAILURE, Status.SOFTWARE_FAILURE],
-        ids=["failure", "hardware_failure", "software_failure"],
-    )
-    async def test_a_transient_failure_is_retried_not_a_rejection(
+
+class TestTransientWriteFailure:
+    """A Default Response's transient failure to a write is no answer, not a refusal."""
+
+    @pytest.fixture
+    def door_lock(
+        self, door_lock: DoorLockStandIn, request: pytest.FixtureRequest
+    ) -> DoorLockStandIn:
+        """Fail slot 1's set before the entry's first sync writes it."""
+        if request.node.originalname.endswith("_set_is_retried_not_a_rejection"):
+            door_lock.answers["set_pin_code"] = _for_slot_1(
+                default_response(
+                    _SET_PIN_CODE_ID, request.node.callspec.params["status"]
+                )
+            )
+        return door_lock
+
+    @_TRANSIENT_STATUSES
+    async def test_a_transient_failure_to_a_set_is_retried_not_a_rejection(
         self,
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
@@ -1035,14 +1048,36 @@ class TestOpenBugs:
         status: Status,
     ) -> None:
         """The set is sent again until the slot is suspended; the user stays enabled."""
-        door_lock.answers["set_pin_code"] = _for_slot_1(
-            default_response(_SET_PIN_CODE_ID, status)
-        )
-
         await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
 
         assert _slot_enabled_state(hass, lcm_config_entry, 1) == STATE_ON
         assert _writes(door_lock, "set_pin_code").count(1) == LIMIT
+        assert _worker(hass, lcm_config_entry).reachable
+
+    @_TRANSIENT_STATUSES
+    async def test_a_transient_failure_to_a_clear_is_retried_not_a_rejection(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        status: Status,
+    ) -> None:
+        """The clear is sent again until the slot is suspended, not refused once."""
+        await _run_ticks(hass)
+        door_lock.answers["clear_pin_code"] = _for_slot_1(
+            default_response(_CLEAR_PIN_CODE_ID, status)
+        )
+
+        await _disable_slot_1(hass, lcm_config_entry)
+        await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
+
+        assert _writes(door_lock, "clear_pin_code").count(1) == LIMIT
+        assert door_lock.codes[1] == CONFIGURED_PINS[1]
+        assert _worker(hass, lcm_config_entry).reachable
+
+
+class TestOpenBugs:
+    """Open ZHA bugs, each pinned by a strict xfail."""
 
     @pytest.mark.xfail(
         strict=True,
