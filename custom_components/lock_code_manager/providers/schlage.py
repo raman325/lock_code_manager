@@ -24,6 +24,7 @@ from datetime import timedelta
 from typing import Literal, override
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE
 
 from ..const import PENDING_WRITE_TTL
 from ..model.credentials import (
@@ -143,17 +144,17 @@ class SchlageLock(BaseLock):
 
     @override
     async def async_is_device_available(self) -> bool:
-        """Return whether the Schlage lock device is available for commands."""
-        try:
-            await self._async_get_codes()
-        except LockCodeManagerProviderError as err:
-            LOGGER.debug(
-                "Lock %s: availability check failed: %s",
-                self.lock.entity_id,
-                err,
-            )
-            return False
-        return True
+        """
+        Return whether the Schlage lock is reachable, per the lock entity's state.
+
+        The Schlage integration already asks the cloud about every lock every
+        30 seconds, and its lock entity is available only while that answers
+        and the cloud says the lock itself is connected. Reading that state
+        costs nothing; reading the codes to find out was a full cloud read of
+        them every connection check, outside the worker's pacing.
+        """
+        state = self.hass.states.get(self.lock.entity_id)
+        return state is not None and state.state != STATE_UNAVAILABLE
 
     @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:

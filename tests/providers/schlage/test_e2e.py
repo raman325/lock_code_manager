@@ -9,8 +9,15 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.lock import LockState
 from homeassistant.config_entries import ConfigEntryDisabler
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, STATE_ON
+from homeassistant.const import (
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PIN,
+    STATE_ON,
+    STATE_UNAVAILABLE,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
@@ -463,6 +470,51 @@ class TestCloud:
             assert sorted(
                 code for _n, code in fake_schlage_cloud.codes.values()
             ) == sorted(c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values())
+
+
+class TestAvailability:
+    """Whether the lock is reachable comes from its entity, not a read of its codes."""
+
+    async def test_an_idle_lock_s_codes_are_read_only_by_the_poll(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Five idle minutes read the codes once, for the poll.
+
+        The connection check read every code from the cloud every 30 seconds,
+        outside the worker's pacing: about 2,880 reads a lock a day.
+        """
+        async with _schlage_entry(hass, schlage_lock_entity):
+            await async_advance_sync_ticks(hass, freezer, 5)
+            reads = fake_schlage_cloud.count("get_codes")
+
+            await async_advance_clock(hass, freezer, 5 * 60)
+
+            assert fake_schlage_cloud.count("get_codes") - reads <= 1
+
+    async def test_a_lock_whose_entity_goes_unavailable_is_unreachable(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Unreachable while the entity is unavailable, reachable once it returns."""
+        entity_id = schlage_lock_entity.entity_id
+        async with _schlage_entry(hass, schlage_lock_entity) as entry:
+            lock = entry.runtime_data.locks[entity_id]
+            await async_advance_sync_ticks(hass, freezer, 5)
+            assert await lock.async_internal_is_reachable()
+
+            hass.states.async_set(entity_id, STATE_UNAVAILABLE)
+            assert not await lock.async_internal_is_reachable()
+
+            hass.states.async_set(entity_id, LockState.LOCKED)
+            assert await lock.async_internal_is_reachable()
 
 
 class TestRefusedPin:
