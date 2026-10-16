@@ -6,10 +6,12 @@ notifications for lock/unlock state changes. See ARCHITECTURE.md for the
 provider's role in the data flow.
 """
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
+import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+import time
 from typing import Any, Literal, override
 
 from zwave_js_server.client import Client
@@ -70,6 +72,33 @@ from ._base import BaseLock
 from ._util import is_masked_code, parse_tag
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _timed(entity_id: str, slot: int, op: str) -> Iterator[None]:
+    """
+    Log how long one call to the driver took, and how it ended.
+
+    The result is ``ok``, or the error's translation key (the Supervision
+    status HA mapped it to) or its type: never the PIN.
+    """
+    start = time.monotonic()
+    result = "ok"
+    try:
+        yield
+    except BaseException as err:
+        result = getattr(err, "translation_key", None) or type(err).__name__
+        raise
+    finally:
+        _LOGGER.debug(
+            "%s slot %s: driver %s %s in %.0f ms",
+            entity_id,
+            slot,
+            op,
+            result,
+            (time.monotonic() - start) * 1000,
+        )
+
 
 # Numeric ``ZWaveErrorCodes`` values from node-zwave-js. zwave-js-server-python
 # surfaces the code as a bare int on ``FailedZWaveCommand.zwave_error_code``
@@ -668,13 +697,14 @@ class ZWaveJSLock(BaseLock):
         if self._node_advertises_user_code_cc():
             self._uc_write_slot = credential.slot
         try:
-            await lock_helpers.async_set_credential(
-                self.node,
-                user_id,
-                UserCredentialType.PIN_CODE,
-                pin,
-                credential_slot=credential.slot,
-            )
+            with _timed(self.lock.entity_id, credential.slot, "set"):
+                await lock_helpers.async_set_credential(
+                    self.node,
+                    user_id,
+                    UserCredentialType.PIN_CODE,
+                    pin,
+                    credential_slot=credential.slot,
+                )
         except BaseZwaveJSServerError as err:
             # Retry a transient command failure (e.g. a sleeping/battery lock);
             # suspend only on a code the node can never accept. _mapped_zwave_error
@@ -742,9 +772,10 @@ class ZWaveJSLock(BaseLock):
         The clear goes through HA's ``lock_helpers.async_delete_credential``.
         """
         try:
-            await lock_helpers.async_delete_credential(
-                self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
-            )
+            with _timed(self.lock.entity_id, ref.slot, "clear"):
+                await lock_helpers.async_delete_credential(
+                    self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
+                )
         except BaseZwaveJSServerError as err:
             raise _mapped_zwave_error(
                 err, f"delete credential slot {ref.slot} failed"
@@ -1020,9 +1051,10 @@ class ZWaveJSLock(BaseLock):
         if not self._node_advertises_user_code_cc():
             return
         try:
-            await self.node.access_control.get_credential(
-                UserCredentialType.PIN_CODE, code_slot
-            )
+            with _timed(self.lock.entity_id, code_slot, "post-write single-slot read"):
+                await self.node.access_control.get_credential(
+                    UserCredentialType.PIN_CODE, code_slot
+                )
         except BaseZwaveJSServerError as err:
             _LOGGER.debug(
                 "Lock %s slot %s: post-write reconciliation read failed (%s); "

@@ -9,6 +9,8 @@ import asyncio
 from collections.abc import Callable, Collection
 import contextlib
 from dataclasses import dataclass, field
+import logging
+import re
 
 import pytest
 
@@ -982,6 +984,27 @@ async def test_a_provider_bug_is_logged(rig_factory, caplog) -> None:
 
     assert "Lock provider failed" in caplog.text
     assert "the provider broke" in caplog.text
+
+
+async def test_an_exchange_logs_its_timing(rig_factory, caplog) -> None:
+    """Each exchange logs its start and end, timed; the slot its status change."""
+    caplog.set_level(logging.DEBUG, logger="custom_components.lock_code_manager")
+    await _started(rig_factory(FakeLock(), name="lock.door"), {1: "73915286"})
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert "lock.door slot 1: queued slot (start)" in messages
+    assert "lock.door slot 1: set waiting 2000 ms for the gap" in messages
+    assert "lock.door slot 1: set exchange start" in messages
+    for op in ("read", "set", "read-back"):
+        assert any(
+            re.fullmatch(
+                rf"lock\.door slot 1: {op} exchange answered in \d+ ms \(\)", message
+            )
+            for message in messages
+        ), op
+    assert "lock.door slot 1: status unknown -> out_of_sync (after read)" in messages
+    assert "lock.door slot 1: status out_of_sync -> in_sync (after slot)" in messages
+    assert not any("73915286" in message for message in messages)
 
 
 async def test_a_refusal_of_a_released_write_spares_the_new_owner(
