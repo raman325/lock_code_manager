@@ -1901,10 +1901,12 @@ class TestSupervisedWrites:
     did not read the slot after a failure.
     """
 
-    @pytest.fixture(params=[False, True], ids=["driver_15_25_2", "older_driver"])
+    @pytest.fixture(
+        params=["15.25.2", "15.25.1"], ids=["driver_15_25_2", "older_driver"]
+    )
     def fake_zwave_lock_options(self, request: pytest.FixtureRequest) -> dict[str, Any]:
         """Which driver the lock sits behind."""
-        return {"driver_before_15_25_2": request.param}
+        return {"driver_version": request.param}
 
     @pytest.fixture
     def lock_schlage_be469_state(
@@ -2007,6 +2009,84 @@ class TestSupervisedWrites:
             STATE_ON,
             "4321",
         )
+
+
+class TestReadAfterAWrite:
+    """
+    The slot read after a supervised User Code write, which only older drivers need.
+
+    Before zwave-js/zwave-js#8927 (15.25.2) the driver cached nothing a
+    supervised Set wrote, so the provider read the slot back; from it on the
+    driver caches the write itself, and the read only cost each set a radio
+    round trip (4.5 to 5 seconds on production locks).
+    """
+
+    @pytest.fixture(
+        params=[
+            ("15.31.1", 0),
+            ("15.25.2", 0),
+            ("15.25.1", 1),
+            ("not-a-version", 1),
+        ],
+        ids=["driver_15_31_1", "driver_15_25_2", "older_driver", "unknown_driver"],
+    )
+    def driver(self, request: pytest.FixtureRequest) -> tuple[str, int]:
+        """The driver the lock sits behind, and the reads a write should cost."""
+        return request.param
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self, driver: tuple[str, int]) -> dict[str, Any]:
+        """Put the lock behind ``driver``."""
+        return {"driver_version": driver[0]}
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    async def test_a_write_is_read_back_only_where_the_driver_needs_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        driver: tuple[str, int],
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A new PIN reaches the lock and in sync, read back only on an older driver."""
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        sent = len(fake_zwave_lock.commands)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await _async_settle_in_sync(
+            hass, freezer, fake_zwave_lock_entry, lock_entity, 2
+        )
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert (
+            fake_zwave_lock.cached(CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2)
+            == "4321"
+        )
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+        # The write, the provider's read where the driver needs it, and the
+        # sync's own read confirming the slot, which every write gets.
+        assert [
+            message["command"].rsplit(".", 1)[1]
+            for message in fake_zwave_lock.commands[sent:]
+            if message["command"]
+            in (
+                "endpoint.access_control.set_credential",
+                "endpoint.access_control.get_credential",
+            )
+        ] == ["set_credential"] + ["get_credential"] * (driver[1] + 1)
 
 
 class TestDuplicateRefusedByUserCredentialLock:

@@ -48,12 +48,13 @@ import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
 import time
 from typing import Any, Literal, Self
 from unittest.mock import MagicMock
 
+from awesomeversion import AwesomeVersion, AwesomeVersionCompareException
 import pytest
 from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.access_control import (
@@ -429,12 +430,14 @@ class FakeZWaveLock:
     ``codes`` is what the lock holds, by slot, when it differs from what the
     dump caches (a masking lock's dump caches asterisks).
 
-    ``driver_before_15_25_2``: the driver before zwave-js/zwave-js#8927
-    (5239ec3c6, released in 15.25.2), still common on add-on installs. On
-    User Code CC it took a supervised Set's outcome at its word: a success
-    persisted nothing, so the cache kept the slot's old values, and a failure
-    was answered Error_Unknown without reading the slot. What
-    ``_async_uc_reconcile_value_db`` in the provider exists for.
+    ``driver_version`` is the driver the client reports connecting to
+    (``client.version``, PY_CLIENT). One before zwave-js/zwave-js#8927
+    (5239ec3c6, released in 15.25.2), still common on add-on installs, is
+    ``driver_before_15_25_2``: on User Code CC it took a supervised Set's
+    outcome at its word: a success persisted nothing, so the cache kept the
+    slot's old values, and a failure was answered Error_Unknown without
+    reading the slot. What ``_async_uc_reconcile_value_db`` in the provider
+    exists for. A version that does not parse behaves as the current driver.
 
     Faults (``ignore``, ``refuse``, ``fail``, ``hang``, ``drop_reply``,
     ``slow``) act on radio exchanges; see ``NodeFault``.
@@ -457,7 +460,7 @@ class FakeZWaveLock:
         max_credential_hash_length: int = 0,
         pin_lengths: tuple[int, int] = (4, 10),
         codes: dict[int, str] | None = None,
-        driver_before_15_25_2: bool = False,
+        driver_version: str = "15.31.1",
     ) -> None:
         """Wrap ``node``, seed the driver cache from its dump, and install."""
         self.client = client
@@ -471,7 +474,7 @@ class FakeZWaveLock:
         elif self._supports(SUPERVISION_CC_ID):
             self.supervision = SupervisionStatus.SUCCESS
         self.rejects_duplicates = rejects_duplicates
-        self.driver_before_15_25_2 = driver_before_15_25_2
+        self.driver_version = driver_version
         self.duplicate_parameters = duplicate_parameters
         self.max_user_name_length = max_user_name_length
         self.max_credential_hash_length = max_credential_hash_length
@@ -509,6 +512,24 @@ class FakeZWaveLock:
     # ------------------------------------------------------------------
     # The lock, seen from the test
     # ------------------------------------------------------------------
+
+    @property
+    def driver_version(self) -> str:
+        """Return the driver version the client reports."""
+        return self.client.version.driver_version
+
+    @driver_version.setter
+    def driver_version(self, version: str) -> None:
+        """Put the lock behind another driver, as reconnecting to it would."""
+        self.client.version = replace(self.client.version, driver_version=version)
+
+    @property
+    def driver_before_15_25_2(self) -> bool:
+        """Return whether the driver predates zwave-js/zwave-js#8927."""
+        try:
+            return AwesomeVersion(self.driver_version) < AwesomeVersion("15.25.2")
+        except AwesomeVersionCompareException:
+            return False
 
     @property
     def supervision(self) -> SupervisionStatus | None:
