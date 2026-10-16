@@ -14,7 +14,6 @@ import logging
 import time
 from typing import Any, Literal, override
 
-from awesomeversion import AwesomeVersion, AwesomeVersionCompareException
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
 from zwave_js_server.const.command_class.access_control import UserCredentialType
@@ -73,12 +72,6 @@ from ._base import BaseLock
 from ._util import is_masked_code, parse_tag
 
 _LOGGER = logging.getLogger(__name__)
-
-# The first driver with zwave-js/zwave-js#8927: from it on, the driver persists
-# a supervised User Code Command Class write to its value database and reads
-# the slot back after a failed one, so the post-write single-slot read
-# (_async_uc_reconcile_value_db) would only add a radio round trip to each write.
-DRIVER_RECONCILES_USER_CODE_WRITES = AwesomeVersion("15.25.2")
 
 
 @contextlib.contextmanager
@@ -736,11 +729,6 @@ class ZWaveJSLock(BaseLock):
                 # confirmation read hard-refreshes for every OPTIMISTIC
                 # write, so a single-slot read would be pure duplication.
                 return WriteResult.OPTIMISTIC
-            # Definitive rejection: pre-15.25.2 drivers never re-read the
-            # slot after a supervised failure, so an already-stale cache
-            # entry would stay wrong forever (see
-            # _async_uc_reconcile_value_db).
-            await self._async_uc_reconcile_value_db(credential.slot)
             if key == "credential_rejected_duplicate" or self._uc_write_refused:
                 raise DuplicateCodeError(
                     code_slot=credential.slot,
@@ -753,11 +741,11 @@ class ZWaveJSLock(BaseLock):
             ) from err
         finally:
             self._uc_write_slot = None
-        # Pre-15.25.2 drivers never persist a supervised success to the
-        # value database (see _async_uc_reconcile_value_db). On a refusal the
-        # read also replaces the code the driver's "credential modified"
-        # event announced with what the lock reports holding.
-        await self._async_uc_reconcile_value_db(credential.slot)
+        # Before 15.25.2 the driver cached nothing of a supervised write and
+        # read nothing back after a failed one; the worker's read-back after
+        # every write is a fresh get_credential, which puts the cache right,
+        # and on a refusal replaces the code the driver's "credential
+        # modified" event announced with what the lock reports holding.
         if self._uc_write_refused:
             raise DuplicateCodeError(
                 code_slot=credential.slot,
@@ -788,11 +776,8 @@ class ZWaveJSLock(BaseLock):
                 err, f"delete credential slot {ref.slot} failed"
             ) from err
         except HomeAssistantError as err:
-            # Same supervised-failure staleness as the set path (see
-            # _async_uc_reconcile_value_db). Success needs no read: the
-            # driver clears its cached User Code CC values on a
-            # successful delete since 15.24.3 (zwave-js/zwave-js#8866).
-            await self._async_uc_reconcile_value_db(ref.slot)
+            # The worker reads the slot back after a failed clear, which
+            # also corrects a cache an older driver left stale.
             raise LockOperationFailed(
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err
@@ -909,24 +894,22 @@ class ZWaveJSLock(BaseLock):
     # to take over: the shim goes dormant on its own, no LCM change
     # needed.
     #
-    # The shim also carries ``_async_uc_reconcile_value_db``, a
-    # post-write single-slot read that bridges a second gap fixed in
-    # driver 15.25.2 (zwave-js/zwave-js#8927): before that, supervised
-    # User Code CC writes through the unified API never persisted to
-    # (success) or reconciled (failure) the driver's value database,
-    # so cached reads served stale slots until the next report. It is
-    # skipped once the connected driver reports 15.25.2 or later.
+    # A second gap, fixed in driver 15.25.2 (zwave-js/zwave-js#8927):
+    # before it, supervised User Code CC writes through the unified API
+    # never persisted to (success) or reconciled (failure) the driver's
+    # value database. The worker's read-back after every write is a
+    # fresh single-slot get_credential, which repairs that cache; a
+    # slot forgotten mid-write can stay stale on such a driver until
+    # the next hard refresh.
     #
     # To remove the whole section once the minimum supported driver
-    # includes #8930 (which implies #8927):
+    # includes #8930:
     #
     # 1. Delete everything from this comment through
-    #    ``_async_uc_reconcile_value_db``.
+    #    ``_uc_slot_status``.
     # 2. Delete the ``_node_advertises_user_code_cc`` branch in
     #    ``setup_push_subscription`` (and its docstring paragraph).
-    # 3. Delete the ``_async_uc_reconcile_value_db`` call sites in
-    #    ``async_set_credential`` and ``async_delete_credential``.
-    # 4. Delete the shim tests in
+    # 3. Delete the shim tests in
     #    ``tests/providers/zwave_js/test_events.py`` and
     #    ``tests/providers/zwave_js/test_provider.py`` (grep ``_uc_``)
     #    and restore ``_EXPECTED_PUSH_UNSUB_COUNT`` to 3.
@@ -1036,76 +1019,6 @@ class ZWaveJSLock(BaseLock):
             ).value
         except NotFoundError:
             return None
-
-    async def _async_uc_reconcile_value_db(self, code_slot: int) -> None:
-        """
-        Read one slot back from the device so the driver's cache converges.
-
-        Pre-15.25.2 drivers never persist a supervised User Code CC write
-        to the value database (success) and never re-read the slot after a
-        failure, so every later cached read -- including LCM's own initial
-        load after a restart -- serves the pre-write state. This fresh
-        single-slot read through the unified API forces the driver to
-        query the device: on the User Code CC dispatch path the solicited
-        report repairs the value database and doubles as a push through
-        the report shim above; on a User Credential CC lock the driver
-        dispatches natively and the read is merely redundant.
-
-        Skipped on a driver that reconciles these writes itself (15.25.2
-        on); an unknown driver version keeps the read.
-
-        Best-effort by design: the write already concluded (the caller
-        returns or raises on its own evidence), so a failed read must not
-        change the outcome -- the next hard refresh or sync tick reconciles
-        instead.
-        """
-        if (
-            not self._node_advertises_user_code_cc()
-            or self._driver_reconciles_user_code_writes()
-        ):
-            return
-        try:
-            with _timed(self.lock.entity_id, code_slot, "post-write single-slot read"):
-                await self.node.access_control.get_credential(
-                    UserCredentialType.PIN_CODE, code_slot
-                )
-        except BaseZwaveJSServerError as err:
-            _LOGGER.debug(
-                "Lock %s slot %s: post-write reconciliation read failed (%s); "
-                "leaving it to the next hard refresh or sync tick",
-                self.lock.entity_id,
-                code_slot,
-                err,
-            )
-        except Exception:
-            # Broad by design, mirroring the coordinator's confirmation-read
-            # backstop: two call sites run inside except clauses mapping the
-            # write outcome to typed errors, and an escaping exception here
-            # would replace that typed error and derail the seam's handling.
-            _LOGGER.exception(
-                "Lock %s slot %s: unexpected error during post-write "
-                "reconciliation read; leaving it to the next hard refresh "
-                "or sync tick",
-                self.lock.entity_id,
-                code_slot,
-            )
-
-    def _driver_reconciles_user_code_writes(self) -> bool:
-        """
-        Return whether the connected driver includes zwave-js/zwave-js#8927.
-
-        Read on every write rather than cached: the client sets its version
-        on each connect, so this follows a driver upgraded under a running
-        Home Assistant, and parsing it costs nothing next to the radio
-        round trip it saves. A missing or unparsable version answers False,
-        so the read the older drivers need is kept.
-        """
-        # The client holds no version until it has connected.
-        driver = getattr(self.node.client.version, "driver_version", "")
-        try:
-            return AwesomeVersion(driver) >= DRIVER_RECONCILES_USER_CODE_WRITES
-        except AwesomeVersionCompareException:
-            return False
 
     @callback
     @override

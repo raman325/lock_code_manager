@@ -1098,11 +1098,28 @@ class TestDuplicateRefusedByUserCodeLock:
         """How the lock shows a code it holds."""
         return request.param
 
+    @pytest.fixture(
+        params=[None, "15.25.1"], ids=["unsupervised", "supervised_older_driver"]
+    )
+    def supervised_driver(self, request: pytest.FixtureRequest) -> str | None:
+        """
+        The driver behind a lock that supervises its Sets, or None if it does not.
+
+        Before 15.25.2 the driver cached nothing of a supervised Set and read
+        nothing back after a failed one (#1651/#1652).
+        """
+        return request.param
+
     @pytest.fixture
     def lock_schlage_be469_state(
-        self, lock_schlage_be469_state: dict[str, Any], code_display: str
+        self,
+        lock_schlage_be469_state: dict[str, Any],
+        code_display: str,
+        supervised_driver: str | None,
     ) -> dict[str, Any]:
         """The node's value database as the lock filled it at inclusion."""
+        if supervised_driver is not None:
+            lock_schlage_be469_state = supervised_lock_state(lock_schlage_be469_state)
         for value in lock_schlage_be469_state["values"]:
             if (
                 value["commandClass"] == CommandClass.USER_CODE
@@ -1115,12 +1132,17 @@ class TestDuplicateRefusedByUserCodeLock:
         return lock_schlage_be469_state
 
     @pytest.fixture
-    def fake_zwave_lock_options(self, code_display: str) -> dict[str, Any]:
+    def fake_zwave_lock_options(
+        self, code_display: str, supervised_driver: str | None
+    ) -> dict[str, Any]:
         """The lock holds the entry's PINs, and 5555 at slot 5."""
-        return {
+        options: dict[str, Any] = {
             "code_display": code_display,
             "codes": {1: "9999", 2: "1234", 5: "5555"},
         }
+        if supervised_driver is not None:
+            options["driver_version"] = supervised_driver
+        return options
 
     async def _async_settle(
         self,
@@ -1219,19 +1241,24 @@ class TestDuplicateRefusedByUserCodeLock:
         hass: HomeAssistant,
         fake_zwave_lock: FakeZWaveLock,
         fake_e2e_lock: ZWaveJSLock,
+        supervised_driver: str | None,
     ) -> None:
         """
         The refused PIN does not stay on the slot while it is being disabled.
 
         A masking lock's write is announced with the code written, as if
-        the lock took it; the slot shows what the lock reports holding.
+        the lock took it; the slot shows what the lock reports holding. An
+        older driver takes a supervised Fail at its word and announces
+        nothing.
         """
         pushed = _record_pushes(hass, fake_e2e_lock)
         with pytest.raises(DuplicateCodeError):
             await fake_e2e_lock.async_set_usercode(2, "5555")
         await hass.async_block_till_done()
 
-        assert _first_push(pushed, 2) == SlotCredential.unreadable()
+        assert _first_push(pushed, 2) == (
+            None if supervised_driver else SlotCredential.unreadable()
+        )
         # The worker then reads the slot: it shows what the lock holds.
         assert _codes(hass, fake_e2e_lock).get(2) != "5555"
         assert fake_zwave_lock.holds(2) == "1234"
@@ -2013,31 +2040,20 @@ class TestSupervisedWrites:
 
 class TestReadAfterAWrite:
     """
-    The slot read after a supervised User Code write, which only older drivers need.
+    A supervised User Code write is read back once, by the worker, on every driver.
 
     Before zwave-js/zwave-js#8927 (15.25.2) the driver cached nothing a
-    supervised Set wrote, so the provider read the slot back; from it on the
-    driver caches the write itself, and the read only cost each set a radio
-    round trip (4.5 to 5 seconds on production locks).
+    supervised Set wrote. The worker's read-back is a fresh get_credential,
+    so it puts that cache right with no read of the provider's own.
     """
 
     @pytest.fixture(
-        params=[
-            ("15.31.1", 0),
-            ("15.25.2", 0),
-            ("15.25.1", 1),
-            ("not-a-version", 1),
-        ],
+        params=["15.31.1", "15.25.2", "15.25.1", "not-a-version"],
         ids=["driver_15_31_1", "driver_15_25_2", "older_driver", "unknown_driver"],
     )
-    def driver(self, request: pytest.FixtureRequest) -> tuple[str, int]:
-        """The driver the lock sits behind, and the reads a write should cost."""
-        return request.param
-
-    @pytest.fixture
-    def fake_zwave_lock_options(self, driver: tuple[str, int]) -> dict[str, Any]:
-        """Put the lock behind ``driver``."""
-        return {"driver_version": driver[0]}
+    def fake_zwave_lock_options(self, request: pytest.FixtureRequest) -> dict[str, Any]:
+        """Put the lock behind a driver."""
+        return {"driver_version": request.param}
 
     @pytest.fixture
     def lock_schlage_be469_state(
@@ -2046,16 +2062,15 @@ class TestReadAfterAWrite:
         """The BE469 dump, advertising Supervision CC."""
         return supervised_lock_state(lock_schlage_be469_state)
 
-    async def test_a_write_is_read_back_only_where_the_driver_needs_it(
+    async def test_a_write_is_read_back_once(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
-        driver: tuple[str, int],
         fake_zwave_lock: FakeZWaveLock,
         fake_zwave_lock_entry: MockConfigEntry,
         lock_entity: er.RegistryEntry,
     ) -> None:
-        """A new PIN reaches the lock and in sync, read back only on an older driver."""
+        """A new PIN reaches the lock and the driver's cache, and is in sync."""
         for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
             await _async_settle_in_sync(
                 hass, freezer, fake_zwave_lock_entry, lock_entity, slot
@@ -2076,8 +2091,7 @@ class TestReadAfterAWrite:
             STATE_ON,
             "4321",
         )
-        # The write, the provider's read where the driver needs it, and the
-        # sync's own read confirming the slot, which every write gets.
+        # The write, then the worker's read-back confirming the slot.
         assert [
             message["command"].rsplit(".", 1)[1]
             for message in fake_zwave_lock.commands[sent:]
@@ -2086,7 +2100,7 @@ class TestReadAfterAWrite:
                 "endpoint.access_control.set_credential",
                 "endpoint.access_control.get_credential",
             )
-        ] == ["set_credential"] + ["get_credential"] * (driver[1] + 1)
+        ] == ["set_credential", "get_credential"]
 
 
 class TestDuplicateRefusedByUserCredentialLock:
