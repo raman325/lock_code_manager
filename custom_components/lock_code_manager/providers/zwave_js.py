@@ -640,15 +640,22 @@ class ZWaveJSLock(BaseLock):
 
         ``adopt_untagged=False`` skips the legacy pass: the release path
         deletes what it finds, so it must never find a user LCM did not tag.
+        It also takes a bare-digit name for LCM's only where LCM would have
+        written one -- a lock whose name limit cannot fit ``lcm:<slot>:``
+        (``_build_tagged_user_name``). Anywhere else a user named ``3`` is
+        the homeowner's, and deleting it would delete their codes.
 
         Returns ``None`` when neither lookup matches.
         """
         users = await self.async_get_users()
+        digits_ours = adopt_untagged or await self._names_slot_only(slot)
         try:
             return next(
                 existing.user_id
                 for existing in users
-                if existing.name and parse_tag(existing.name)[0] == slot
+                if existing.name
+                and parse_tag(existing.name)[0] == slot
+                and (digits_ours or not existing.name.isdecimal())
             )
         except StopIteration:
             if not adopt_untagged:
@@ -664,6 +671,11 @@ class ZWaveJSLock(BaseLock):
                 ),
                 None,
             )
+
+    async def _names_slot_only(self, slot: int) -> bool:
+        """Return whether LCM names ``slot``'s user with the bare slot number here."""
+        caps = await self._get_cached_capabilities()
+        return self._user_name_length(f"lcm:{slot}:") > caps.max_user_name_length
 
     @override
     async def async_release_managed_slot(self, slot: int) -> None:
