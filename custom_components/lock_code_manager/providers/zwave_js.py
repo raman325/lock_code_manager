@@ -699,6 +699,12 @@ class ZWaveJSLock(BaseLock):
         driver's raw credentials, not ``async_get_users``, which drops the
         credential types LCM has no name for (DESFire, BLE, UWB, ...).
 
+        A user kept loses LCM's tag in the same release (``_async_untag``),
+        PIN first: it is an ordinary user of the lock's now, and a later use
+        of the slot number must not find it as LCM's and write onto it. A
+        failed rename still leaves the release done -- LCM's PIN is gone --
+        and is logged.
+
         A User Code lock has no user records -- each slot is an implicit
         user carrying one PIN -- so the base clears the slot, as before.
         """
@@ -719,7 +725,7 @@ class ZWaveJSLock(BaseLock):
                 slot,
             )
             return
-        _, credentials = await self._async_read_access_control()
+        users, credentials = await self._async_read_access_control()
         held = [cred for cred in credentials if cred.user_id == user_id]
         lcm_pin = any(
             cred.type is UserCredentialType.PIN_CODE and cred.slot == slot
@@ -731,6 +737,39 @@ class ZWaveJSLock(BaseLock):
         if lcm_pin:
             await self._delete_credential(
                 CredentialRef(user_id=user_id, type=CredentialType.PIN, slot=slot)
+            )
+        name = next((u.user_name for u in users if u.user_id == user_id), None)
+        await self._async_untag(slot, user_id, name or "")
+
+    async def _async_untag(self, slot: int, user_id: int, name: str) -> None:
+        """
+        Rename the user LCM tagged for ``slot`` to a name that claims no slot.
+
+        What the user was called before LCM adopted it is not kept anywhere
+        (adoption wrote over it), so it keeps the display part of its tagged
+        name -- ``Alice`` of ``lcm:2:Alice`` -- or no name at all when that is
+        empty or would read as a tag itself (a bare ``3``). Z-Wave allows an
+        empty user name. A failure is logged, not raised: LCM's PIN is
+        already gone, so the release is done.
+        """
+        _, display = parse_tag(name)
+        neutral = display if parse_tag(display)[0] is None else ""
+        try:
+            await lock_helpers.async_set_user(
+                self.node, user_id=user_id, user_name=neutral
+            )
+        except (BaseZwaveJSServerError, HomeAssistantError) as err:
+            _LOGGER.warning(
+                "Lock %s: released slot %s and removed LCM's PIN, but could "
+                "not rename user %s, which holds other credentials, to drop "
+                "LCM's tag (%s). Until it is renamed, turning slot %s on "
+                "again writes onto that user; rename it in the lock vendor's "
+                "app",
+                self.lock.entity_id,
+                slot,
+                user_id,
+                err,
+                slot,
             )
 
     @override
