@@ -605,7 +605,9 @@ class ZWaveJSLock(BaseLock):
                 return slot
         return user.user_id
 
-    async def _find_user_index_for_slot(self, slot: int) -> int | None:
+    async def _find_user_index_for_slot(
+        self, slot: int, *, adopt_untagged: bool = True
+    ) -> int | None:
         """
         Return the lock ``user_id`` LCM owns for ``slot``, if any.
 
@@ -629,6 +631,9 @@ class ZWaveJSLock(BaseLock):
            ANY LCM slot, so a user tagged for slot A is never adopted as
            slot B's anchor.
 
+        ``adopt_untagged=False`` skips the legacy pass: the release path
+        deletes what it finds, so it must never find a user LCM did not tag.
+
         Returns ``None`` when neither lookup matches.
         """
         users = await self.async_get_users()
@@ -639,6 +644,8 @@ class ZWaveJSLock(BaseLock):
                 if existing.name and parse_tag(existing.name)[0] == slot
             )
         except StopIteration:
+            if not adopt_untagged:
+                return None
             return next(
                 (
                     existing.user_id
@@ -650,6 +657,35 @@ class ZWaveJSLock(BaseLock):
                 ),
                 None,
             )
+
+    @override
+    async def async_release_managed_slot(self, slot: int) -> None:
+        """
+        Delete the user LCM tagged for ``slot``; clear the slot on a User Code lock.
+
+        A User Credential lock keeps a user record per slot, tagged
+        ``lcm:<slot>:``. Clearing only the PIN would leave that user behind
+        (and its name, the slot's display name, on the lock). The user is
+        found by its tag ONLY, never by adoption: deleting a user cascades
+        to its credentials, so adopting an untagged one here would delete a
+        code LCM never created (#1518/#1694). No tagged user: nothing of
+        LCM's is left to release.
+
+        A User Code lock has no user records -- each slot is an implicit
+        user carrying one PIN -- so the base clears the slot, as before.
+        """
+        if not await self._supports_user_records():
+            await super().async_release_managed_slot(slot)
+            return
+        user_id = await self._find_user_index_for_slot(slot, adopt_untagged=False)
+        if user_id is None:
+            _LOGGER.debug(
+                "Lock %s: no LCM-owned user to release for slot %s",
+                self.lock.entity_id,
+                slot,
+            )
+            return
+        await self.async_delete_user(user_id)
 
     @override
     async def async_delete_user(self, user_id: int) -> None:
