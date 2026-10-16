@@ -67,8 +67,9 @@ ISSUES_KEY: Final = "slot_issues"
 # What the workers remember across a restart.
 STORE_KEY: Final = "lock_store"
 # lock's entity registry id -> whether a read has described a slot of it, for
-# every lock read this run (``ProviderPort.read``). By registry id, as the
-# store keeps it: a device re-paired under the same entity id starts over. A
+# every lock read this run (``ProviderPort.read``). By the registry id the
+# worker is bound to, as the store keeps it: a device re-paired under the same
+# entity id starts over. A
 # lock that has is kept in the store too, so a restart starts from it: the
 # first reads after one are of the slots Lock Code Manager wrote, and may show
 # nothing.
@@ -155,7 +156,7 @@ async def async_setup_core(hass: HomeAssistant) -> None:
     entities = er.async_get(hass)
     for key, reports in data[REPORTS_KEY].items():
         if reports and (entity := entities.async_get(key)) is not None:
-            store.reported(entity.entity_id)
+            store.reported(key, entity.entity_id)
 
     async def _owed(hass: HomeAssistant) -> None:
         for lock, slot, entry_id in store.releases():
@@ -252,12 +253,14 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
                 for entry, _ in entries_configuring(hass, lock_entity_id)
             )
 
-        if store is not None and store.reports(lock_entity_id):
-            data[REPORTS_KEY][provider.lock.id] = True
+        # What is kept of the lock is under the registry id the worker is bound to.
+        key = provider.lock.id
+        if store is not None and store.reports(key):
+            data[REPORTS_KEY][key] = True
 
         def _on_reports() -> None:
             if (store := data.get(STORE_KEY)) is not None:
-                store.reported(lock_entity_id)
+                store.reported(key, lock_entity_id)
 
         port = ProviderPort(
             provider,
@@ -282,8 +285,8 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             on_change=_on_change,
             on_send=lambda: _remember(lock_entity_id, worker),
             on_disable=_on_disable,
-            recall=lambda slot: store.wrote(lock_entity_id, slot) if store else None,
-            answered_before=store is not None and store.answered(lock_entity_id),
+            recall=lambda slot: store.wrote(key, slot) if store else None,
+            answered_before=store is not None and store.answered(key),
             name=lock_entity_id,
         )
         port.worker = worker
@@ -312,6 +315,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
     def _remember(lock_entity_id: str, worker: LockWorker[ProviderPort]) -> None:
         if (store := data.get(STORE_KEY)) is not None:
             store.remember(
+                worker.port.provider.lock.id,
                 lock_entity_id,
                 worker,
                 lambda slot: data[GIVEN_UP_KEY].get(
@@ -322,8 +326,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
     async def _cleanup(lock_entity_id: str, worker: LockWorker[ProviderPort]) -> None:
         port = worker.port
         # A worker whose device was re-paired leaves as a lock leaving does,
-        # whether or not a rebuild saw the re-pair: what it kept since went
-        # under the entity id, which names the new device now.
+        # whether or not a rebuild saw the re-pair: its device is gone.
         re_paired = _re_paired(hass, lock_entity_id, worker)
         leaving = lock_entity_id in data[LEAVING_KEY] or re_paired
         if leaving:
@@ -331,8 +334,9 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             # it re-paired and still in use.
             for key in ("lock_offline", RE_PAIRED_RELOAD):
                 async_delete_issue(hass, DOMAIN, per_lock_issue_id(key, lock_entity_id))
+            # A lock re-added, or a device re-paired back, starts over.
             if (store := data.get(STORE_KEY)) is not None:
-                store.forget_lock(lock_entity_id)
+                store.forget_lock(port.provider.lock.id)
             data[REPORTS_KEY].pop(port.provider.lock.id, None)
             if re_paired:
                 # Work owed to the old device that no rebuild dropped (Home
@@ -428,11 +432,9 @@ def _re_paired(
     """
     Return whether ``lock``'s entity id names a device other than ``worker``'s.
 
-    A device re-paired under the same entity id has a new registry id. What
-    the store keeps under the entity id is the new device's then: the old
-    worker's fingerprints there must not pass for writes to it, nor the old
-    device's "has reported". A lock removed, or renamed (the same registry
-    id), is not re-paired.
+    A device re-paired under the same entity id has a new registry id: the
+    worker, bound to the old one, drives a device that is gone. A lock
+    removed, or renamed (the same registry id), is not re-paired.
     """
     entity = er.async_get(hass).async_get(lock)
     return entity is not None and entity.id != worker.port.provider.lock.id
@@ -447,8 +449,7 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
     worker with every slot they want. The old worker stops as a lock leaving
     Lock Code Manager does (``_re_paired``). Clears owed to the old device
     are moot: it is gone; a repair names their slots, which the same lock
-    re-paired may still hold. Its record under the old registry id goes at
-    the next start.
+    re-paired may still hold.
     """
     data = hass.data[DATA]
     registry = lock_registry(hass)
@@ -717,7 +718,7 @@ def async_give_up(
         else:
             registry.unclaim(lock_entity_id, entry.entry_id, slot)
             if (store := hass.data[DATA].get(STORE_KEY)) is not None:
-                store.forget_slot(lock_entity_id, slot)
+                store.forget_slot(port.provider.lock.id, slot)
     except KeyError:
         return  # never held: nothing to give up
     async_hand_off(hass, entry, lock_entity_id, [slot])
@@ -775,7 +776,7 @@ def async_reconcile_issues(
         ):
             del given_up[key]  # cleared and dropped: nothing left to resume
             if (store := data.get(STORE_KEY)) is not None:
-                store.forget_slot(*key)
+                store.forget_slot(worker.port.provider.lock.id, key[1])
     # A clear held by a worker since stopped (decision F) is not this
     # worker's to resolve: its repair stays until it is tried again.
     kept = {
@@ -977,7 +978,7 @@ async def async_hard_refresh(
     if forget_reporting:
         worker.port.reports.pop(provider.lock.id, None)
         if (store := provider.hass.data.get(DATA, {}).get(STORE_KEY)) is not None:
-            store.unreported(provider.lock.entity_id)
+            store.unreported(provider.lock.id)
     await worker.read(probe=True)
 
     async def _walk() -> None:

@@ -1209,7 +1209,13 @@ async def async_remove_entry(
     entry_id = config_entry.entry_id
     config = get_entry_config(config_entry)
     if (store := hass.data.get(DATA, LockCodeManagerData()).get(STORE_KEY)) is not None:
-        store.forget_entry(config.locks, config.slot_numbers)
+        # Under each lock's registry id now. A worker still bound to an older
+        # one (a re-paired device) forgets its record when it stops.
+        entities = er.async_get(hass)
+        store.forget_entry(
+            [e.id for lock in config.locks if (e := entities.async_get(lock))],
+            config.slot_numbers,
+        )
     for lock_entity_id in config.locks:
         # Its unload let go of the locks; their slots are someone else's now.
         async_hand_off(hass, config_entry, lock_entity_id, config.slot_numbers)

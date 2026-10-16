@@ -1,18 +1,20 @@
 """
 What the lock workers remember across a restart, in one Home Assistant Store.
 
-Per lock, keyed by its entity registry id so a rename keeps it (#1442), with
-its entity id beside it: whether the lock has ever answered, whether a read
-of it has ever described a slot (#1581; absent in a record saved before, and
-then not known to), and per slot
-what was last written -- a keyed fingerprint or ``cleared``, never a PIN --
-and a release clear still owed, with the entry that gave the slot up. What a
-slot holds is read again; counts, fights and holds start over (a hold's
-repair outlives a restart on its own).
+Per lock, keyed by the entity registry id its worker is bound to, so a rename
+keeps it (#1442) and a device re-paired under the same entity id never finds
+the old one's, with its entity id beside it: whether the lock has ever
+answered, whether a read of it has ever described a slot (#1581; absent in a
+record saved before, and then not known to), and per slot what was last
+written -- a keyed fingerprint or ``cleared``, never a PIN -- and a release
+clear still owed, with the entry that gave the slot up. What a slot holds is
+read again; counts, fights and holds start over (a hold's repair outlives a
+restart on its own).
 
 Written a second after a change, and at Home Assistant's final write. Never
 dropped on an unload (#1243): only when a release is done, a slot is let go
-of for good, a lock leaves Lock Code Manager or an entry is deleted.
+of for good, a lock leaves Lock Code Manager or an entry is deleted. A
+record whose registry id is gone goes at the next start.
 
 The design: docs/superpowers/specs/2026-10-14-milestone-5.md.
 """
@@ -35,7 +37,7 @@ Record = dict[str, Any]
 
 
 class LockStore:
-    """Each lock's record: whether it ever answered or described a slot, and its slots'."""
+    """Each lock's record, under ``key``: the registry id its worker is bound to."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         """Start empty; ``async_load`` reads what was saved."""
@@ -54,21 +56,21 @@ class LockStore:
 
     # What a lock's worker starts from ------------------------------------------
 
-    def wrote(self, lock: str, slot: int) -> str | None:
-        """Return what was last written to ``slot`` on ``lock``, if anything."""
-        record = self._find(lock)
+    def wrote(self, key: str, slot: int) -> str | None:
+        """Return what was last written to ``slot`` on the lock, if anything."""
+        record = self._locks.get(key)
         return (
             None if record is None else record["slots"].get(str(slot), {}).get("wrote")
         )
 
-    def answered(self, lock: str) -> bool:
-        """Return whether ``lock`` has ever answered."""
-        record = self._find(lock)
+    def answered(self, key: str) -> bool:
+        """Return whether the lock has ever answered."""
+        record = self._locks.get(key)
         return record is not None and record["answered"]
 
-    def reports(self, lock: str) -> bool:
-        """Return whether a read of ``lock`` has ever described a slot."""
-        record = self._find(lock)
+    def reports(self, key: str) -> bool:
+        """Return whether a read of the lock has ever described a slot."""
+        record = self._locks.get(key)
         return record is not None and record.get("reports", False)
 
     def releases(self) -> list[tuple[str, int, str]]:
@@ -84,7 +86,11 @@ class LockStore:
 
     @callback
     def remember(
-        self, lock: str, worker: LockWorker, given_up_by: Callable[[int], str | None]
+        self,
+        key: str,
+        lock: str,
+        worker: LockWorker,
+        given_up_by: Callable[[int], str | None],
     ) -> None:
         """
         Take what ``worker`` knows of ``lock`` now; slots it no longer tracks keep theirs.
@@ -92,8 +98,6 @@ class LockStore:
         A release is kept while it is still going, not once held: its repair
         brings it back. ``given_up_by`` names the entry that gave a slot up.
         """
-        if (key := self._key(lock)) is None:
-            return  # gone from the entity registry: the lock is gone
         record = self._locks.get(key, {"answered": False, "slots": {}})
         slots = dict(record["slots"])
         for number, slot in worker.slots.items():
@@ -117,45 +121,39 @@ class LockStore:
         )
 
     @callback
-    def reported(self, lock: str) -> None:
+    def reported(self, key: str, lock: str) -> None:
         """Remember that a read of ``lock`` has described a slot."""
-        if (key := self._key(lock)) is None:
-            return  # gone from the entity registry: the lock is gone
         record = self._locks.get(key, {"answered": False, "slots": {}})
         self._put(key, {**record, "entity_id": lock, "reports": True})
 
     @callback
-    def unreported(self, lock: str) -> None:
-        """Forget that a read of ``lock`` has described a slot: it is asked again."""
-        if (key := self._key_of(lock)) is not None:
-            record = self._locks[key]
+    def unreported(self, key: str) -> None:
+        """Forget that a read of the lock has described a slot: it is asked again."""
+        if (record := self._locks.get(key)) is not None:
             self._put(key, {k: v for k, v in record.items() if k != "reports"})
 
     @callback
-    def forget_slot(self, lock: str, slot: int) -> None:
-        """Forget ``slot`` on ``lock``: it is done, or let go of for good."""
-        if (key := self._key_of(lock)) is not None:
-            record = self._locks[key]
+    def forget_slot(self, key: str, slot: int) -> None:
+        """Forget ``slot`` on the lock: it is done, or let go of for good."""
+        if (record := self._locks.get(key)) is not None:
             slots = {n: s for n, s in record["slots"].items() if n != str(slot)}
             self._put(key, {**record, "slots": slots})
 
     @callback
-    def forget_lock(self, lock: str) -> None:
-        """Forget ``lock``: it left Lock Code Manager."""
-        if (key := self._key_of(lock)) is not None:
-            del self._locks[key]
+    def forget_lock(self, key: str) -> None:
+        """Forget the lock: it left Lock Code Manager, or its device is gone."""
+        if self._locks.pop(key, None) is not None:
             self._save()
 
     @callback
-    def forget_entry(self, locks: Collection[str], slots: Collection[int]) -> None:
+    def forget_entry(self, keys: Collection[str], slots: Collection[int]) -> None:
         """
-        Forget a deleted entry's ``slots`` on its ``locks``.
+        Forget a deleted entry's ``slots`` on the locks kept under ``keys``.
 
         A clear it left going is on a slot it no longer has: it is kept.
         """
-        for lock in locks:
-            if (key := self._key_of(lock)) is not None:
-                record = self._locks[key]
+        for key in keys:
+            if (record := self._locks.get(key)) is not None:
                 kept = {n: s for n, s in record["slots"].items() if int(n) not in slots}
                 self._put(key, {**record, "slots": kept})
 
@@ -167,10 +165,11 @@ class LockStore:
         A record kept under a registry id the registry no longer has was for
         a lock that is gone, even if another now has its entity id.
         """
+        registry = er.async_get(self._hass)
         kept = {
             k: r
             for k, r in self._locks.items()
-            if r["entity_id"] in keep and k == self._key(r["entity_id"])
+            if r["entity_id"] in keep and registry.async_get(k) is not None
         }
         dropped = [r for k, r in self._locks.items() if k not in kept]
         if dropped:
@@ -179,22 +178,6 @@ class LockStore:
         return dropped
 
     # Inside --------------------------------------------------------------------
-
-    def _key(self, lock: str) -> str | None:
-        """
-        Return the key ``lock`` is kept under: its registry id.
-
-        Every lock Lock Code Manager drives has one; one without is gone.
-        """
-        entity = er.async_get(self._hass).async_get(lock)
-        return None if entity is None else entity.id
-
-    def _key_of(self, lock: str) -> str | None:
-        """Return the key ``lock``'s record is kept under, if it has one."""
-        return key if (key := self._key(lock)) in self._locks else None
-
-    def _find(self, lock: str) -> Record | None:
-        return None if (key := self._key_of(lock)) is None else self._locks[key]
 
     def _put(self, key: str, record: Record) -> None:
         if self._locks.get(key) != record:
