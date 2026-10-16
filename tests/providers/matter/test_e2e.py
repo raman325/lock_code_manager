@@ -72,6 +72,8 @@ from ...common import TICK_INTERVAL
 from .conftest import FAKE_MATTER_SLOTS, matter_helpers_patched
 from .fake_node import DlStatus, DoorLock, FakeMatterLock, ImStatus
 
+_PIN = DoorLock.Enums.CredentialTypeEnum.kPin
+
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 WORKER = "custom_components.lock_code_manager.sync.worker"
 
@@ -1350,6 +1352,157 @@ class TestReleaseKeepsWhatLCMDidNotWrite:
         assert len(warnings) == 1
         assert fake_matter_lock_entity.entity_id in warnings[0]
         assert "released slot 2" in warnings[0]
+
+
+def _lcm_s_user(fake: FakeMatterLock, slot: int = 2) -> tuple[int, int, str]:
+    """Return the user, credential index and PIN LCM wrote for ``slot``."""
+    pin = FAKE_MATTER_SLOTS[slot][CONF_PIN]
+    index = _index_of(fake, pin)
+    user_index = fake.owner(index)
+    assert user_index is not None
+    return user_index, index, pin
+
+
+def _writes(fake: FakeMatterLock, since: int) -> list[tuple[str, int | None]]:
+    """Return the deletions and renames the lock answered since ``since``."""
+    return [
+        (exchange.command, exchange.index)
+        for exchange in fake.commands[since:]
+        if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+    ]
+
+
+class TestReleaseByTheFabricThatMadeThePin:
+    """
+    LCM's PINs are the ones Home Assistant's fabric created, whatever their place.
+
+    The lock names each credential's creating fabric (GetCredentialStatus);
+    the node names Home Assistant's (CurrentFabricIndex).
+    """
+
+    @pytest.mark.parametrize(
+        "added_by", ["vendor_app", "keypad"], ids=["vendor_app", "keypad"]
+    )
+    async def test_a_homeowner_s_pin_listed_first_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        added_by: str,
+    ) -> None:
+        """
+        A PIN another fabric or the keypad made is kept, though it is the user's first.
+
+        Only LCM's own PIN is cleared, and the user keeps the homeowner's.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index, index, pin = _lcm_s_user(fake_matter_lock)
+        if added_by == "vendor_app":
+            fake_matter_lock.enroll(
+                user_index, DoorLock.Enums.CredentialTypeEnum.kPin, index=5
+            )
+        else:
+            fake_matter_lock.program(user_index, "555555", credential_index=5)
+        user = fake_matter_lock.users[user_index]
+        user.credentials.sort(key=lambda credential: credential != (_PIN, 5))
+        await async_advance_sync_ticks(hass, freezer)
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        assert user_index in fake_matter_lock.users
+        assert user.credentials == [(_PIN, 5)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert 5 in fake_matter_lock.codes
+        assert parse_tag(user.name)[0] is None
+        assert _writes(fake_matter_lock, sent) == [
+            ("ClearCredential", index),
+            ("SetUser", user_index),
+        ]
+
+    async def test_a_retried_release_keeps_the_homeowner_s_pin(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        LCM's PIN is cleared but the answer is lost: the retry deletes nothing.
+
+        The retry finds only the homeowner's PIN on the user. It is another
+        fabric's, so the user is not cleared: only LCM's tag goes.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index, index, pin = _lcm_s_user(fake_matter_lock)
+        fake_matter_lock.enroll(
+            user_index, DoorLock.Enums.CredentialTypeEnum.kPin, index=5
+        )
+        await async_advance_sync_ticks(hass, freezer)
+        fake_matter_lock.drop_reply("ClearCredential", index, times=1)
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: ("SetUser", user_index) in _writes(fake_matter_lock, sent),
+            max_ticks=int(RETRY_AFTER[1]),
+            what="the retried release",
+        )
+
+        user = fake_matter_lock.users[user_index]
+        assert user.credentials == [(_PIN, 5)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert parse_tag(user.name)[0] is None
+        assert _writes(fake_matter_lock, sent) == [
+            ("ClearCredential", index),
+            ("SetUser", user_index),
+        ]
+
+    async def test_whose_pin_it_is_unanswered_deletes_nothing_until_answered(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A status read that fails holds the release; answered, the user goes."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index, index, pin = _lcm_s_user(fake_matter_lock)
+        sent = len(fake_matter_lock.commands)
+
+        fake_matter_lock.fail("GetCredentialStatus", times=1)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: user_index not in fake_matter_lock.users,
+            max_ticks=int(RETRY_AFTER[1]),
+            what="the retried release",
+        )
+        assert pin not in fake_matter_lock.codes.values()
+        assert [
+            (exchange.command, exchange.index)
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command
+            in ("GetCredentialStatus", "ClearUser", "ClearCredential", "SetUser")
+        ] == [
+            ("GetCredentialStatus", index),
+            ("GetCredentialStatus", index),
+            ("ClearUser", user_index),
+        ]
 
 
 class TestReleaseOfARenamedUser:
