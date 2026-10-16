@@ -1338,9 +1338,9 @@ class ZWaveJSUILock(BaseMqttLock):
         ``credential.slot``. A successful api response is taken as confirmed
         because zwave-js-ui answers only once the driver's supervised set has
         completed, so success here means the lock acknowledged the write --
-        unless the Supervision result it returns is a Fail, which is the lock
-        refusing it (``_raise_on_supervision_fail``), or the lock refused the
-        PIN as a duplicate by notification while the write was out. That
+        unless the lock refused the PIN as a duplicate by notification while
+        the write was out, or the Supervision result it returns is a Fail,
+        which is the lock refusing it (``_raise_on_supervision_fail``). That
         refusal is the only word User Code Command Class has for it, and the
         driver announces the refused code as written, so the slot is read
         back to replace that announcement before the refusal is raised.
@@ -1361,13 +1361,16 @@ class ZWaveJSUILock(BaseMqttLock):
             )
         finally:
             self._write_slot = None
-        _raise_on_supervision_fail("set", code_slot, result)
+        # Before the Supervision result: a supervising lock refuses a
+        # duplicate with Fail as well as the notification, and only the
+        # notification says why.
         if self._write_refused:
             if (held := await self._async_read_slot(code_slot)) is not None:
                 self._push_credential_update(code_slot, held)
             raise DuplicateCodeError(
                 code_slot=code_slot, lock_entity_id=self.lock.entity_id
             )
+        _raise_on_supervision_fail("set", code_slot, result)
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
