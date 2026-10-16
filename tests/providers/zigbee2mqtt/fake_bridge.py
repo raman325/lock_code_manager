@@ -93,6 +93,13 @@ class FakeZ2MBridge:
     # The first read of a user after each write to it goes unanswered: a
     # flaky mesh losing the read-back (#1397 shape); later reads answer.
     drop_read_backs: bool = False
+    # Writes reach the lock and it drops them, saying nothing: its table
+    # stays as it was.
+    drop_writes: bool = False
+    # Seconds the lock takes to answer a read. While it does, it reports an
+    # attribute, so Zigbee2MQTT republishes its cache ahead of the answer:
+    # the asked-for user's entry as last read, before any write since.
+    answer_after: float = 0.0
     # user id -> (userstatus, pincodevalue): the lock's own table.
     users: dict[int, tuple[int, str | None]] = field(default_factory=dict)
     # Zigbee2MQTT's cached state for the device. ``state`` matches the
@@ -174,6 +181,8 @@ class FakeZ2MBridge:
 
     def _set_pin_code(self, user: int, request: dict[str, Any]) -> None:
         """Apply ``setPinCode``/``clearPinCode`` (``TZ:442-454``)."""
+        if self.drop_writes:
+            return
         code = request.get("pin_code")
         if code is None:
             self.users[user] = (AVAILABLE, None)
@@ -193,7 +202,12 @@ class FakeZ2MBridge:
         }
         if self.expose_pin and code:
             entry["pin_code"] = code
-        self._publish_entity_state({"users": {str(user): entry}})
+        update = {"users": {str(user): entry}}
+        if not self.answer_after:
+            self._publish_entity_state(update)
+            return
+        self.report()
+        self.hass.loop.call_later(self.answer_after, self._publish_entity_state, update)
 
     def _publish_event(self, action: str, user: Any, source: int) -> None:
         """Publish an event's ``action`` fields, as both event converters build them."""
