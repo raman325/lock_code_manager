@@ -906,7 +906,8 @@ async def test_two_locks_re_paired_together_set_every_entry_up_again(
         3: "3333",
         4: "4444",
     }
-    assert "OperationNotAllowed" not in caplog.text
+    # Not even refused and logged: one rebuild at a time.
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     for entry in (both, second):
         assert await hass.config_entries.async_unload(entry.entry_id)
 
