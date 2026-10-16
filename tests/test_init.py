@@ -117,6 +117,7 @@ from custom_components.lock_code_manager.sync.slot import LIMIT
 
 from .common import (
     BASE_CONFIG,
+    CONFIG_ENTRY_VERSION,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
@@ -144,6 +145,7 @@ from .common import (
     mock_lock,
     slot_entity_id,
     sync_status,
+    user_subentries,
     when_mock_lock_built,
     write_entry_config,
 )
@@ -969,6 +971,64 @@ async def test_a_lock_slow_to_set_up_at_startup_holds_back_only_its_own_entities
         lambda: all(hass.states.get(e).state == STATE_ON for e in in_sync),
         max_ticks=30,
         what="the slow lock's slots in sync once it answers",
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_condition_turning_while_a_lock_sets_up_reaches_that_lock(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A slot's condition turning on while its lock is still setting up reaches the lock.
+
+    The lock is handed every slot's want when the entry starts holding it,
+    and a want that changes is told to the locks the entry holds. One that
+    changed in between was told to neither: the slot's PIN never reached a
+    lock that set up slowly, until the condition turned again.
+    """
+    condition = "input_boolean.slot_1_condition"
+    hass.states.async_set(condition, STATE_OFF)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=user_subentries(
+            {
+                1: {
+                    CONF_NAME: "user1",
+                    CONF_PIN: "1234",
+                    CONF_ENABLED: True,
+                    CONF_CONDITION: condition,
+                }
+            }
+        ),
+        unique_id="Slow Lock Condition",
+        title="Slow Lock Condition",
+        version=CONFIG_ENTRY_VERSION,
+    )
+    entry.add_to_hass(hass)
+    hass.set_state(CoreState.starting)
+    with when_mock_lock_built(lambda lock: lock.hang("setup")) as faults:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        hass.set_state(CoreState.running)
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        await async_run_until_quiet()
+        [hung] = faults
+        await hung.async_wait_held()
+
+        hass.states.async_set(condition, STATE_ON)
+        await async_run_until_quiet()
+        hung.clear()
+        await async_run_until_quiet()
+
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: mock_lock(entry, LOCK_1_ENTITY_ID).codes.get(1) == "1234",
+        max_ticks=5,
+        what="the slot's PIN on the lock",
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
 

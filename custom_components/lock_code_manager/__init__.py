@@ -1816,6 +1816,11 @@ async def _async_setup_new_locks(
         finally:
             still_waiting.cancel()
         runtime_data.locks[lock_entity_id] = lock
+        # A want that changed while the hold waited -- a condition entity
+        # turning, say -- was told only to the locks the entry held then.
+        for slot_num, coordinator in runtime_data.slot_coordinators.items():
+            if coordinator.want != wants.get(slot_num):
+                coordinator.async_push_want([lock_entity_id])
         _LOGGER.debug("%s (%s): Holding lock %s", entry_id, entry_title, lock_entity_id)
         async_delete_issue(
             hass, DOMAIN, per_lock_issue_id("lock_dropped", lock_entity_id)
