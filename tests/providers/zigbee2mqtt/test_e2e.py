@@ -23,6 +23,7 @@ from homeassistant.const import (
     CONF_NAME,
     CONF_PIN,
     EVENT_HOMEASSISTANT_STOP,
+    STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
@@ -55,6 +56,7 @@ from custom_components.lock_code_manager.ha.runtime import (
     locks_that_cannot_report,
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import user_from_slot
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
@@ -62,7 +64,7 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
-from custom_components.lock_code_manager.sync.slot import Reading
+from custom_components.lock_code_manager.sync.slot import LIMIT, Reading
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
@@ -190,6 +192,27 @@ class TestPushUpdatesViaMqtt:
         assert seen(2) == reading(SlotCredential.known("2222"))
         # Slot 3 is no slot LCM manages: a code nobody manages.
         assert seen(3) == reading(SlotCredential.unreadable())
+
+    async def test_messages_are_taken_in_the_order_they_arrive(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+    ) -> None:
+        """
+        Each message is taken as it arrives, so none overtakes the one before.
+
+        Taken in the executor instead, a cache republish could land behind
+        the lock's answer it was sent ahead of, and undo it.
+        """
+        seen = _record_pushes(hass, z2m_lock)
+        _fire_device_payload(
+            hass, {"users": {"1": {"status": "enabled", "pin_code": "1111"}}}
+        )
+        assert seen(1) == reading(SlotCredential.known("1111"))
+        _fire_device_payload(
+            hass, {"users": {"1": {"status": "enabled", "pin_code": "2222"}}}
+        )
+        assert seen(1) == reading(SlotCredential.known("2222"))
 
     async def test_available_slot_is_empty(
         self,
@@ -322,6 +345,104 @@ class TestGetUsercodes:
 
         assert result[1] == SlotCredential.known("PIN1")
         assert result[2] == SlotCredential.known("PIN2")
+
+    async def test_a_write_back_to_the_old_code_is_read_back_at_once(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_mock,
+    ) -> None:
+        """
+        Two writes, no read between: only the last decides what is stale.
+
+        The slot goes to another code and straight back. A copy of the entry
+        from before the first write now agrees with what was written, so the
+        lock's reply -- that same entry -- answers the read-back.
+        """
+        bridge = FakeZ2MBridge(hass, mqtt_mock, Z2M_FULL_TOPIC)
+        bridge.install()
+        bridge.set_user(1, "0000")
+        assert (await z2m_lock.async_get_users([1]))[0] == user_from_slot(
+            1, SlotCredential.known("0000")
+        )
+        await z2m_lock.async_set_usercode(1, "1111")
+        await z2m_lock.async_set_usercode(1, "0000")
+
+        async with asyncio.timeout(1):
+            users = await z2m_lock.async_get_users([1])
+
+        assert users == [user_from_slot(1, SlotCredential.known("0000"))]
+
+    async def test_only_the_read_back_waits_past_the_old_entry(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        z2m_lock,
+        mqtt_mock,
+    ) -> None:
+        """
+        The lock drops a write: its reply is the entry from before it.
+
+        That reply cannot be told from a copy, so the read-back hears nothing
+        and times out to silence -- and the read after it takes the reply.
+        """
+        bridge = FakeZ2MBridge(hass, mqtt_mock, Z2M_FULL_TOPIC, drop_writes=True)
+        bridge.install()
+        await z2m_lock.async_get_users([1])
+        await z2m_lock.async_set_usercode(1, "1111")
+
+        read_back = await _on_the_clock(
+            hass, freezer, z2m_lock.async_get_users([1]), "the read-back"
+        )
+        assert z2m_lock.last_silent_slots == {1}
+        assert read_back == [user_from_slot(1, SlotCredential.unreadable())]
+        async with asyncio.timeout(1):
+            users = await z2m_lock.async_get_users([1])
+
+        assert z2m_lock.last_silent_slots == frozenset()
+        assert users == [user_from_slot(1, SlotCredential.empty())]
+
+    async def test_a_masked_slot_written_is_read_back_at_once(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_mock,
+    ) -> None:
+        """
+        A lock that will not show its codes reads the same before and after.
+
+        A copy of the masked entry from before the write says what the reply
+        says, a code that cannot be compared, so the reply answers the
+        read-back rather than being waited out as one.
+        """
+        bridge = FakeZ2MBridge(hass, mqtt_mock, Z2M_FULL_TOPIC, expose_pin=False)
+        bridge.install()
+        bridge.set_user(1, "0000")
+        await z2m_lock.async_get_users([1])
+        await z2m_lock.async_set_usercode(1, "1111")
+
+        async with asyncio.timeout(1):
+            users = await z2m_lock.async_get_users([1])
+
+        assert users == [user_from_slot(1, SlotCredential.unreadable())]
+
+    async def test_a_republish_ahead_of_a_clears_read_back_answers_nothing(
+        self,
+        hass: HomeAssistant,
+        z2m_lock,
+        mqtt_mock,
+    ) -> None:
+        """A clear's read-back waits past a copy of the code it cleared."""
+        bridge = FakeZ2MBridge(hass, mqtt_mock, Z2M_FULL_TOPIC, answer_after=0.1)
+        bridge.install()
+        bridge.set_user(1, "0000")
+        await z2m_lock.async_get_users([1])
+        await z2m_lock.async_clear_usercode(1)
+
+        async with asyncio.timeout(1):
+            users = await z2m_lock.async_get_users([1])
+
+        assert users == [user_from_slot(1, SlotCredential.empty())]
 
 
 class TestAddingThroughTheUserInterface:
@@ -513,6 +634,69 @@ class TestBridge:
             assert all(
                 _in_sync(hass, entry, slot, lock_id) == STATE_ON for slot in (1, 2)
             )
+
+    async def test_a_republish_ahead_of_a_read_back_answers_nothing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        A cache republish just ahead of a read-back is not its answer.
+
+        Zigbee2MQTT republishes its whole cache, so the users entry for the
+        slot just written can arrive as it was before the write, ahead of the
+        lock's real reply. Taken as the read-back's answer it shows the slot
+        out of sync, and the slot is written again.
+        """
+        bridge = fake_z2m_bridge
+        bridge.answer_after = 3.0
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id, pins) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
+            _assert_trouble_free(hass, lock_id)
+
+    async def test_a_dropped_write_is_read_back_as_silence_then_read(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        The lock drops every write: its reply is the slot as it was before.
+
+        A reply the same as the pre-write entry cannot be told from a copy of
+        it, so the read-back hears nothing and times out. The read after it
+        takes the entry, so the slot is written again, held after its tries
+        with the lock still reachable, and shown empty, as the lock says.
+        """
+        bridge = fake_z2m_bridge
+        bridge.drop_writes = True
+        bridge.answer_after = 3.0
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id, {1: "1234"}) as entry:
+            await async_step_clock_until(
+                hass,
+                freezer,
+                lambda: (
+                    bool(lcm_issue_ids(hass))
+                    and not unfinished_tasks(hass)
+                    and not lock_workers_busy(hass)
+                ),
+                max_steps=900,
+                what="the slot held after its tries",
+                step=1.0,
+            )
+
+            assert len(bridge.sets_for(1)) == LIMIT
+            assert _in_sync(hass, entry, 1, lock_id) == STATE_OFF
+            assert lock_reachable(hass, lock_id) is not False
+            assert lock_codes(hass, lock_id) == {1: SlotCode.EMPTY}
 
     async def test_a_custom_base_topic_carries_every_command(
         self,

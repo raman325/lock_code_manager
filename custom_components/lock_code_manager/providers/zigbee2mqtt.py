@@ -136,6 +136,13 @@ class Zigbee2MQTTLock(BaseMqttLock):
     # the delta gate in _process_z2m_device_payload compares against this
     # so full-cached-state republications don't repush stale entries.
     _last_users_states: dict[int, SlotAnswer] = field(init=False, default_factory=dict)
+    # Each slot's users entry exactly as last published, and, for a slot
+    # written since its last read, the entry it had before the write: a
+    # republish of that cannot answer the read that follows the write.
+    _users_entries: dict[int, dict[str, Any]] = field(init=False, default_factory=dict)
+    _pre_write_entries: dict[int, dict[str, Any]] = field(
+        init=False, default_factory=dict
+    )
     _subscribed_topic: str | None = field(init=False, default=None)
 
     @property
@@ -272,6 +279,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
             states: dict[int, SlotAnswer] = {}
+            entries: dict[int, dict[str, Any]] = {}
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -292,6 +300,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     continue
 
                 states[user_id] = _project_z2m_user_state(user_info)
+                entries[user_id] = user_info
 
             # The converter answers GetPinCode through the users object
             # (fz.lock_pin_code_response), not through a pin_code response
@@ -300,7 +309,19 @@ class Zigbee2MQTTLock(BaseMqttLock):
             # time (async_get_users queries slots sequentially), so cached
             # entries for other slots cannot satisfy a future they don't
             # belong to.
+            #
+            # The asked-for slot's own entry can be cached too: a report
+            # from the lock republishes the cache, ahead of the answer, with
+            # the entry as it was before a write since. Taken as the read's
+            # answer, that shows the write undone and it is sent again. So
+            # an entry still as it was before the write does not answer the
+            # read that follows it. The lock's reply can be that same entry
+            # (a write it dropped); the read then times out to silence, and
+            # the next read takes it.
+            self._users_entries.update(entries)
             for user_id, state in states.items():
+                if self._pre_write_entries.get(user_id) == entries[user_id]:
+                    continue
                 if (
                     future := self._pending_codes.pop(user_id, None)
                 ) is not None and not future.done():
@@ -409,8 +430,15 @@ class Zigbee2MQTTLock(BaseMqttLock):
         self._clear_push_unsubs()
         self._subscribed_topic = None
 
+        @callback
         def message_received(msg: ReceiveMessage) -> None:
-            """Handle incoming MQTT messages (may run off the event loop)."""
+            """
+            Handle an incoming MQTT message, in the order the bridge sent it.
+
+            On the event loop: MQTT runs any other subscriber in the executor,
+            where two messages can be applied the other way round -- a cache
+            republish behind the lock's answer it came before.
+            """
             try:
                 payload = json.loads(msg.payload)
             except (json.JSONDecodeError, TypeError) as err:
@@ -421,7 +449,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 )
                 return
 
-            self.hass.add_job(self._process_z2m_device_payload, payload)
+            self._process_z2m_device_payload(payload)
 
         try:
             unsub = await async_subscribe(self.hass, topic, message_received)
@@ -531,8 +559,10 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self.lock.entity_id,
             code_slot,
         )
+        written = SlotCredential.known(pin)
+        self._remember_pre_write_entry(code_slot, written)
         # Optimistic coordinator update after publish (MQTT QoS 0); hard_refresh mitigates drift.
-        self._push_credential_update(code_slot, SlotCredential.known(pin))
+        self._push_credential_update(code_slot, written)
         return WriteResult.CONFIRMED
 
     @override
@@ -592,9 +622,32 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self.lock.entity_id,
             code_slot,
         )
+        self._remember_pre_write_entry(code_slot, SlotCredential.empty())
         # Same optimistic push as ``async_set_credential``.
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
+
+    def _remember_pre_write_entry(
+        self, code_slot: int, written: SlotCredential
+    ) -> None:
+        """
+        Keep the slot's entry from before a write, until the slot is next read.
+
+        Only one that would gainsay the write: a code, or nothing, other than
+        what was written. A copy of anything else answers the read-back as
+        the lock's reply would -- the same value, or one that cannot be
+        compared, where the write is trusted -- so it is left to answer it.
+        """
+        self._pre_write_entries.pop(code_slot, None)
+        if (entry := self._users_entries.get(code_slot)) is None:
+            return
+        state = _project_z2m_user_state(entry)
+        if (
+            isinstance(state, SlotCredential)
+            and (state.is_readable or state.is_empty)
+            and state != written
+        ):
+            self._pre_write_entries[code_slot] = entry
 
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
@@ -692,6 +745,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
             credential = result
         finally:
             self._pending_codes.pop(slot_num, None)
+            # Only the read right after a write is owed this: whatever it
+            # heard, the next read takes the entry as it comes.
+            self._pre_write_entries.pop(slot_num, None)
         return credential
 
     @override
