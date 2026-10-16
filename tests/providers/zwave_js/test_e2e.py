@@ -6,6 +6,7 @@ from collections.abc import Iterable
 import copy
 from datetime import timedelta
 import itertools
+import logging
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -3123,6 +3124,57 @@ class TestReleaseOfARenamedUser:
         ]
         assert lock_entity.entity_id in warning.message
         assert "released slot 2," in warning.message
+
+    async def test_a_slot_never_turned_on_warns_nothing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        Slot 3 was only ever off: LCM wrote no code there to lose.
+
+        No user carries its tag, as none ever did; that is no warning.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_never_on",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+        assert _users_tagged_for(fake_zwave_lock, 3) == set()
+        caplog.set_level(logging.DEBUG, "custom_components.lock_code_manager")
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 3)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert not [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "carries LCM's tag" in record.message
+        ]
+        assert any(
+            record.levelname == "DEBUG"
+            and "released slot 3, which LCM never wrote" in record.message
+            for record in caplog.records
+        )
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
 class TestRestartMidWrite:
