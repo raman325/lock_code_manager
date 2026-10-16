@@ -18,7 +18,11 @@ from typing import Final
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import CONF_NAME, EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 from homeassistant.helpers.dispatcher import (
     async_dispatcher_connect,
     async_dispatcher_send,
@@ -440,18 +444,26 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
     if moot:
         # The same lock under a new registry id (moved between integrations)
         # may still hold a removed user's code. Not replayed: on a new device
-        # the slot may hold a keypad code. The user checks.
+        # the slot may hold a keypad code. The user checks. Slots an earlier
+        # re-pair named, not yet acknowledged, are still named.
+        issue_id = per_lock_issue_id(RE_PAIRED_WORK_DROPPED, lock)
+        earlier = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+        named = (earlier.translation_placeholders or {}) if earlier else {}
+        if slots := named.get("slots"):
+            moot_named = sorted({*moot, *(int(n) for n in slots.split(", "))})
+        else:
+            moot_named = moot
         async_create_issue(
             hass,
             DOMAIN,
-            per_lock_issue_id(RE_PAIRED_WORK_DROPPED, lock),
+            issue_id,
             is_fixable=True,
             is_persistent=True,
             severity=IssueSeverity.WARNING,
             translation_key=RE_PAIRED_WORK_DROPPED,
             translation_placeholders={
                 "lock_entity_id": lock,
-                "slots": ", ".join(map(str, moot)),
+                "slots": ", ".join(map(str, moot_named)),
             },
         )
     for slot in moot:
