@@ -917,7 +917,9 @@ class MatterLock(BaseLock):
         self._slot_by_user_index.pop(user_id, None)
 
     @override
-    async def async_release_managed_slot(self, slot: int) -> None:
+    async def async_release_managed_slot(
+        self, slot: int, *, written: bool = False
+    ) -> None:
         """
         Tear down the LCM-owned user that anchors ``slot``.
 

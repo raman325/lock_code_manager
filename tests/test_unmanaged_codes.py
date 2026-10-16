@@ -369,7 +369,7 @@ async def test_an_unmanaged_clear_after_a_release_is_a_plain_clear(
     lock.codes[2] = "9999"
     releases: list[int] = []
 
-    async def _release(self, slot: int) -> None:
+    async def _release(self, slot: int, *, written: bool = False) -> None:
         releases.append(slot)  # no LCM-tagged user here: nothing deleted
 
     with patch.object(type(lock), "async_release_managed_slot", _release):

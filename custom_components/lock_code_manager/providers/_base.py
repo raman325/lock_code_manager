@@ -1719,9 +1719,17 @@ class BaseLock:
         await self._assert_credential_ref_supported(ref)
         return await self.async_delete_credential(ref)
 
-    async def async_release_managed_slot(self, slot: int) -> None:
+    async def async_release_managed_slot(
+        self, slot: int, *, written: bool = False
+    ) -> None:
         """
         Release any lock-side state LCM owns for ``slot``.
+
+        ``written`` says whether Lock Code Manager's store showed a PIN it
+        wrote to ``slot`` on this lock when the release began. A provider
+        that finds nothing of its own to release uses it to tell a slot LCM
+        never put a code in (nothing to say) from one whose code it can no
+        longer recognize (worth a warning).
 
         Called by ``__init__.py``'s teardown path once a slot is removed
         from LCM config (per the user-tag idempotency design's lifecycle

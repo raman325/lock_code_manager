@@ -1,5 +1,7 @@
 """What a lock's worker remembers across a restart: the core's store."""
 
+from unittest.mock import patch
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -689,3 +691,52 @@ async def test_a_device_re_paired_back_starts_over(
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
     assert worker.port.provider.lock.id == first.id
     assert len(_writes(mock_lock(entry))) == 2
+
+
+# What a release is told ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("enabled", "written"),
+    [(True, True), (False, False)],
+    ids=["a_pin_written", "only_ever_cleared"],
+)
+async def test_a_release_is_told_whether_lcm_wrote_a_pin_there(
+    hass: HomeAssistant, mock_lock_config_entry, enabled: bool, written: bool
+) -> None:
+    """
+    Taken as the release begins: its own send forgets what the slot last wrote.
+
+    A slot only ever cleared never held Lock Code Manager's code, so a
+    provider finding nothing of its own there has nothing to warn about.
+    """
+    entry = await async_setup_lcm_entry(
+        hass,
+        {
+            CONF_LOCKS: [LOCK_1_ENTITY_ID],
+            # Not the code the lock starts with: a slot already in sync is never
+            # written.
+            CONF_SLOTS: {1: {CONF_NAME: "a", CONF_PIN: "4321", CONF_ENABLED: enabled}},
+        },
+    )
+    lock = mock_lock(entry)
+    released: list[tuple[int, bool]] = []
+
+    async def _release(self, slot: int, *, written: bool = False) -> None:
+        released.append((slot, written))
+        await self.async_clear_usercode(slot)
+
+    with patch.object(type(lock), "async_release_managed_slot", _release):
+        await _remove_user(hass, entry, 1)
+
+    assert released == [(1, written)]
+
+
+async def test_a_slot_never_written_is_no_pin_lcm_wrote(hass: HomeAssistant) -> None:
+    """Nothing kept for the lock, or for the slot: no PIN of Lock Code Manager's."""
+    store = LockStore(hass)
+    store._locks = {"key": {"answered": True, "slots": {"2": {"wrote": CLEARED}}}}
+
+    assert not store.wrote_pin("other", 1)
+    assert not store.wrote_pin("key", 1)
+    assert not store.wrote_pin("key", 2)
