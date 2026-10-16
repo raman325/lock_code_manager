@@ -742,10 +742,11 @@ class ZWaveJSLock(BaseLock):
         finally:
             self._uc_write_slot = None
         # Before 15.25.2 the driver cached nothing of a supervised write and
-        # read nothing back after a failed one; the worker's read-back after
-        # every write is a fresh get_credential, which puts the cache right,
-        # and on a refusal replaces the code the driver's "credential
-        # modified" event announced with what the lock reports holding.
+        # read nothing back after a failed one. The worker reads the slot
+        # back after a write that returns -- a fresh get_credential, which
+        # puts that cache right. It reads nothing back after a refusal: the
+        # lock kept the slot's old code, and so did that driver's cache. A
+        # slot turned off for the refusal is read again before its clear.
         if self._uc_write_refused:
             raise DuplicateCodeError(
                 code_slot=credential.slot,
@@ -897,10 +898,11 @@ class ZWaveJSLock(BaseLock):
     # A second gap, fixed in driver 15.25.2 (zwave-js/zwave-js#8927):
     # before it, supervised User Code CC writes through the unified API
     # never persisted to (success) or reconciled (failure) the driver's
-    # value database. The worker's read-back after every write is a
-    # fresh single-slot get_credential, which repairs that cache; a
-    # slot forgotten mid-write can stay stale on such a driver until
-    # the next hard refresh.
+    # value database. The worker's read-back after a write that returns
+    # is a fresh single-slot get_credential, which repairs that cache.
+    # A slot forgotten mid-write is not read back, so on such a driver
+    # its cache -- and what the views show of it -- can stay at the old
+    # code until a full hard refresh.
     #
     # To remove the whole section once the minimum supported driver
     # includes #8930:

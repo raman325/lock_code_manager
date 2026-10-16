@@ -436,7 +436,7 @@ class FakeZWaveLock:
     ``driver_before_15_25_2``: on User Code CC it took a supervised Set's
     outcome at its word: a success persisted nothing, so the cache kept the
     slot's old values, and a failure was answered Error_Unknown without
-    reading the slot. The worker's read-back after every write is what
+    reading the slot. The worker's read-back after a write that returns is what
     puts that cache right. A version that does not parse behaves as the
     current driver.
 
