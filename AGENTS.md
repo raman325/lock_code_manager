@@ -60,9 +60,10 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
   and nothing else from this package.
 - **`model/`** -- everything shared by providers and the HA layer: data types,
   rules, and read-only queries over config entries (`credentials.py`,
-  `models.py`, `names.py`, `pin_generator.py`, `occupancy.py`,
-  `slot_assignment.py`, `config.py`, `user_migration.py`,
-  `exceptions.py`, `events.py`, `queries.py`, `util.py`). It may use Home
+  which also holds `SlotCredential` and the `SlotCode` labels,
+  `names.py`, `pin_generator.py`, `occupancy.py`, `slot_assignment.py`,
+  `config.py`, `user_migration.py`, `exceptions.py`, `events.py`,
+  `queries.py`, `util.py`). It may use Home
   Assistant (hass, the bus, the config entries) but never imports `ha/` or
   `providers/`.
 - **`ha/`** -- the Home Assistant runtime: `entry.py` (config entry runtime data

@@ -10,17 +10,109 @@ world only needs to append to ``User.credentials`` -- no field changes.
 
 These are pure value types with no Home Assistant dependencies. The credential
 and capability types are immutable; ``User`` is a mutable aggregate of immutable
-credentials. They do not change ``SlotCredential``, which remains the
-coordinator's currency.
+credentials. ``SlotCredential`` is one slot's state on one lock, and ``SlotCode`` the
+labels the views show for a slot the lock gave no PIN for.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import NamedTuple
+from typing import Final, NamedTuple
 
-from .models import SlotCredential
+
+class SlotCode(StrEnum):
+    """
+    What the views are told of a slot when the lock gave no PIN for it.
+
+    The websocket payloads and diagnostics carry these labels in place of a
+    code. The dashboard cards compare a slot's code against them, and
+    ``ts/types.ts`` declares each one as a ``SLOT_CODE_*`` constant.
+
+    EMPTY: the lock says the slot is clear.
+
+    UNREADABLE_CODE: the lock holds a code it will not show (Matter and
+    masking locks). Distinct from Home Assistant's STATE_UNKNOWN ("unknown"),
+    a sensor whose state is not yet known.
+
+    UNANSWERED: the lock answered without saying anything about the slot. The
+    slot may be clear or may hold a code.
+
+    DISABLED: the lock holds a code for the slot that is not in force.
+
+    CHECKING: a managed slot whose last reading was set aside to read it
+    again, on a lock that has answered. Nothing is known of it until the read.
+
+    NOT_REPORTED: the lock answered that it cannot tell what the slot holds
+    (Zigbee user status Not Supported, #1581).
+    """
+
+    EMPTY = "empty"
+    UNREADABLE_CODE = "unreadable_code"
+    UNANSWERED = "unanswered"
+    DISABLED = "disabled_on_lock"
+    CHECKING = "checking"
+    NOT_REPORTED = "not_reported"
+
+
+@dataclass(frozen=True, slots=True)
+class SlotCredential:
+    """
+    Credential state for one slot on one lock.
+
+    Three constructors:
+    - ``empty()`` -- slot is cleared on the lock
+    - ``unreadable()`` -- slot holds a code whose value is write-only
+    - ``known(pin)`` -- slot holds a code whose value the provider exposes
+
+    Treat as opaque; consume via accessors not direct field access.
+    """
+
+    present: bool
+    pin: str | None
+
+    @classmethod
+    def empty(cls) -> SlotCredential:
+        """Return the shared "slot is cleared" credential."""
+        return _EMPTY_CREDENTIAL
+
+    @classmethod
+    def unreadable(cls) -> SlotCredential:
+        """Return the shared "slot holds a write-only code" credential."""
+        return _UNREADABLE_CREDENTIAL
+
+    @classmethod
+    def known(cls, pin: str) -> SlotCredential:
+        """Return a credential carrying a readable PIN."""
+        return cls(present=True, pin=pin)
+
+    @property
+    def is_empty(self) -> bool:
+        """Return True when the slot holds no code."""
+        return not self.present
+
+    @property
+    def is_present(self) -> bool:
+        """Return True when the slot holds a code."""
+        return self.present
+
+    @property
+    def is_readable(self) -> bool:
+        """Return True when the credential exposes a comparable PIN."""
+        return self.present and self.pin is not None
+
+    @property
+    def readable_pin(self) -> str | None:
+        """Return the PIN when readable, otherwise ``None``."""
+        return self.pin if self.is_readable else None
+
+    def matches(self, pin: str) -> bool:
+        """Return True when this credential is readable and equals ``pin``."""
+        return self.is_readable and self.pin == pin
+
+
+_EMPTY_CREDENTIAL: Final = SlotCredential(present=False, pin=None)
+_UNREADABLE_CREDENTIAL: Final = SlotCredential(present=True, pin=None)
 
 
 class CredentialType(StrEnum):
@@ -82,21 +174,13 @@ class CredentialRule(StrEnum):
     SINGLE = "single"
 
 
-# CredentialState is the read-state of a credential value: known(value),
-# unreadable (write-only code present), or empty. It deliberately reuses
-# SlotCredential's existing semantics rather than duplicating them, so the
-# coordinator's currency and the new model never drift. Construct states via
-# SlotCredential.known(value) / .unreadable() / .empty().
-CredentialState = SlotCredential
-
-
 @dataclass(frozen=True, slots=True)
 class Credential:
     """
     One credential instance addressed within a user.
 
     Pairs the credential ``type`` and its lock ``slot`` index with a reused
-    ``CredentialState`` (a ``SlotCredential``). The read-state accessors
+    ``SlotCredential``. The read-state accessors
     delegate to that state so there is one source of truth for empty /
     write-only / readable. Treat as an immutable value; consume via the
     accessors rather than reaching into ``state``.
@@ -104,7 +188,7 @@ class Credential:
 
     type: CredentialType
     slot: int
-    state: CredentialState
+    state: SlotCredential
 
     @property
     def is_empty(self) -> bool:

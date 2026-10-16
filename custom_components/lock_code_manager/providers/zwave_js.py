@@ -57,6 +57,7 @@ from ..model.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     WriteResult,
 )
@@ -68,7 +69,6 @@ from ..model.exceptions import (
     LockOperationFailed,
     LockOperationUnsupported,
 )
-from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import is_masked_code, parse_tag, refuses_write_in_flight
 

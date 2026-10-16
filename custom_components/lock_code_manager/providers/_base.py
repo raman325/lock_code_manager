@@ -35,6 +35,7 @@ from ..model.credentials import (
     CredentialType,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     WriteResult,
     credential_from_slot,
@@ -52,7 +53,6 @@ from ..model.exceptions import (
     LockOperationUnsupported,
     ProviderNotImplementedError,
 )
-from ..model.models import SlotCredential
 from ..model.queries import (
     configured_owner,
     get_entry_config,

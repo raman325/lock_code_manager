@@ -52,13 +52,13 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
     User,
 )
 from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (

@@ -42,9 +42,9 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
     WriteResult,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.matter import MatterLock

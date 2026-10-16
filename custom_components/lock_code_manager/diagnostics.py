@@ -9,7 +9,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from .const import DATA, DOMAIN, SENSITIVE_ENTITY_KEYS, LockCodeManagerData
 from .ha.runtime import lock_codes, lock_registry
 from .model.config import build_slot_device_identifier, slot_unique_id_key
-from .model.models import SlotCode
+from .model.credentials import SlotCode
 from .model.queries import get_entry_config
 from .model.util import mask_pin
 from .providers._base import BaseLock

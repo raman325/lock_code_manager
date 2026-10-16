@@ -15,11 +15,11 @@ from ..model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
 

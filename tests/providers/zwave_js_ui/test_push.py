@@ -12,9 +12,11 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.ha.adapter import _Coordinator
-from custom_components.lock_code_manager.model.credentials import pin_address
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    pin_address,
+)
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
 from .conftest import (

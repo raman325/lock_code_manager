@@ -94,12 +94,12 @@ from custom_components.lock_code_manager.model.config import (
     build_slot_device_identifier,
     build_slot_unique_id,
 )
+from custom_components.lock_code_manager.model.credentials import SlotCredential
 from custom_components.lock_code_manager.model.exceptions import (
     LockBusy,
     LockDisconnected,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,

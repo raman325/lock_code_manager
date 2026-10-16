@@ -8,8 +8,10 @@ from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 
 from homeassistant.core import HomeAssistant
 
-from custom_components.lock_code_manager.model.credentials import pin_address
-from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    pin_address,
+)
 from custom_components.lock_code_manager.providers._mqtt import CANNOT_TELL
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,

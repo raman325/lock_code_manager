@@ -10,10 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
     credential_from_slot,
 )
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )

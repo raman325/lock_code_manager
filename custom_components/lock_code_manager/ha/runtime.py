@@ -35,8 +35,8 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.helpers.start import async_at_started
 
 from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
+from ..model.credentials import SlotCode
 from ..model.exceptions import LockCodeManagerProviderError
-from ..model.models import SlotCode
 from ..model.queries import (
     configured_owner,
     entries_configuring,

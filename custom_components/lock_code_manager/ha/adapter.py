@@ -30,7 +30,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
-from ..model.credentials import CredentialAddress
+from ..model.credentials import CredentialAddress, SlotCredential
 from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -42,7 +42,6 @@ from ..model.exceptions import (
     LockOperationError,
     LockOperationUnsupported,
 )
-from ..model.models import SlotCredential
 from ..sync.slot import Holds, Reading, Seen
 from ..sync.worker import ErrorKind, LockError, LockWorker
 

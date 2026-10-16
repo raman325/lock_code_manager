@@ -94,6 +94,7 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
     WriteResult,
 )
 from custom_components.lock_code_manager.model.exceptions import (
@@ -101,7 +102,6 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.model.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.sync.worker import LockWorker

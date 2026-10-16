@@ -22,6 +22,7 @@ from homeassistant.config_entries import ConfigEntry
 from ..model.credentials import (
     Credential,
     CredentialRef,
+    SlotCredential,
     User,
     WriteResult,
     user_from_slot,
@@ -31,7 +32,6 @@ from ..model.exceptions import (
     LockDisconnected,
     LockOperationError,
 )
-from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
 from .const import LOGGER

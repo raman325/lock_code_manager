@@ -52,9 +52,9 @@ from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialRef,
     CredentialType,
+    SlotCredential,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 from tests.common import async_configure_flow, user_subentries
 

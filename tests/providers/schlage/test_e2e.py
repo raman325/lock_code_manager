@@ -31,10 +31,10 @@ from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
+    SlotCredential,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
     parse_tag,

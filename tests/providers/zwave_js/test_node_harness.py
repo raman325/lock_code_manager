@@ -39,14 +39,16 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 
-from custom_components.lock_code_manager.model.credentials import WriteResult
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    WriteResult,
+)
 from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockDisconnected,
     LockOperationUnsupported,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from tests.common import (
     async_advance_clock,
     async_run_until_quiet,

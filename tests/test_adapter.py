@@ -28,6 +28,7 @@ from custom_components.lock_code_manager.ha.adapter import (
     lock_error,
     reading,
 )
+from custom_components.lock_code_manager.model.credentials import SlotCredential
 from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -39,7 +40,6 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockOperationUnsupported,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Status

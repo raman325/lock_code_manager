@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     WriteResult,
     pin_address,
@@ -36,7 +37,6 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
     parse_tag,

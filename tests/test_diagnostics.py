@@ -11,7 +11,10 @@ from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
 )
-from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    SlotCredential,
+)
 
 from .common import (
     BASE_CONFIG,

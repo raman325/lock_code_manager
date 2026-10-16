@@ -24,6 +24,7 @@ from homeassistant.exceptions import HomeAssistantError
 from ..model.credentials import (
     Credential,
     CredentialRef,
+    SlotCredential,
     User,
     WriteResult,
 )
@@ -33,7 +34,6 @@ from ..model.exceptions import (
     LockOperationError,
     LockOperationFailed,
 )
-from ..model.models import SlotCredential
 from ._mqtt import BaseMqttLock
 from ._util import (
     is_masked_code,

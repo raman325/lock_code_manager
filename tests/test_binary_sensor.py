@@ -68,11 +68,11 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import SlotCredential
 from custom_components.lock_code_manager.model.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.sync.slot import LIMIT, Holds, Repair, Status
 from custom_components.lock_code_manager.sync.worker import (

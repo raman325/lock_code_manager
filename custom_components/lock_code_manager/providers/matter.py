@@ -49,6 +49,7 @@ from ..model.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     WriteResult,
 )
@@ -60,7 +61,6 @@ from ..model.exceptions import (
     LockOperationError,
     LockOperationFailed,
 )
-from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import make_compact_tagged_name, parse_slot_num, parse_tag
 from .const import LOGGER

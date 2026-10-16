@@ -29,6 +29,7 @@ from ..const import PENDING_WRITE_TTL
 from ..model.credentials import (
     Credential,
     CredentialRef,
+    SlotCredential,
     User,
     WriteResult,
     user_from_slot,
@@ -39,7 +40,6 @@ from ..model.exceptions import (
     LockDisconnected,
     LockOperationError,
 )
-from ..model.models import SlotCredential
 from ._base import BaseLock
 from ._util import (
     is_masked_code,

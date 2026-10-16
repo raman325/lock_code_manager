@@ -41,14 +41,16 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
 )
 from custom_components.lock_code_manager.ha.runtime import lock_registry
-from custom_components.lock_code_manager.model.credentials import WriteResult
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    WriteResult,
+)
 from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.sync.slot import LIMIT, Status
 

@@ -49,10 +49,9 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_codes,
     lock_registry,
 )
-from custom_components.lock_code_manager.model.credentials import WriteResult
+from custom_components.lock_code_manager.model.credentials import SlotCode, WriteResult
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.model.models import SlotCode
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     ZWaveJSUILock,
     _published_code,

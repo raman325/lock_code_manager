@@ -7,11 +7,11 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialAddress,
     CredentialRef,
     CredentialRule,
-    CredentialState,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     UserType,
     WriteResult,
@@ -19,7 +19,6 @@ from custom_components.lock_code_manager.model.credentials import (
     pin_address,
     user_from_slot,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 
 
 class TestCredentialType:
@@ -73,15 +72,6 @@ class TestCredentialRule:
 
     def test_members(self) -> None:
         assert set(CredentialRule.__members__) == {"SINGLE"}
-
-
-class TestCredentialStateAlias:
-    """CredentialState is a thin reuse of SlotCredential, not a new dataclass."""
-
-    def test_credential_state_is_slot_credential(self) -> None:
-        # Aliasing guarantees there is a single implementation of the three
-        # read-states (known / unreadable / empty) shared with the coordinator.
-        assert CredentialState is SlotCredential
 
 
 class TestCredential:

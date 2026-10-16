@@ -28,6 +28,7 @@ from custom_components.lock_code_manager.ha.adapter import (
 from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
+    SlotCredential,
     WriteResult,
     credential_from_slot,
 )
@@ -36,7 +37,6 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers import (
     _base as base_module,
     zha as zha_module,

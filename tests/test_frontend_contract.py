@@ -22,8 +22,8 @@ from custom_components.lock_code_manager.model.config import build_slot_unique_i
 from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
+    SlotCode,
 )
-from custom_components.lock_code_manager.model.models import SlotCode
 
 _CONST_TS = pathlib.Path(__file__).resolve().parent.parent / "ts" / "const.ts"
 

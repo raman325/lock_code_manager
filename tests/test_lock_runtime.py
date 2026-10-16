@@ -42,6 +42,10 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
     signal_lock_changed,
 )
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    SlotCredential,
+)
 from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerProviderError,
     LockDisconnected,
@@ -49,7 +53,6 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockOperationFailed,
     LockOperationUnsupported,
 )
-from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.model.queries import (
     get_entry_config,
     subentry_id_for_slot,

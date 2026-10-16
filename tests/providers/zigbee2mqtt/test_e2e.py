@@ -56,9 +56,12 @@ from custom_components.lock_code_manager.ha.runtime import (
     locks_that_cannot_report,
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
-from custom_components.lock_code_manager.model.credentials import user_from_slot
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    SlotCredential,
+    user_from_slot,
+)
 from custom_components.lock_code_manager.model.events import CredentialOperation
-from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,

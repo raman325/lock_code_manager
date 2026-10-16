@@ -25,11 +25,11 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
+    SlotCredential,
     pin_address,
 )
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
-from custom_components.lock_code_manager.model.models import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.providers.zwave_js.helpers import (
     make_credential_added_event,

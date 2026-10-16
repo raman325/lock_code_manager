@@ -107,7 +107,7 @@ from .ha.services import (
     async_set_usercode,
 )
 from .model.config import parse_slot_unique_id
-from .model.models import SlotCode
+from .model.credentials import SlotCode
 from .model.queries import (
     entries_configuring,
     find_config_entry_by_title,

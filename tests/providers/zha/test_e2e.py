@@ -43,7 +43,7 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_reachable,
     lock_registry,
 )
-from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.credentials import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 from custom_components.lock_code_manager.sync.slot import LIMIT, Holds, Seen

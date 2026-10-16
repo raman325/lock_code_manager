@@ -94,8 +94,11 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    SlotCredential,
+)
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.model.models import SlotCode, SlotCredential
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.sync.worker import (
