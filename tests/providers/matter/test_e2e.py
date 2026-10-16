@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -44,6 +45,7 @@ from custom_components.lock_code_manager.model.credentials import (
     WriteResult,
 )
 from custom_components.lock_code_manager.model.models import SlotCredential
+from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.matter import MatterLock
 from custom_components.lock_code_manager.sync.slot import Seen
@@ -68,7 +70,7 @@ from tests.conftest import async_advance_time, async_initial_tick
 
 from ...common import TICK_INTERVAL
 from .conftest import FAKE_MATTER_SLOTS, matter_helpers_patched
-from .fake_node import DlStatus, FakeMatterLock, ImStatus
+from .fake_node import DlStatus, DoorLock, FakeMatterLock, ImStatus
 
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 WORKER = "custom_components.lock_code_manager.sync.worker"
@@ -1109,6 +1111,238 @@ class TestOtherUsersOnTheLock:
             assert "lock maker's app" not in reason
         finally:
             await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _async_remove_user(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entry: MockConfigEntry,
+    slot: int,
+) -> None:
+    """Delete the slot's user from the entry, and let its release run."""
+    if not hass.config_entries.async_remove_subentry(
+        entry, subentry_id_for_slot(entry, slot)
+    ):
+        pytest.fail(f"slot {slot}'s user could not be removed")
+    await hass.async_block_till_done()
+    await async_advance_sync_ticks(hass, freezer, 3)
+
+
+def _released_warnings(caplog: pytest.LogCaptureFixture, slot: int) -> list[str]:
+    """Return the warnings that a release of ``slot`` found no LCM-tagged user."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and f"released slot {slot}, but no user" in record.getMessage()
+    ]
+
+
+class TestReleaseKeepsWhatLCMDidNotWrite:
+    """A deleted user takes only LCM's PIN off the lock: what the vendor's app added stays."""
+
+    async def test_a_user_holding_only_lcm_s_pin_is_deleted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """One ClearUser, whose cascade takes the PIN; slot 1's user is untouched."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        other = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
+        )
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        assert user_index not in fake_matter_lock.users
+        assert pin not in fake_matter_lock.codes.values()
+        assert other in fake_matter_lock.users
+        written = [
+            (exchange.command, exchange.index)
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+        ]
+        assert written == [("ClearUser", user_index)]
+
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            DoorLock.Enums.CredentialTypeEnum.kRfid,
+            DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+        ],
+        ids=["rfid", "fingerprint"],
+    )
+    async def test_a_credential_added_in_the_vendor_app_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        kind: int,
+    ) -> None:
+        """
+        Only LCM's PIN goes; the user keeps its card, without LCM's tag.
+
+        ClearUser would cascade to the card. Left tagged, the user would be
+        taken for slot 2's again the next time slot 2 is used, card and all.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index, kind)
+        await async_advance_sync_ticks(hass, freezer)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        user = fake_matter_lock.users[user_index]
+        assert user.credentials == [(kind, 1)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert user.name
+        assert parse_tag(user.name)[0] is None
+        assert len(user.name.encode()) <= 9
+        assert fake_matter_lock.sent("ClearUser") == []
+        assert lcm_issue_ids(hass, "slot_suspended") == []
+
+    @pytest.mark.parametrize(
+        ("display", "kept"),
+        [("Ann", "Ann"), ("123", None)],
+        ids=["its_display_name", "a_number_would_read_as_a_tag"],
+    )
+    async def test_a_kept_user_goes_by_a_name_that_is_no_tag(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        display: str,
+        kept: str | None,
+    ) -> None:
+        """Its display name, unless that would read as a slot: then ``User<index>``."""
+        slots = {3: {CONF_NAME: display, CONF_PIN: "333333", CONF_ENABLED: True}}
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_kept_name"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, "333333"))
+            assert user_index is not None
+            assert fake_matter_lock.users[user_index].name == f"lcm:3:{display}"
+            fake_matter_lock.enroll(user_index)
+            await async_advance_sync_ticks(hass, freezer)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert fake_matter_lock.users[user_index].name == (
+                kept or f"User{user_index}"
+            )
+
+    async def test_a_user_the_lock_will_not_rename_still_loses_lcm_s_pin(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The PIN is gone, so the release is done; the tag left behind is warned about."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index)
+        await async_advance_sync_ticks(hass, freezer)
+        name = fake_matter_lock.users[user_index].name
+        fake_matter_lock.refuse("SetUser", user_index)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        user = fake_matter_lock.users[user_index]
+        assert pin not in fake_matter_lock.codes.values()
+        assert user.credentials == [(DoorLock.Enums.CredentialTypeEnum.kRfid, 1)]
+        assert user.name == name
+        assert lcm_issue_ids(hass, "slot_suspended") == []
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "could not be renamed" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert fake_matter_lock_entity.entity_id in warnings[0]
+        assert "released slot 2" in warnings[0]
+
+
+class TestReleaseOfARenamedUser:
+    """No user carries LCM's tag for the slot: nothing is removed, and LCM says so if it wrote there."""
+
+    async def test_a_slot_lcm_wrote_is_warned_about(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """LCM's user, renamed in the vendor's app, keeps its PIN: a code may remain."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.users[user_index].name = "Alice"
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        assert fake_matter_lock.users[user_index].name == "Alice"
+        assert pin in fake_matter_lock.codes.values()
+        assert [
+            exchange.command
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+        ] == []
+        warnings = _released_warnings(caplog, 2)
+        assert len(warnings) == 1
+        assert fake_matter_lock_entity.entity_id in warnings[0]
+
+    async def test_a_slot_lcm_never_wrote_a_pin_to_is_not(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A slot that was only ever off held no code of LCM's: nothing to warn about."""
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: False},
+        }
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_never_written"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert _released_warnings(caplog, 3) == []
+            assert "no LCM-owned user to release for slot 3" in caplog.text
 
 
 class TestOpenBugs:
