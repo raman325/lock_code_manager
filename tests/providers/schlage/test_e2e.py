@@ -463,3 +463,38 @@ class TestCloud:
             assert sorted(
                 code for _n, code in fake_schlage_cloud.codes.values()
             ) == sorted(c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values())
+
+
+class TestRefusedPin:
+    """The lock's own refusal of a PIN holds the slot instead of retrying it."""
+
+    async def test_a_pin_another_code_holds_is_refused_not_retried(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Schlage refusing slot 1's PIN, held by another code, disables slot 1 at once.
+
+        Taken as no answer, the add was sent again on every retry until the
+        slot's breaker tripped, with no repair saying the PIN was refused.
+        """
+        # A code Lock Code Manager does not manage holds slot 1's PIN.
+        fake_schlage_cloud.add(
+            make_tagged_name(9, "Neighbour"), SCHLAGE_LCM_CONFIG_SLOTS[1][CONF_PIN]
+        )
+        async with _schlage_entry(hass, schlage_lock_entity):
+            await async_advance_sync_ticks(hass, freezer, 30)
+
+            slot_1_adds = [
+                data
+                for service, data in fake_schlage_cloud.calls
+                if service == "add_code" and parse_tag(data["name"])[0] == 1
+            ]
+            assert len(slot_1_adds) == 1
+            assert lcm_issue_ids(hass, "slot_disabled")
+            assert sorted(
+                code for _n, code in fake_schlage_cloud.codes.values()
+            ) == sorted(c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values())

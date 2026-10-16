@@ -355,3 +355,77 @@ class TestOpenBugs:
 
         assert deletes <= LIMIT + 1
         assert suspended
+
+
+class TestRefusedWrite:
+    """
+    The integration's validation error is the device refusing the write.
+
+    A user the device says the cloud provisioned, though its ``source_type``
+    marks it local, cannot be changed or deleted: the integration raises
+    ``ServiceValidationError`` for it, every time. Taken as no answer, the
+    write was sent again on every retry until the slot's breaker tripped.
+    """
+
+    @pytest.fixture
+    def lcm_entry(self, hass: HomeAssistant, akuvox_lock_entity: er.RegistryEntry):
+        """Return an entry on the Akuvox lock for slots 1 and 2, not yet set up."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [akuvox_lock_entity.entity_id],
+                CONF_SLOTS: AKUVOX_LCM_CONFIG_SLOTS,
+            },
+            unique_id="test_akuvox_refused",
+        )
+        entry.add_to_hass(hass)
+        return entry
+
+    async def test_a_refused_pin_disables_the_slot_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_akuvox_device: FakeAkuvoxDevice,
+        lcm_entry: MockConfigEntry,
+    ) -> None:
+        """Slot 1's PIN change is refused once and the slot is turned off."""
+        user = fake_akuvox_device.add(
+            make_tagged_name(1, "slot1"), "0000", source="Cloud"
+        )
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 30)
+        modifies = [
+            data
+            for service, data in fake_akuvox_device.calls
+            if service == "modify_user" and data["id"] == user
+        ]
+        disabled = lcm_issue_ids(hass, "slot_disabled")
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+        assert len(modifies) == 1
+        assert disabled
+        assert fake_akuvox_device.pin_of(make_tagged_name(1, "slot1")) == "0000"
+
+    async def test_a_refused_delete_holds_the_slot_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_akuvox_device: FakeAkuvoxDevice,
+        lcm_entry: MockConfigEntry,
+    ) -> None:
+        """Slot 1's delete is refused once and the slot is held with a repair."""
+        fake_akuvox_device.add(make_tagged_name(1, "slot1"), "1234", source="Cloud")
+        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        await async_switch_slot(hass, lcm_entry, 1, SERVICE_TURN_OFF)
+        await async_advance_sync_ticks(hass, freezer, 30)
+        deletes = fake_akuvox_device.count("delete_user")
+        suspended = lcm_issue_ids(hass, "slot_suspended")
+        await hass.config_entries.async_unload(lcm_entry.entry_id)
+
+        assert deletes == 1
+        assert suspended
+        assert fake_akuvox_device.pin_of(make_tagged_name(1, "slot1")) == "1234"
