@@ -90,6 +90,9 @@ class FakeZ2MBridge:
     # The report goes out once the write's publish has returned, as a real
     # one arrives: after the provider's own view of the write.
     report_after_write: bool = False
+    # The first read of a user after each write to it goes unanswered: a
+    # flaky mesh losing the read-back (#1397 shape); later reads answer.
+    drop_read_backs: bool = False
     # user id -> (userstatus, pincodevalue): the lock's own table.
     users: dict[int, tuple[int, str | None]] = field(default_factory=dict)
     # Zigbee2MQTT's cached state for the device. ``state`` matches the
@@ -97,6 +100,8 @@ class FakeZ2MBridge:
     cache: dict[str, Any] = field(default_factory=lambda: {"state": "LOCKED"})
     # What the provider sent: (topic suffix, body).
     requests: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Users written whose next read is lost, while ``drop_read_backs``.
+    _lose_next_get: set[int] = field(default_factory=set)
 
     def install(self) -> None:
         """Answer the provider's publishes from now on."""
@@ -159,6 +164,10 @@ class FakeZ2MBridge:
             return DEFAULT
         if suffix == "set":
             self._set_pin_code(user, request)
+            if self.drop_read_backs:
+                self._lose_next_get.add(user)
+        elif suffix == "get" and user in self._lose_next_get:
+            self._lose_next_get.discard(user)
         elif suffix == "get":
             self._answer_get_pin_code(user)
         return DEFAULT
