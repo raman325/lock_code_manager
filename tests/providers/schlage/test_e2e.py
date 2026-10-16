@@ -10,8 +10,8 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.lock import LockState
-from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import (
+    ATTR_ENTITY_ID,
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     PENDING_WRITE_TTL,
+    SERVICE_HARD_REFRESH_USERCODES,
 )
 from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.model.credentials import (
@@ -50,7 +51,6 @@ from tests.common import (
     async_set_slot_pin,
     in_sync_entity_id,
     lcm_issue_ids,
-    user_subentries,
 )
 from tests.providers.helpers import register_mock_service
 from tests.providers.schlage.conftest import SCHLAGE_LCM_CONFIG_SLOTS
@@ -288,61 +288,6 @@ class TestGetUsers:
         assert codes[2] is SlotCredential.empty()
 
 
-class TestOpenBugs:
-    """Open Schlage bugs, each pinned by a strict xfail."""
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: the tag pass hands an unmanaged code to any slot an entry "
-            "lists, a disabled entry's included"
-        ),
-    )
-    async def test_a_homeowners_code_is_not_tagged_into_a_disabled_entrys_slot(
-        self,
-        hass: HomeAssistant,
-        schlage_lock_entity: er.RegistryEntry,
-        schlage_mock_services: dict[str, AsyncMock],
-    ) -> None:
-        """Slot 3 belongs to a disabled entry's user, so it is not free to adopt a code."""
-        entity_id = schlage_lock_entity.entity_id
-        schlage_mock_services["get_codes"].return_value = {
-            entity_id: {
-                "a": {"name": make_tagged_name(1, "slot1"), "code": "1234"},
-                "b": {"name": make_tagged_name(2, "slot2"), "code": "5678"},
-                "c": {"name": "Mom", "code": "9999"},
-            }
-        }
-        MockConfigEntry(
-            domain=DOMAIN,
-            data={CONF_LOCKS: [entity_id]},
-            subentries_data=user_subentries(
-                {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
-            ),
-            unique_id="test_schlage_disabled",
-            disabled_by=ConfigEntryDisabler.USER,
-        ).add_to_hass(hass)
-        entry = MockConfigEntry(
-            domain=DOMAIN,
-            data={CONF_LOCKS: [entity_id], CONF_SLOTS: SCHLAGE_LCM_CONFIG_SLOTS},
-            unique_id="test_schlage_e2e",
-        )
-        entry.add_to_hass(hass)
-
-        with patch.object(
-            SchlageLock, "async_is_integration_connected", return_value=True
-        ):
-            assert await hass.config_entries.async_setup(entry.entry_id)
-            await hass.async_block_till_done()
-            tagged = [
-                parse_tag(call.args[0].data["name"])[0]
-                for call in schlage_mock_services["add_code"].await_args_list
-            ]
-            await hass.config_entries.async_unload(entry.entry_id)
-
-        assert 3 not in tagged
-
-
 @asynccontextmanager
 async def _schlage_entry(
     hass: HomeAssistant, lock_entity: er.RegistryEntry
@@ -520,12 +465,20 @@ class TestAvailability:
 class TestRefusedPin:
     """The lock's own refusal of a PIN holds the slot instead of retrying it."""
 
+    @pytest.mark.parametrize(
+        "other_name",
+        [
+            pytest.param(make_tagged_name(9, "Neighbour"), id="tagged_unmanaged"),
+            pytest.param("Neighbour", id="untagged"),
+        ],
+    )
     async def test_a_pin_another_code_holds_is_refused_not_retried(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
         fake_schlage_cloud: FakeSchlageCloud,
         schlage_lock_entity: er.RegistryEntry,
+        other_name: str,
     ) -> None:
         """
         Schlage refusing slot 1's PIN, held by another code, disables slot 1 at once.
@@ -534,8 +487,8 @@ class TestRefusedPin:
         slot's breaker tripped, with no repair saying the PIN was refused.
         """
         # A code Lock Code Manager does not manage holds slot 1's PIN.
-        fake_schlage_cloud.add(
-            make_tagged_name(9, "Neighbour"), SCHLAGE_LCM_CONFIG_SLOTS[1][CONF_PIN]
+        other = fake_schlage_cloud.add(
+            other_name, SCHLAGE_LCM_CONFIG_SLOTS[1][CONF_PIN]
         )
         async with _schlage_entry(hass, schlage_lock_entity):
             await async_advance_sync_ticks(hass, freezer, 30)
@@ -550,6 +503,80 @@ class TestRefusedPin:
             assert sorted(
                 code for _n, code in fake_schlage_cloud.codes.values()
             ) == sorted(c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values())
+            assert fake_schlage_cloud.codes[other] == (other_name, "1234")
+            assert _deletes_of(fake_schlage_cloud, other_name) == []
+
+
+def _deletes_of(cloud: FakeSchlageCloud, name: str) -> list[dict]:
+    """Return the ``delete_code`` calls naming ``name``, compared as core does."""
+    return [
+        data
+        for service, data in cloud.calls
+        if service == "delete_code" and data["name"].lower().strip() == name.lower()
+    ]
+
+
+class TestForeignCodes:
+    """A code without Lock Code Manager's tag is never read, renamed or deleted."""
+
+    @pytest.mark.parametrize("foreign_name", ["Mom", "1", "lcm2"])
+    async def test_a_foreign_code_survives_setup_and_hard_refresh(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+        foreign_name: str,
+    ) -> None:
+        """
+        A homeowner's code keeps its name and PIN, and is no slot.
+
+        Setup and every hard refresh renamed untagged codes into free slots
+        (a tagged copy added, the original deleted), taking over codes Lock
+        Code Manager never made. A bare-digit or compact name, which only
+        Matter writes as a tag, was read as that slot's code.
+        """
+        entity_id = schlage_lock_entity.entity_id
+        mom = fake_schlage_cloud.add(foreign_name, "9999")
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={
+                CONF_LOCKS: [entity_id],
+                # Slot 3 is off, so a slot stays free for a hard refresh too.
+                CONF_SLOTS: SCHLAGE_LCM_CONFIG_SLOTS
+                | {3: {CONF_NAME: "slot3", CONF_PIN: "4321", CONF_ENABLED: False}},
+            },
+            unique_id="test_schlage_foreign",
+        )
+        entry.add_to_hass(hass)
+        with patch.object(
+            SchlageLock, "async_is_integration_connected", return_value=True
+        ):
+            assert await hass.config_entries.async_setup(entry.entry_id)
+            await hass.async_block_till_done()
+            await async_advance_sync_ticks(hass, freezer, 5)
+            await hass.services.async_call(
+                DOMAIN,
+                SERVICE_HARD_REFRESH_USERCODES,
+                {ATTR_ENTITY_ID: entity_id},
+                blocking=True,
+            )
+            await async_advance_sync_ticks(hass, freezer, 5)
+            codes = await entry.runtime_data.locks[entity_id].async_get_usercodes()
+            await hass.config_entries.async_unload(entry.entry_id)
+
+        assert fake_schlage_cloud.codes[mom] == (foreign_name, "9999")
+        assert _deletes_of(fake_schlage_cloud, foreign_name) == []
+        assert not any(
+            data["code"] == "9999"
+            for service, data in fake_schlage_cloud.calls
+            if service == "add_code"
+        )
+        assert codes == {
+            1: SlotCredential.unreadable(),
+            2: SlotCredential.unreadable(),
+            3: SlotCredential.empty(),
+        }
 
 
 def _slot_pins(cloud: FakeSchlageCloud, slot: int) -> list[str]:

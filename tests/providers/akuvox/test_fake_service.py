@@ -136,3 +136,26 @@ async def test_an_ignore_for_one_call_lets_the_next_through(
 
     assert fake_akuvox_device.pin_of("Mom") is None
     assert fault.hits == 1
+
+
+async def test_a_refused_pin_is_the_integration_s_device_error(
+    hass: HomeAssistant,
+    fake_akuvox_device: FakeAkuvoxDevice,
+    akuvox_lock_entity: er.RegistryEntry,
+) -> None:
+    """AL:1258-1305: a device error in add_user is a plain ``HomeAssistantError``."""
+    fake_akuvox_device.refuse_pin("1111")
+
+    with pytest.raises(HomeAssistantError, match="add_user failed") as err:
+        await _call(
+            hass,
+            akuvox_lock_entity.entity_id,
+            "add_user",
+            name="Mom",
+            private_pin="1111",
+            schedules=["1001"],
+            lift_floor_num="1",
+        )
+
+    assert not isinstance(err.value, ServiceValidationError)
+    assert fake_akuvox_device.users == []

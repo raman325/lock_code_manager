@@ -25,7 +25,11 @@ What it answers:
   they change or remove it (AL:1307-1406).
 
 ``ignore`` makes a write acknowledged and not applied, as a device that
-drops it does.
+drops it does. ``refuse_pin`` makes the device answer ``add_user`` with an error,
+which the integration raises as ``HomeAssistantError("add_user failed: ...")``
+(its ``except AkuvoxError`` in ``add_user``, AL:1258-1305): a device refusing
+a PIN it already holds, say. Whether a device does is firmware's choice; the
+integration itself does not check.
 """
 
 from dataclasses import dataclass, field
@@ -71,6 +75,8 @@ class FakeAkuvoxDevice:
     users: list[dict[str, Any]] = field(default_factory=list)
     calls: list[tuple[str, dict]] = field(default_factory=list)
     faults: list[ServiceFault] = field(default_factory=list)
+    # PINs ``add_user`` answers with a device error (``refuse_pin``).
+    failing_pins: set[str] = field(default_factory=set)
     _next_id: int = 1
 
     def install(self) -> None:
@@ -118,6 +124,10 @@ class FakeAkuvoxDevice:
         self.faults.append(fault)
         return fault
 
+    def refuse_pin(self, pin: str) -> None:
+        """Make the device answer ``add_user`` for ``pin`` with an error."""
+        self.failing_pins.add(pin)
+
     def count(self, service: str) -> int:
         """Return how many times ``service`` was called."""
         return sum(name == service for name, _ in self.calls)
@@ -141,6 +151,8 @@ class FakeAkuvoxDevice:
         data = dict(call.data)
         self.calls.append(("add_user", data))
         _validate_pin(data.get("private_pin"))
+        if data.get("private_pin") in self.failing_pins:
+            raise HomeAssistantError("add_user failed: device error")
         if first_fault(self.faults, "add_user") is not None:
             return
         self.add(
