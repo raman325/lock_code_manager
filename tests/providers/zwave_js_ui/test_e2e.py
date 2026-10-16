@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from datetime import timedelta
 from functools import partial
 import json
+import threading
 from typing import Any
 from unittest.mock import patch
 
@@ -52,7 +53,10 @@ from custom_components.lock_code_manager.model.credentials import WriteResult
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.model.models import SlotCode
-from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    ZWaveJSUILock,
+    _published_code,
+)
 from custom_components.lock_code_manager.sync.slot import LIMIT
 from tests.common import (
     async_advance_clock,
@@ -577,6 +581,38 @@ class TestPushUpdates:
         )
         assert code is not None
         assert code.state == E2E_SLOT_PINS[1]
+
+    async def test_messages_are_taken_in_the_order_they_arrive(
+        self,
+        hass: HomeAssistant,
+        synced_lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+    ) -> None:
+        """
+        Each message is taken as it arrives, so none overtakes the one before.
+
+        Taken in the executor instead, a retained code the broker replays
+        could land behind the change published after it, and undo it. The
+        first message here is slow to take, as a busy executor makes one, so
+        a second taken alongside it would overtake it.
+        """
+        lock_entity_id = zui_lock.lock.entity_id
+        unmanaged_slot = max(E2E_SLOT_PINS) + 1
+        second_taken = threading.Event()
+
+        def slow_to_take_the_first(value: Any) -> str | None:
+            if value == "1111":
+                second_taken.wait(0.2)
+            code = _published_code(value)
+            if value == "2222":
+                second_taken.set()
+            return code
+
+        with patch(f"{_MODULE}._published_code", slow_to_take_the_first):
+            fire_zui_node_value(hass, f"99/0/userCode/{unmanaged_slot}", "1111")
+            assert held_codes(hass, lock_entity_id).get(unmanaged_slot) == "1111"
+            fire_zui_node_value(hass, f"99/0/userCode/{unmanaged_slot}", "2222")
+            assert held_codes(hass, lock_entity_id).get(unmanaged_slot) == "2222"
 
     async def test_pushed_available_status_updates_state(
         self,
