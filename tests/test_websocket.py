@@ -29,12 +29,13 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    EVENT_HOMEASSISTANT_STARTED,
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
     STATE_UNKNOWN,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CoreState, HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
@@ -3625,7 +3626,9 @@ async def _async_subscribe_before_entities(
     ws_client = await hass_ws_client(hass)
     entry = current_entry("Early Card", {1: pin})
     entry.add_to_hass(hass)
-    # Not till done: the entities are created by a task setup only schedules.
+    # Set up while Home Assistant starts: the entities wait for it to have
+    # started, so the card is there first.
+    hass.set_state(CoreState.starting)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await ws_client.send_json(
         {
@@ -3640,6 +3643,8 @@ async def _async_subscribe_before_entities(
     first = await ws_client.receive_json()
     if first["event"][CONF_ENTITIES][CONF_PIN] is not None:
         pytest.fail("setup: the slot's entities existed before the subscription")
+    hass.set_state(CoreState.running)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     return ws_client, entry
 
 

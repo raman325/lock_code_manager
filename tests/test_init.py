@@ -18,6 +18,7 @@ from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAI
 from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
 from homeassistant.components.lovelace import DOMAIN as LL_DOMAIN
 from homeassistant.components.lovelace.const import CONF_RESOURCE_TYPE_WS
+from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
@@ -42,6 +43,7 @@ from homeassistant.const import (
     EVENT_HOMEASSISTANT_STARTED,
     STATE_OFF,
     STATE_ON,
+    STATE_UNAVAILABLE,
     Platform,
 )
 from homeassistant.core import CoreState, HomeAssistant
@@ -106,6 +108,7 @@ from custom_components.lock_code_manager.model.slot_assignment import (
 from custom_components.lock_code_manager.model.user_migration import migrate_to_users
 from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
+from custom_components.lock_code_manager.providers._base import OPERATION_TIMEOUT
 from custom_components.lock_code_manager.repairs import (
     AcknowledgeRepairFlow,
     async_create_fix_flow,
@@ -139,6 +142,7 @@ from .common import (
     entry_users,
     in_sync_entity_id,
     mock_lock,
+    slot_entity_id,
     sync_status,
     when_mock_lock_built,
     write_entry_config,
@@ -871,6 +875,102 @@ async def test_two_entries_sharing_a_lock_at_startup_both_come_up(
     ]
     for entry in entries:
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _per_lock_entities(
+    hass: HomeAssistant, entry: MockConfigEntry, lock_entity_id: str
+) -> list[str | None]:
+    """Return a lock's in-sync entity on each of the entry's slots, None if not made."""
+    ent_reg = er.async_get(hass)
+    return [
+        ent_reg.async_get_entity_id(
+            BINARY_SENSOR_DOMAIN,
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, slot, ATTR_IN_SYNC, lock_entity_id),
+        )
+        for slot in (1, 2)
+    ]
+
+
+@pytest.mark.parametrize("setup_outcome", ["answers", "times_out"])
+async def test_a_lock_slow_to_set_up_at_startup_holds_back_only_its_own_entities(
+    freezer: FrozenDateTimeFactory,
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+    setup_outcome: str,
+):
+    """
+    A lock whose setup does not answer at startup keeps no other entity waiting.
+
+    Every entity of the entry waited on every lock's setup, which has ten
+    minutes to answer: an entry with one such lock came up loaded with none
+    of its entities, the switch and text ones included, until that setup
+    answered or gave up. Now the entry's own entities, and those of each lock
+    that answers, come at once; the slow lock's come when its setup is done.
+    """
+    entry = current_entry(
+        "Slow Lock", {1: "1234", 2: "5678"}, locks=(LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
+    )
+    entry.add_to_hass(hass)
+    hass.set_state(CoreState.starting)
+    with when_mock_lock_built(
+        lambda lock: (
+            lock.hang("setup") if lock.lock.entity_id == LOCK_1_ENTITY_ID else None
+        )
+    ) as faults:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        hass.set_state(CoreState.running)
+        hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
+        await async_run_until_quiet()
+        [hung, _] = faults
+        await hung.async_wait_held()
+
+        # The entry's own entities, and the answering lock's, sync on time.
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: (
+                all(
+                    hass.states.get(in_sync).state == STATE_ON
+                    for in_sync in _per_lock_entities(hass, entry, LOCK_2_ENTITY_ID)
+                    if in_sync is not None
+                )
+                and None not in _per_lock_entities(hass, entry, LOCK_2_ENTITY_ID)
+            ),
+            max_ticks=8,
+            what="the answering lock's slots in sync",
+        )
+        assert hass.states.get(
+            slot_entity_id(hass, SWITCH_DOMAIN, entry, 1, CONF_ENABLED)
+        )
+        assert _per_lock_entities(hass, entry, LOCK_1_ENTITY_ID) == [None, None]
+
+        # Visible in the log well before the setup's deadline.
+        await async_advance_clock(hass, freezer, 60, settle=False)
+        assert "still waiting for lock.test_1 to answer its setup" in caplog.text
+        assert "still waiting for lock.test_2" not in caplog.text
+
+        if setup_outcome == "times_out":
+            await async_advance_clock(hass, freezer, OPERATION_TIMEOUT, settle=False)
+            # Given up on: its entities come, and say they have nothing yet.
+            in_sync = _per_lock_entities(hass, entry, LOCK_1_ENTITY_ID)
+            assert None not in in_sync
+            assert {hass.states.get(e).state for e in in_sync} == {STATE_UNAVAILABLE}
+        hung.clear()
+        await async_run_until_quiet()
+
+    in_sync = _per_lock_entities(hass, entry, LOCK_1_ENTITY_ID)
+    assert None not in in_sync
+    await async_tick_until(
+        hass,
+        freezer,
+        lambda: all(hass.states.get(e).state == STATE_ON for e in in_sync),
+        max_ticks=30,
+        what="the slow lock's slots in sync once it answers",
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 def _entry_with_shared_lock(unique_id: str, slot_num: int) -> MockConfigEntry:
