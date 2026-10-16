@@ -106,6 +106,7 @@ from tests.providers.zwave_js.conftest import (
 from tests.providers.zwave_js.fake_node import (
     USER_CREDENTIAL_CC_ID,
     FakeZWaveLock,
+    UserReportType,
     supervised_lock_state,
     user_credential_lock_state,
 )
@@ -2759,6 +2760,100 @@ class TestReleaseAtSomeoneElsesUser:
         assert fake_zwave_lock.holds(1) == "9999"
         assert fake_zwave_lock.holds(2) == "1234"
         await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_user_named_with_the_slot_number_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A homeowner's user named ``3`` is not LCM's slot 3 user.
+
+        A bare slot number is LCM's tag only on a lock whose name limit
+        cannot fit ``lcm:<slot>:``; this one fits it, so LCM never names a
+        user ``3`` here. Slot 3 was never turned on, yet its release is sent
+        once: deleting that user would delete its code, at another index.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_release_digit_named",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        # The homeowner's user 7, named "3" in the vendor app, PIN at index 7.
+        fake_zwave_lock.program(7, "5555")
+        fake_zwave_lock.users[7].user_name = "3"
+        fake_zwave_lock._u3c_persist_user(7, UserReportType.USER_MODIFIED)
+        await hass.async_block_till_done()
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 3)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.users[7].user_name == "3"
+        assert fake_zwave_lock.holds(7) == "5555"
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert fake_zwave_lock.holds(2) == "1234"
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestReleaseOnAShortNameLock:
+    """A User Credential lock whose name limit cannot fit ``lcm:<slot>:``."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """Five characters: ``lcm:2:`` does not fit, ``2`` does."""
+        return {"max_user_name_length": 5}
+
+    async def test_lcm_s_slot_numbered_user_is_deleted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """LCM names its user ``2`` here, so releasing slot 2 deletes it."""
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        assert _users_tagged_for(fake_zwave_lock, 2)
+        assert all(
+            user.user_name.isdecimal() for user in fake_zwave_lock.users.values()
+        )
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert not _users_tagged_for(fake_zwave_lock, 2)
+        assert _users_tagged_for(fake_zwave_lock, 1)
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(1) == "9999"
 
 
 class TestRestartMidWrite:
