@@ -841,9 +841,7 @@ class MatterLock(BaseLock):
                 return slot
         return user.user_id
 
-    async def _find_user_index_for_slot(
-        self, slot: int
-    ) -> tuple[int, bool] | None:
+    async def _find_user_index_for_slot(self, slot: int) -> tuple[int, bool] | None:
         """
         Return the ``user_index`` of the user LCM owns for ``slot``, if any.
 
