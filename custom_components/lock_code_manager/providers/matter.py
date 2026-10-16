@@ -77,6 +77,14 @@ _THREAD_DETACHED_ROLE_COUNT = 14
 _THREAD_TX_ACK_REQUESTED_COUNT = 25
 _THREAD_TX_ACKED_COUNT = 26
 
+# Operational Credentials cluster (0x003E = 62) on the root endpoint, and its
+# CurrentFabricIndex: the index this node gives the fabric of whoever reads
+# it. Read by the Matter server's own subscription, it is Home Assistant's
+# fabric -- the one a credential Home Assistant wrote names as its creator.
+# Zero means no fabric (core spec 11.18.6.7).
+_OPERATIONAL_CREDENTIALS_CLUSTER_ID = 62
+_CURRENT_FABRIC_INDEX = 5
+
 # DoorLock cluster event IDs
 _LOCK_OPERATION_EVENT_ID = 2
 _LOCK_USER_CHANGE_EVENT_ID = 4
@@ -909,34 +917,34 @@ class MatterLock(BaseLock):
         self, slot: int, *, written: bool = False
     ) -> None:
         """
-        Remove LCM's PIN from the user tagged for ``slot``; the user too if nothing else is on it.
+        Remove LCM's PINs from the user tagged for ``slot``; the user too if nothing else is on it.
 
         Called when the slot leaves LCM's management. The lock-side user is
         found by its ``lcm:<slot>:`` tag ONLY, never by adoption: an untagged
         user is never touched here (#1518/#1694).
 
-        LCM wrote only that user's PIN, so only that PIN is LCM's to remove.
-        The user may also hold credentials someone added in the vendor's app
-        (an RFID card, a fingerprint, another PIN); ``ClearUser`` would
-        cascade to them. So, by the user's own credentials list (GetUser):
+        LCM's PINs are the user's PINs Home Assistant's own fabric created
+        (``_lcm_pins``: one GetCredentialStatus per PIN on this user). The
+        user may also hold credentials someone added in the vendor's app (an
+        RFID card, a fingerprint, another PIN); ``ClearUser`` would cascade
+        to them. So:
 
-        - LCM's PIN is all it holds (or it holds nothing): ``ClearUser``,
-          whose cascade takes the PIN -- one exchange.
-        - It holds more: ``ClearCredential`` for LCM's PIN only, then the
-          user is renamed without LCM's tag, so a later write of this slot
-          does not take it -- and its card -- for its own. A rename that
-          fails is logged; the PIN is gone either way.
-
-        LCM's PIN is the user's first, the one the set path writes over
-        (``_find_pin_credential_index_for_user``).
+        - It holds nothing but LCM's PINs (or nothing at all): ``ClearUser``,
+          whose cascade takes them.
+        - It holds more: ``ClearCredential`` for each of LCM's PINs, if any,
+          then the user is renamed without LCM's tag, so a later write of
+          this slot does not take it -- and its card -- for its own. A user
+          holding none of LCM's PINs any more (a retried release whose clear
+          landed unanswered) loses nothing but the tag. A rename that fails
+          is logged; LCM's PINs are gone either way.
 
         No tagged user: nothing is removed. If LCM had written a PIN there
         (``written``), it says so at WARNING: the code may still be on the
         lock under a user renamed in the vendor's app. Otherwise there was
         nothing of LCM's to find.
 
-        Lock-side transport failures bubble up so the base wraps them in a
-        warning and the teardown still completes.
+        Lock-side failures raise, so the release is retried: nothing is
+        deleted on an unanswered question about whose a PIN is.
         """
         user = next(
             (
@@ -967,24 +975,21 @@ class MatterLock(BaseLock):
                 )
             return
         user_index: int = user["user_index"]
-        credentials = user.get("credentials") or []
-        pin = next(
-            (
-                cred
-                for cred in credentials
-                if cred.get("type") == "pin" and cred.get("index") is not None
-            ),
-            None,
+        client, node = self._require_client_and_node()
+        lcm_pins, others = await self._lcm_pins(
+            client, node, slot, user_index, user.get("credentials") or []
         )
-        if len(credentials) == (pin is not None):
+        if not others:
             await self.async_delete_user(user_index)
             return
-        client, node = self._require_client_and_node()
-        if pin is not None:
+        for credential_index in lcm_pins:
             await self._invoke_sdk(
                 "clear_lock_credential",
                 clear_lock_credential(
-                    client, node, credential_type="pin", credential_index=pin["index"]
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=credential_index,
                 ),
             )
         name = await self._untagged_name(user["user_name"], user_index)
@@ -995,7 +1000,7 @@ class MatterLock(BaseLock):
             )
         except LockOperationError as err:
             LOGGER.warning(
-                "Lock %s: released slot %s and removed its PIN, but user %s "
+                "Lock %s: released slot %s and removed LCM's PINs, but user %s "
                 "keeps other credentials and could not be renamed to %r to "
                 "drop LCM's tag (%s). If slot %s is used again, LCM will take "
                 "that user for its own; rename it in the lock vendor's app",
@@ -1008,6 +1013,83 @@ class MatterLock(BaseLock):
             )
             return
         self._slot_by_user_index.pop(user_index, None)
+
+    async def _lcm_pins(
+        self,
+        client: Any,
+        node: Any,
+        slot: int,
+        user_index: int,
+        credentials: list[dict[str, Any]],
+    ) -> tuple[list[int], int]:
+        """
+        Sort a user's credentials into LCM's PINs and the rest.
+
+        Returns the credential indices of LCM's PINs, and how many other
+        credentials the user holds. A PIN is LCM's when the lock says Home
+        Assistant's fabric created it, under this user. Anything else -- a
+        PIN another fabric or the keypad made, a card, a fingerprint -- is
+        another's. A PIN the lock says is gone, or is now another user's, is
+        neither: it is not on this user to clear or to keep.
+
+        One GetCredentialStatus per PIN on this user only; none if it holds
+        no PIN. A status read that fails raises, and so does a node that
+        does not say which fabric is Home Assistant's: LCM does not guess
+        whose a PIN is.
+        """
+        pins = [
+            credential["index"]
+            for credential in credentials
+            if credential.get("type") == "pin" and credential.get("index") is not None
+        ]
+        others = len(credentials) - len(pins)
+        if not pins:
+            return [], others
+        fabric = self._own_fabric_index(node, slot)
+        lcm_pins: list[int] = []
+        for credential_index in pins:
+            status = await self._invoke_sdk(
+                "get_lock_credential_status",
+                get_lock_credential_status(
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=credential_index,
+                ),
+            )
+            if (
+                not status.get("credential_exists")
+                or status.get("user_index") != user_index
+            ):
+                continue
+            if status.get("creator_fabric_index") == fabric:
+                lcm_pins.append(credential_index)
+            else:
+                others += 1
+        return lcm_pins, others
+
+    def _own_fabric_index(self, node: Any, slot: int) -> int:
+        """
+        Return the index this lock gives Home Assistant's fabric.
+
+        The node's CurrentFabricIndex, which the Matter server's subscription
+        already holds: no exchange with the lock. Raises ``LockDisconnected``
+        when the node does not report one, so the release is retried rather
+        than deciding without it.
+        """
+        try:
+            fabric = node.get_attribute_value(
+                0, _OPERATIONAL_CREDENTIALS_CLUSTER_ID, _CURRENT_FABRIC_INDEX
+            )
+        except KeyError, AttributeError:
+            fabric = None
+        if type(fabric) is not int or not fabric:
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: releasing slot {slot}, the node does "
+                f"not report Home Assistant's fabric index ({fabric!r}), so "
+                f"which PINs on the user are LCM's is unknown"
+            )
+        return fabric
 
     async def _untagged_name(self, tagged: str, user_index: int) -> str:
         """

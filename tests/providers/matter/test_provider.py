@@ -3297,21 +3297,33 @@ class TestReleaseManagedSlot:
             AsyncMock(return_value={"max_users": 10, "users": users}),
         )
 
+    # The mock_door_lock node's CurrentFabricIndex (0/62/5).
+    _HA_FABRIC = 1
+
+    @staticmethod
+    def _patch_status(**status: Any) -> Any:
+        """Patch get_lock_credential_status to answer ``status``."""
+        return patch(
+            f"{_PROVIDER_MODULE}.get_lock_credential_status",
+            AsyncMock(
+                return_value={"credential_exists": True, "user_index": 42} | status
+            ),
+        )
+
+    _CAROL = {
+        "user_index": 42,
+        "user_name": "lcm:5:Carol",
+        "credentials": [{"type": "pin", "index": 7}],
+    }
+
     async def test_release_deletes_tagged_user(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
         """Finds the lcm:<slot>: user and clears it via clear_lock_user."""
         mock_clear_user = AsyncMock(return_value=None)
         with (
-            self._patch_users(
-                [
-                    {
-                        "user_index": 42,
-                        "user_name": "lcm:5:Carol",
-                        "credentials": [{"type": "pin", "index": 7}],
-                    },
-                ]
-            ),
+            self._patch_users([self._CAROL]),
+            self._patch_status(creator_fabric_index=self._HA_FABRIC),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
         ):
             await matter_lock.async_release_managed_slot(5)
@@ -3320,28 +3332,123 @@ class TestReleaseManagedSlot:
         call = mock_clear_user.call_args
         assert 42 in call.args or call.kwargs.get("user_index") == 42
 
-    async def test_release_no_op_when_no_lcm_user(
-        self, hass: HomeAssistant, matter_lock: MatterLock
+    @pytest.mark.parametrize(
+        "fabric", [None, 0, KeyError], ids=["null", "no_fabric", "no_root_endpoint"]
+    )
+    async def test_an_unknown_fabric_removes_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock, fabric: Any
     ) -> None:
-        """No tagged or legacy user for the slot -> clear_lock_user not called."""
-        mock_clear_user = AsyncMock(return_value=None)
+        """
+        A node that does not say which fabric is Home Assistant's: raised, to retry.
+
+        Whose the PIN is cannot be told, so neither ClearUser nor a status
+        read goes out.
+        """
+        clear_user = AsyncMock(return_value=None)
+        status = AsyncMock()
+        _client, node = matter_lock._require_client_and_node()
         with (
-            self._patch_users(
-                [
-                    # An unrelated user with a PIN at a different slot --
-                    # not LCM's, and not at this slot's credential_index.
-                    {
-                        "user_index": 7,
-                        "user_name": "Someone Else",
-                        "credentials": [{"type": "pin", "index": 99}],
-                    },
-                ]
+            self._patch_users([self._CAROL]),
+            patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch.object(
+                node,
+                "get_attribute_value",
+                side_effect=fabric if fabric is KeyError else None,
+                return_value=fabric,
             ),
-            patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
+            pytest.raises(LockDisconnected, match="fabric index"),
         ):
             await matter_lock.async_release_managed_slot(5)
 
-        mock_clear_user.assert_not_called()
+        clear_user.assert_not_called()
+        status.assert_not_called()
+
+    async def test_a_status_read_that_fails_removes_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Whose the PIN is went unanswered: raised, to retry, and nothing cleared."""
+        clear_user = AsyncMock(return_value=None)
+        with (
+            self._patch_users([self._CAROL]),
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                AsyncMock(side_effect=HomeAssistantError("timed out")),
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            pytest.raises(LockDisconnected),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        clear_user.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("credentials", "deleted"),
+        [([{"type": "rfid", "index": 1}], False), ([], True)],
+        ids=["a_card_only", "nothing"],
+    )
+    async def test_a_user_holding_no_pin_asks_no_status(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        credentials: list[dict[str, Any]],
+        deleted: bool,
+    ) -> None:
+        """
+        No PIN on the user: no status read, and the fabric is not needed.
+
+        A card keeps the user, only without LCM's tag; a user holding
+        nothing at all is deleted.
+        """
+        status = AsyncMock()
+        clear_user = AsyncMock(return_value=None)
+        set_user = AsyncMock(return_value=None)
+        _client, node = matter_lock._require_client_and_node()
+        with (
+            self._patch_users([self._CAROL | {"credentials": credentials}]),
+            patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+            patch.object(node, "get_attribute_value", return_value=None),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        status.assert_not_called()
+        assert clear_user.called is deleted
+        assert set_user.called is not deleted
+
+    @pytest.mark.parametrize(
+        "status",
+        [{"credential_exists": False}, {"user_index": 41}],
+        ids=["gone", "another_user_s"],
+    )
+    async def test_a_pin_no_longer_on_the_user_is_not_cleared(
+        self, hass: HomeAssistant, matter_lock: MatterLock, status: dict[str, Any]
+    ) -> None:
+        """
+        A listed PIN the lock says is gone, or is another user's, is not the user's.
+
+        Though Home Assistant's fabric made it, it is not cleared by its
+        index: the user keeps its card and only loses LCM's tag.
+        """
+        carol = self._CAROL | {
+            "credentials": [{"type": "pin", "index": 7}, {"type": "rfid", "index": 1}]
+        }
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        set_user = AsyncMock(return_value=None)
+        with (
+            self._patch_users([carol]),
+            self._patch_status(creator_fabric_index=self._HA_FABRIC, **status),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        clear_user.assert_not_called()
+        clear_credential.assert_not_called()
+        assert set_user.call_args.kwargs["user_name"] == "Carol"
 
 
 # =============================================================================
