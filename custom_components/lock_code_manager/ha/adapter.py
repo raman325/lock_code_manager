@@ -119,6 +119,9 @@ class ProviderPort:
         # Slots given up: clearing one releases it -- nothing untagged is
         # adopted, and a native-user provider deletes the user it tagged.
         self.releasing: set[int] = set()
+        # Of those, the ones the store showed a PIN Lock Code Manager wrote
+        # when the release began: the release's own send forgets it.
+        self._written: set[int] = set()
         # What the lock last said of any slot, by read or by push: codes
         # nobody here manages, and the last word on a slot the worker has let
         # go. The worker's own view of a slot it tracks comes first.
@@ -300,6 +303,19 @@ class ProviderPort:
             None,
         )
 
+    def release(self, slot: int, *, written: bool) -> None:
+        """
+        Make ``slot``'s next clear a release.
+
+        ``written``: the store shows a PIN Lock Code Manager wrote there.
+        Taken now: the worker forgets what it wrote as it sends the clear.
+        """
+        self.releasing.add(slot)
+        if written:
+            self._written.add(slot)
+        else:
+            self._written.discard(slot)
+
     async def write(self, slot: int, pin: str | None) -> bool | None:
         """Put ``pin`` in ``slot``, or clear it (see ``_write``), timed for the logs."""
         op = "clear" if pin is None else "set"
@@ -337,7 +353,9 @@ class ProviderPort:
             )
         try:
             if pin is None and slot in self.releasing:
-                await provider.async_release_managed_slot(slot)
+                await provider.async_release_managed_slot(
+                    slot, written=slot in self._written
+                )
             elif pin is None:
                 # A clear that found nothing says nothing about what is there.
                 return await provider.async_clear_usercode(slot)
