@@ -1555,6 +1555,62 @@ class TestRePairedLock:
             assert bridge.sets_for(2) == []
             _assert_trouble_free(hass, lock_id)
 
+    async def test_a_second_re_pair_still_names_the_first_ones_slots(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        Re-paired twice, a clear owed each time, the first repair not acknowledged.
+
+        The repair names both slots: the second re-pair does not replace the
+        first one's slot, whose removed user's code may still be on the door.
+        """
+        bridge = fake_z2m_bridge
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678", 3: "9012"}
+        issue_id = f"{RE_PAIRED_WORK_DROPPED}_{lock_id}"
+        async with _bridge_entry(hass, freezer, lock_id, pins) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            for slot, ieee, gone in ((2, "0xbeef", Z2M_IEEE), (3, "0xcafe", "0xbeef")):
+                old = lock_registry(hass).worker(lock_id)
+                # A clear the device never answers, then another device.
+                bridge.silent = True
+                hass.config_entries.async_remove_subentry(
+                    entry, subentry_id_for_slot(entry, slot)
+                )
+                await async_run_until_quiet()
+                assert old.slots[slot].release
+                bridge.silent = False
+                async_fire_mqtt_message(
+                    hass, f"homeassistant/lock/{gone}/lock/config", ""
+                )
+                async_fire_mqtt_message(
+                    hass,
+                    f"homeassistant/lock/{ieee}/lock/config",
+                    json.dumps(z2m_lock_discovery_payload(ieee=ieee)),
+                )
+                await async_step_clock_until(
+                    hass,
+                    freezer,
+                    lambda old=old: (
+                        lock_registry(hass).worker(lock_id) not in (None, old)
+                    ),
+                    max_steps=100,
+                    what="the lock's worker built again",
+                    step=1.0,
+                )
+                await _until_settled(hass, freezer, entry, lock_id, bridge, {1: "1234"})
+
+            issue = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+            assert issue.translation_placeholders == {
+                "lock_entity_id": lock_id,
+                "slots": "2, 3",
+            }
+            assert lcm_issue_ids(hass) == [issue_id]
+
     async def test_a_re_pair_while_the_entry_unloads_is_caught_at_its_next_setup(
         self,
         hass: HomeAssistant,
