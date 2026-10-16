@@ -927,6 +927,15 @@ async def test_a_reload_racing_a_rebuild_leaves_the_entry_on_the_new_device(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
+    raised = []
+    hass.bus.async_listen(
+        ir.EVENT_REPAIRS_ISSUE_REGISTRY_UPDATED,
+        lambda event: (
+            raised.append(event.data["issue_id"])
+            if event.data["action"] == "create"
+            else None
+        ),
+    )
     with patch.object(
         hass.config_entries, "async_setup", wraps=hass.config_entries.async_setup
     ) as setup:
@@ -939,6 +948,9 @@ async def test_a_reload_racing_a_rebuild_leaves_the_entry_on_the_new_device(
         await hass.async_block_till_done()
 
     assert "Unloading racing for re-paired lock.test_1 failed" in caplog.text
+    # The reload still had the old worker, not a read: no reload asked for.
+    assert raised == []
+    assert "a read of it was still going" not in caplog.text
     # The reload set it up (within its own lock): the rebuild did not try to.
     assert [c.kwargs for c in setup.call_args_list] == [{"_lock": False}]
     assert entry.state is ConfigEntryState.LOADED
