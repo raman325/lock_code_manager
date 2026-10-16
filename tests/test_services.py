@@ -84,8 +84,8 @@ from custom_components.lock_code_manager.model.credentials import CredentialType
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.model.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.model.pin_masking import mask_pin
 from custom_components.lock_code_manager.model.queries import get_entry_config
-from custom_components.lock_code_manager.model.util import mask_pin
 from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,

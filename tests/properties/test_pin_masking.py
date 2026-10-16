@@ -12,7 +12,7 @@ import re
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.model.util import (
+from custom_components.lock_code_manager.model.pin_masking import (
     deobfuscate_pins,
     mask_pin,
 )

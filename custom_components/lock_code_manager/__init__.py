@@ -143,12 +143,14 @@ from .model.config import (
 )
 from .model.credentials import CredentialType
 from .model.exceptions import UnclaimedLockError
+from .model.locks import PER_LOCK_ISSUE_KEYS, lock_display_name, per_lock_issue_id
 from .model.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
     generate_pin,
 )
+from .model.pin_masking import build_pin_deobfuscation_map, deobfuscate_pins
 from .model.queries import (
     another_entry_configures,
     get_entry_config,
@@ -156,13 +158,6 @@ from .model.queries import (
 )
 from .model.slot_assignment import CONF_SLOT_ASSIGNMENT
 from .model.user_migration import migrate_to_users
-from .model.util import (
-    PER_LOCK_ISSUE_KEYS,
-    build_pin_deobfuscation_map,
-    deobfuscate_pins,
-    lock_display_name,
-    per_lock_issue_id,
-)
 from .providers import BaseLock
 from .websocket import async_setup as async_websocket_setup
 

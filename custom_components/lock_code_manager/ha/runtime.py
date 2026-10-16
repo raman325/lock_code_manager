@@ -37,6 +37,7 @@ from homeassistant.helpers.start import async_at_started
 from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
 from ..model.credentials import SlotCode
 from ..model.exceptions import LockCodeManagerProviderError
+from ..model.locks import per_lock_issue_id
 from ..model.queries import (
     configured_owner,
     entries_configuring,
@@ -44,7 +45,6 @@ from ..model.queries import (
     get_entry_config,
     iter_loaded_lcm_entries,
 )
-from ..model.util import per_lock_issue_id
 from ..providers import BaseLock
 from ..sync.registry import LockRegistry, SlotTaken
 from ..sync.slot import Holds, Reading, Repair, Seen, Status, Want

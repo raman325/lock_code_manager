@@ -63,7 +63,7 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
   which also holds `SlotCredential` and the `SlotCode` labels,
   `names.py`, `pin_generator.py`, `occupancy.py`, `slot_assignment.py`,
   `config.py`, `user_migration.py`, `exceptions.py`, `events.py`,
-  `queries.py`, `util.py`). It may use Home
+  `queries.py`, `locks.py`, `pin_masking.py`). It may use Home
   Assistant (hass, the bus, the config entries) but never imports `ha/` or
   `providers/`.
 - **`ha/`** -- the Home Assistant runtime: `entry.py` (config entry runtime data

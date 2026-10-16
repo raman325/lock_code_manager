@@ -100,13 +100,13 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     ProviderNotImplementedError,
 )
+from custom_components.lock_code_manager.model.locks import per_lock_issue_id
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
     identity,
 )
 from custom_components.lock_code_manager.model.user_migration import migrate_to_users
-from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.providers._base import OPERATION_TIMEOUT
 from custom_components.lock_code_manager.repairs import (

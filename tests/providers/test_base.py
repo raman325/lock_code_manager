@@ -70,7 +70,7 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.model.util import per_lock_issue_id
+from custom_components.lock_code_manager.model.locks import per_lock_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (

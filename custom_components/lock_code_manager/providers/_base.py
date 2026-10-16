@@ -53,15 +53,12 @@ from ..model.exceptions import (
     LockOperationUnsupported,
     ProviderNotImplementedError,
 )
+from ..model.locks import lock_display_name, per_lock_issue_id
+from ..model.pin_masking import mask_pin
 from ..model.queries import (
     configured_owner,
     get_entry_config,
     slots_configured_on,
-)
-from ..model.util import (
-    lock_display_name,
-    mask_pin,
-    per_lock_issue_id,
 )
 from ._util import foreign_slots, make_tagged_name, parse_tag
 from .const import LOGGER

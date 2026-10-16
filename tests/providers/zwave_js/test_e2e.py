@@ -81,8 +81,8 @@ from custom_components.lock_code_manager.model.credentials import (
     WriteResult,
 )
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.model.locks import per_lock_issue_id
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
-from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
 from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock

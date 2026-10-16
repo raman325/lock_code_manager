@@ -23,8 +23,8 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
+from custom_components.lock_code_manager.model.locks import per_lock_issue_id
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
-from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.sync.slot import CLEARED, fingerprint
 
 from .common import (
