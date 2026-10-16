@@ -15,8 +15,6 @@ Written a second after a change, and at Home Assistant's final write. Never
 dropped on an unload (#1243): only when a release is done, a slot is let go
 of for good, a lock leaves Lock Code Manager or an entry is deleted. A
 record whose registry id is gone goes at the next start.
-
-The design: docs/superpowers/specs/2026-10-14-milestone-5.md.
 """
 
 from collections.abc import Callable, Collection

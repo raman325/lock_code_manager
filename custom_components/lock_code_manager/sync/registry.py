@@ -7,8 +7,6 @@ the lock or a slot given up is still being cleared, and is stopped when
 neither is true. Pure asyncio: the integration passes in how a worker is
 built, how its lock is prepared before the worker first reads it (the
 provider's setup), and how it is cleaned up after the worker stops.
-
-The design: docs/superpowers/specs/2026-10-14-core-registry-adapter.md.
 """
 
 import asyncio

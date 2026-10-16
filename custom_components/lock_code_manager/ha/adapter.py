@@ -15,8 +15,6 @@ PIN, and turns its refresh requests into reads. The adapter also keeps the
 provider's cadence: a poll, and the connection check that drives the
 provider's resubscribing. That check only drives the provider's lifecycle;
 it never decides what a failed sync costs (the worker's answers do).
-
-The design: docs/superpowers/specs/2026-10-14-core-registry-adapter.md.
 """
 
 import asyncio

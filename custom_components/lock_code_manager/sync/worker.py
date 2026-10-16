@@ -7,8 +7,6 @@ exchanges and a time limit on each. That one fact is the whole of the
 serialization, ordering, pacing and ownership a lock needs: nothing else
 can talk over a job, a push is handled in the order it came, and stopping
 the task stops everything the lock was doing.
-
-The design: docs/superpowers/specs/2026-10-13-core-first-principles.md.
 """
 
 import asyncio

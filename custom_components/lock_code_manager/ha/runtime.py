@@ -6,8 +6,6 @@ Each lock gets its provider, a ``ProviderPort`` around it and the
 holds the lock. The provider is set up before the worker first reads it and
 unloaded after the worker stops. A worker's changes go out as one dispatcher
 signal per lock; entities and the websocket listen to it.
-
-The design: docs/superpowers/specs/2026-10-14-core-swap.md.
 """
 
 import asyncio
