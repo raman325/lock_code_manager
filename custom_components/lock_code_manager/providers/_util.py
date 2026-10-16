@@ -165,8 +165,8 @@ def is_masked_code(code: str) -> bool:
     Locks configured to withhold user codes answer reads with an asterisk per
     digit instead of the digits. That is a refusal, not a value: read as one,
     it never equals the configured Personal Identification Number, so sync
-    sees a permanent mismatch and reprograms the slot on every single tick,
-    forever. Withheld has to reach the coordinator as unreadable, which is
+    sees a permanent mismatch and reprograms the slot until it is held.
+    Withheld has to reach the worker as unreadable, which is
     exactly the state that means "occupied, contents unknown".
 
     Only an all-asterisk code counts; asterisks mixed with digits are not a

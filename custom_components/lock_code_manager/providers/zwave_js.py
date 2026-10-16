@@ -2,7 +2,7 @@
 Z-Wave JS lock provider.
 
 Handles push updates via access-control credential node events and operation
-notifications for lock/unlock state changes. See ARCHITECTURE.md for the
+notifications for lock/unlock state changes. See AGENTS.md for the
 provider's role in the data flow.
 """
 
@@ -269,8 +269,8 @@ class ZWaveJSLock(BaseLock):
         anyway, so it would not even resolve the slot it claims to protect. LCM
         does not chase silent out-of-band changes, so the hourly poll earned its
         keep for neither readability nor occupancy. Hard refresh is still used on
-        demand (initial load, missing/unknown slots) and by the per-write
-        confirmation read -- just not on a timer.
+        demand (initial load, missing/unknown slots) and by the worker's
+        read-back after each write -- just not on a timer.
         """
         return None
 
@@ -398,7 +398,7 @@ class ZWaveJSLock(BaseLock):
         credential from the unified read rather than returning it with no
         value. The slot then projects to ``empty()``, which tells the sync
         layer the write definitively did not land -- so it rewrites, fails
-        to confirm again, and the circuit breaker suspends a slot whose
+        to confirm again, and the slot is held after its tries although its
         Personal Identification Number works on the keypad (issue #1397).
 
         ``userIdStatus`` is the occupancy authority and the credential
@@ -858,9 +858,9 @@ class ZWaveJSLock(BaseLock):
                     credential.slot,
                     err,
                 )
-                # No reconciliation read here: the seam's on-demand
-                # confirmation read hard-refreshes for every OPTIMISTIC
-                # write, so a single-slot read would be pure duplication.
+                # No reconciliation read here: the worker reads every write
+                # back with a hard refresh of the slot, so a read here would
+                # be pure duplication.
                 return WriteResult.OPTIMISTIC
             if key == "credential_rejected_duplicate" or self._uc_write_refused:
                 raise DuplicateCodeError(
@@ -1122,7 +1122,7 @@ class ZWaveJSLock(BaseLock):
             # No value from a slot the status says is occupied is the lock
             # withholding the code, not a cleared slot -- the same rule the
             # read path's occupancy overlay applies. Taken as empty, it
-            # would fail a pending write the lock in fact kept.
+            # would count against a write the lock in fact kept.
             resolved = (
                 SlotCredential.unreadable()
                 if slot_in_use is True
@@ -1326,7 +1326,7 @@ class ZWaveJSLock(BaseLock):
         Unscoped, this re-reads every user and credential: a walk of the
         whole lock, one command per slot on a User Code CC lock. Given
         ``slots`` it re-reads only those, one command each. That is what the
-        coordinator's confirmation read needs, and on a lock dropping half
+        worker's read-back after a write needs, and on a lock dropping half
         its responses it is the difference between a read that completes
         about half the time and one that essentially never does (issues
         #1397 and #1307). The projection is unscoped either way, so the

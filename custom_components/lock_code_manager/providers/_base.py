@@ -1,8 +1,10 @@
 """
 Abstract base for lock providers.
 
-Handles rate limiting, connection checking, and coordinator refresh after operations.
-See ARCHITECTURE.md for the provider interface contract.
+Handles setup, connection checking, push subscriptions, and the user/credential
+orchestration on top of each provider's primitives. Pacing and serialization
+are the lock worker's (``sync/worker.py``). See AGENTS.md for the provider
+interface contract.
 """
 
 import asyncio
@@ -155,7 +157,8 @@ class BaseLock:
 
     Data Fetching Modes
     -------------------
-    The coordinator supports three update modes. All modes include an initial poll.
+    The adapter (``ha/adapter.py``) runs these cadences. All modes include an
+    initial read by the lock's worker.
 
     1. Poll for updates (default):
        - Periodic calls to get_usercodes() at usercode_scan_interval
@@ -169,7 +172,7 @@ class BaseLock:
        - Updates pushed via self._push_credential_update(slot, credential)
 
     3. Poll for drift:
-       - Periodic hard_refresh_codes() at hard_refresh_interval
+       - Periodic fresh read of the managed slots at hard_refresh_interval
        - Detects out-of-band changes (e.g., codes changed at keypad)
        - Runs regardless of push/poll mode
        - Set hard_refresh_interval = None to disable
@@ -210,8 +213,10 @@ class BaseLock:
     Provider implementations should raise LockCodeManagerProviderError (or one of
     its subclasses: LockDisconnected, CodeRejectedError/DuplicateCodeError,
     ProviderNotImplementedError) for any failure originating from the lock or
-    its integration. The coordinator catches LockCodeManagerError (the broader
-    parent) and handles it appropriately (e.g., retrying, logging).
+    its integration. The adapter maps these onto the worker's answers
+    (``ha/adapter.py`` ``lock_error``): a refusal is the lock's answer about
+    the slot, anything else is no answer. Let them propagate; do not swallow
+    ``LockDisconnected``.
 
     Do NOT raise generic exceptions, HomeAssistantError, or the bare
     LockCodeManagerError for lock/integration failures — use
@@ -411,11 +416,10 @@ class BaseLock:
     @callback
     def _confirm_slot(self, code_slot: int, observed: SlotCredential) -> None:
         """
-        Resolve a push event for a slot against any write pending on it.
+        Hand the lock's worker a push event's observation of a slot.
 
-        The coordinator owns pending writes and their resolution; this is the
-        provider-facing name for handing it an observation. No-op without a
-        coordinator, when there is nothing to resolve against or update.
+        The provider-facing name for ``coordinator.observe_push``; the worker
+        weighs it against what it last wrote. No-op without a coordinator.
         """
         if self.coordinator is None:
             return
@@ -533,7 +537,7 @@ class BaseLock:
 
         False both while setup is deferred (provider integration still
         loading) and after a structural validation failure (e.g. the lock
-        reports zero usable PIN slots). Sync managers gate write attempts
+        reports zero usable PIN slots). The adapter gates reads and writes
         on this so a degraded lock is not hammered with operations that
         fail on the capability probe; the LOADED-transition revalidation
         flips it back and reconciliation resumes.
@@ -845,8 +849,8 @@ class BaseLock:
         if self.supports_native_users:
             # Bounded like the initial read, and for the same reason: setup
             # runs while Home Assistant holds the entry's lock, and this probe
-            # goes through neither `_execute_rate_limited` nor any budget of
-            # the provider's own -- `MatterLock.async_get_capabilities` awaits
+            # goes through neither the lock's worker nor any budget of the
+            # provider's own -- `MatterLock.async_get_capabilities` awaits
             # `get_lock_info` bare. A probe is a read, so cancelling it is
             # safe.
             caps = await self._get_cached_capabilities()
@@ -1145,7 +1149,7 @@ class BaseLock:
         outage was at the network or the device layer -- a node that comes
         back while the integration stayed connected drives the same
         resubscribe/refresh transition as an integration reconnect, instead of
-        waiting out the connectivity breaker's backoff probe (issue #1257).
+        waiting out the worker's backoff probe (issue #1257).
         """
         is_up = (
             await self.async_is_integration_connected()
@@ -1209,15 +1213,14 @@ class BaseLock:
 
         ``slots`` names the slots whose device state must be re-read; ``None``
         means everything. The returned projection is never narrowed by it:
-        the coordinator replaces its data with what comes back, so a read
-        must still name every managed slot. A provider that reads the whole
-        device in one call may ignore ``slots``. One that keeps a cache
+        a read must still name every managed slot. A provider that reads the
+        whole device in one call may ignore ``slots``. One that keeps a cache
         re-reads only ``slots`` and projects the rest from the cache: the
-        coordinator's confirmation read asks about the one or two slots with
-        a write pending, and on a marginal radio link the difference between
-        one command and a walk of the lock is the difference between
-        confirming the write and never confirming it. One with no cache
-        re-reads every managed slot plus ``slots``.
+        worker's read-back after a write asks about the one slot written, and
+        on a marginal radio link the difference between one command and a
+        walk of the lock is the difference between confirming the write and
+        never confirming it. One with no cache re-reads every managed slot
+        plus ``slots``.
         """
         self._raise_not_implemented(
             "async_hard_refresh_codes",
@@ -1271,8 +1274,7 @@ class BaseLock:
         is removed from LCM config (see ``async_release_managed_slot``).
         Returns True if the value changed, False if it was already cleared
         -- and True when the provider cannot determine whether a change
-        occurred, so the coordinator refreshes and verifies the actual
-        state.
+        occurred. Either way the worker reads the slot back.
 
         A clear adopts no untagged user (#1518). Adoption belongs to the set
         path, where the write that follows tags the user and corrects a wrong
@@ -1349,9 +1351,9 @@ class BaseLock:
         none -- mapped to ``SlotCredential.empty()``
         and then overlays the credentials of ``credential_type`` read via
         ``async_get_users``. This preserves the slot-keyed contract the
-        coordinator, sync manager, and slot entities depend on -- a
-        managed slot missing from the map is treated as unavailable, not
-        empty, so the empty placeholders are load-bearing. Occupied slots
+        lock's worker and the slot entities depend on -- a managed slot
+        missing from the map is read as silent (nothing said), not empty, so
+        the empty placeholders are load-bearing. Occupied slots
         the lock reports that are not managed are surfaced too.
         Credentials of other types are dropped here -- the seam keeps
         everything below it slot-shaped and single-type this round.
@@ -1404,14 +1406,14 @@ class BaseLock:
 
         Thin Personal-Identification-Number-shaped wrapper over
         ``_project_users_to_slots``; preserved as a stable name because
-        the coordinator, sync manager, and slot entities are all
+        the lock's worker and the slot entities are all
         Personal Identification Number-scoped today.
 
         ``slots`` replaces the set of slots this integration manages, for
         callers asking what the lock holds rather than what this integration
         put there. It can be wider or narrower, so a scoped result is not
-        the coordinator's contract and must not be handed to it: a managed
-        slot missing from a narrow read reads as unavailable, not empty. Everything read-repairing happens on
+        the worker's contract and must not be handed to it: a managed
+        slot missing from a narrow read reads as silent, not empty. Everything read-repairing happens on
         this side of the seam, so a caller asking a wider question gets the
         repairs too -- which is why occupancy is derived from here and not
         read separately.
@@ -1728,11 +1730,12 @@ class BaseLock:
         never put a code in (nothing to say) from one whose code it can no
         longer recognize (worth a warning).
 
-        Called by ``__init__.py``'s teardown path once a slot is removed
-        from LCM config (per the user-tag idempotency design's lifecycle
-        decoupling: a lock-side user is the slot's persistent anchor and
-        survives PIN clear/rewrite cycles, so it can only be torn down
-        when the slot itself is removed from LCM management).
+        Sent by the lock's worker as the clear of a slot no entry manages
+        any more (``ProviderPort.release``): a lock-side user is the slot's
+        persistent anchor and survives PIN clear/rewrite cycles, so it can
+        only be torn down when the slot itself leaves LCM management. A
+        release is retried like any clear and held after its tries; errors
+        must propagate, not be swallowed.
 
         Clears the credential. A slot-only provider has no user record,
         but the credential IS lock-side state this integration owns, and
@@ -1818,8 +1821,7 @@ class BaseLock:
         ``WriteResult.CONFIRMED`` when the lock acknowledged the write, and
         ``WriteResult.OPTIMISTIC`` when the result is ambiguous (the write may
         have landed but is unconfirmed -- e.g. a write-only/masked lock). The
-        outcome drives the coordinator refresh and the verified/unverified
-        slot lifecycle.
+        core does not act on the result: the worker reads every write back.
         """
         self._raise_not_implemented(
             "async_set_credential",
@@ -1863,10 +1865,10 @@ class BaseLock:
         provider reports, so an unmanaged occupied slot stays visible on the
         default path. A caller that needs the answer bounded must bound it.
 
-        A wide scope is the caller's to justify. The whole read is one
-        rate-limited operation, so on a per-index provider it holds the
-        operation lock for every round trip it makes -- blocking the poll
-        and any set or clear behind it for as long as that takes.
+        A wide scope is the caller's to justify. The whole read is one job
+        in the lock's worker, so on a per-index provider it holds the lock's
+        turn for every round trip it makes -- blocking the poll and any set
+        or clear behind it for as long as that takes.
         """
         self._raise_not_implemented(
             "async_get_users",

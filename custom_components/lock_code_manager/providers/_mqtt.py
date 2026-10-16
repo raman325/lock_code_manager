@@ -125,7 +125,7 @@ class BaseMqttLock(BaseLock):
         lock's own answer, so the two are the same operation.
         """
         # No cache to project from: a scoped refresh re-reads every managed slot
-        # plus ``slots``, so the coordinator's replace still names them all.
+        # plus ``slots``, so the result still names them all.
         return await self.async_get_usercodes(
             None if slots is None else self.managed_slots | frozenset(slots)
         )
@@ -167,12 +167,11 @@ class BaseMqttLock(BaseLock):
         device itself has to answer, leaving it on makes that fail up front
         as a disconnect instead of ten seconds later as a timeout.
 
-        Two of the three checks repeat what ``_execute_rate_limited`` asked a
-        moment earlier, and the repetition is load-bearing rather than
-        leftover: the unmanaged-code sweep and slot allocation call the
-        provider's operations directly, without that wrapper, so a helper
-        trimmed to what the wrapper does not cover would leave those two paths
-        addressing a lock that is not there.
+        The checks live here, in every operation, rather than in a caller:
+        the unmanaged-code sweep and slot allocation call the provider's
+        operations directly, outside the lock's worker, so leaving them to a
+        caller would leave those two paths addressing a lock that is not
+        there.
         """
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
@@ -268,12 +267,11 @@ class BaseMqttLock(BaseLock):
 
         Every slot failing at the transport is a different thing from every
         slot reading unreadable, and only the first can raise. An all-unreadable
-        return is a successful poll as far as the coordinator is concerned:
-        it resets the connectivity breaker, un-suspends the slots, and lets
-        them re-fail on the next tick -- an oscillation on the order of
-        seconds, flipping every slot in and out of sync. A lock configured to
-        withhold its codes answers every request and is perfectly healthy, so
-        its reads are data and must not count towards this.
+        return is an answered read as far as the worker is concerned, and
+        raising instead would back the lock off and take it offline. A lock
+        configured to withhold its codes answers every request and is
+        perfectly healthy, so its reads are data and must not count towards
+        this.
 
         One silent slot among answered ones stays merely unreadable. A lock
         that answers most requests and drops one is a weak link rather than a
@@ -287,7 +285,7 @@ class BaseMqttLock(BaseLock):
         Two slots is the smallest read it can judge. Asking about one and
         hearing nothing is a single lost reply, and on a lossy mesh that is
         routine -- issue #1397 had a node dropping roughly half its
-        responses. Raising there would trip the connectivity breaker on
+        responses. Raising there would count towards the lock's backoff on
         ordinary noise for an entry with one user, while an entry with two on
         the same lock, losing replies at the same rate, polled on untroubled.
         How many people a household has must not decide whether its lock is
@@ -299,7 +297,7 @@ class BaseMqttLock(BaseLock):
         firmware implements User Code Set without Get. Those locks worked --
         every poll came back all-unreadable and every write landed -- until an
         all-silent rule that did not ask whether reading was ever possible
-        started declaring them gone, tripping the breaker and suspending the
+        started declaring them gone, backing the lock off and stopping the
         writes along with the reads that were never going to work. Until the
         lock proves it can be read, silence is the answer rather than the
         absence of one, and a lock that can never prove it is left exactly as
@@ -309,9 +307,8 @@ class BaseMqttLock(BaseLock):
         is an answer, so a read that got one is no outage.
 
         One silent poll is not by itself an outage, and does not need to be
-        one here: raising records a single connectivity failure, and the
-        coordinator's breaker takes three in a row before it suspends
-        anything. A #1397-class link that loses both replies of one poll is
+        one here: raising records a single no-answer, and the worker takes
+        three in a row before it backs the lock off. A #1397-class link that loses both replies of one poll is
         absorbed there, by the mechanism that already exists for it.
 
         Nothing about a transport that is genuinely gone rests on this

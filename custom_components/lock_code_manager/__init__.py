@@ -1137,7 +1137,7 @@ async def _async_release_locks(
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
 ) -> bool:
-    """Unload an entry, stopping tick managers before tearing down platforms."""
+    """Unload an entry, stopping its slots before tearing down platforms."""
     hass_data = hass.data[DATA]
     runtime_data = config_entry.runtime_data
     callbacks = runtime_data.callbacks
@@ -1149,8 +1149,8 @@ async def async_unload_entry(
     runtime_data.unloading = True
     await runtime_data.pass_lock.acquire()
     try:
-        # The slots go first, so no tick or entity of theirs reaches a lock
-        # once its teardown begins.
+        # The slots go first, so nothing of theirs reaches a lock once its
+        # teardown begins.
         await _async_shutdown_slots(
             runtime_data, sorted(runtime_data.slot_coordinators)
         )
@@ -1462,13 +1462,12 @@ async def _async_shutdown_slots(
     slot_nums: Collection[int],
 ) -> None:
     """
-    Take slots out of the entry's runtime: coordinators, managers, entities.
+    Take slots out of the entry's runtime: coordinators, then entities.
 
     The coordinators are popped and stopped first, so nothing new starts on
     them while the stops run; the entities keep their own reference for
-    unsubscribing. One raising stop must not keep the rest running. The managers' stop and the entities' removal then
-    run together, so the grace an in-flight tick gets does not keep the
-    entities alive for its length.
+    unsubscribing. One raising stop must not keep the rest running. The
+    entities' removals then run together.
     """
     if not slot_nums:
         return
@@ -2061,8 +2060,8 @@ async def _async_apply_entry_update_locked(
         coordinator.async_start()
 
     # For each new slot: add the standard entities and, for the locks that
-    # already had their per-lock entities, the ones that view them; then start
-    # the managers on those locks (new locks get theirs as they are held,
+    # already had their per-lock entities, the ones that view them; then tell
+    # those locks what the slot wants (new locks hear it as they are held,
     # below). Before the new locks are set up, which can take as long as the
     # slowest of them takes to answer: none of these wait on a lock.
     existing_locks = dict(runtime_data.locks)

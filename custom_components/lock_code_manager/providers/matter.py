@@ -489,7 +489,7 @@ class MatterLock(BaseLock):
 
         Matter PINs are write-only: each occupied credential slot is projected to
         SlotCredential.unreadable(). Non-PIN credentials (for example RFID) are
-        filtered out because the coordinator and sync manager only manage PIN slots.
+        filtered out because the lock's worker only manages PIN slots.
 
         ``slots`` is ignored: this reads every user on the device in one
         call, so the answer may name slots outside the scope. What comes
@@ -504,8 +504,8 @@ class MatterLock(BaseLock):
         untagged users (legacy LCM 2.0) followed the
         ``credential_index == LCM slot`` invariant, so for them the Matter
         credential index doubles as the LCM slot. The translation keeps
-        the rest of LCM (``_project_users_to_slots``, sync manager,
-        coordinator) working in LCM-slot terms even though Matter now
+        the rest of LCM (``_project_users_to_slots``, the lock's worker)
+        working in LCM-slot terms even though Matter now
         auto-allocates the lock-side credential index.
         """
         # A for-loop (not a comprehension) so the int-or-None user_index and
@@ -1224,7 +1224,7 @@ class MatterLock(BaseLock):
                 # Unmapped/unknown status (e.g. ``unknown(133)`` seen while the
                 # lock is not fully ready at startup, issue #1257). Route to the
                 # retry path rather than permanently disabling the slot: a later
-                # tick after Matter is ready will succeed. Recognized rejections
+                # try after Matter is ready will succeed. Recognized rejections
                 # (occupied/failure) fall through to CodeRejectedError below.
                 raise _transient_status_disconnect(
                     self.lock.entity_id, slot, status
@@ -1325,9 +1325,9 @@ class MatterLock(BaseLock):
         own GetCredentialStatus for that index names the user it associated
         the credential with. A PIN filed under another user opens the door
         as somebody else while every slot still reads occupied, so it is
-        cleared again and raised as a failed write -- the slot breaker sees
-        it and the slot suspends with the real reason -- rather than pushed
-        as a success.
+        cleared again and raised as a failed write -- the worker counts it
+        like any other, and the slot is held with the real reason -- rather
+        than pushed as a success.
 
         A status read that fails proves nothing either way. The write has
         landed; undoing it over an unanswered question (the seam rolls a
@@ -1458,7 +1458,7 @@ class MatterLock(BaseLock):
         computed after it sorts those layers out, and it survives a transport blip
         -- unlike re-deriving the node from the device registry, which transiently
         fails while the matter client rebuilds its node set on reconnect and would
-        trip the breaker on a fault that isn't about the lock (issue #1268). The
+        back the lock off on a fault that isn't about the lock (issue #1268). The
         read primitives still resolve the node, so a genuine outage surfaces as
         LockDisconnected.
         """

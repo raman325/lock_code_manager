@@ -2,9 +2,10 @@
 A lock provider, as the worker sees it: a fresh read, a write, and pushes.
 
 ``ProviderPort`` gives the worker those from an existing ``BaseLock`` by
-calling the provider's own hooks -- never its ``async_internal_*`` wrappers,
-so none of the old core runs: no rate limiting, turn-taking, duplicate
-pre-check, pending writes or confirmations. The worker does all of that.
+calling the provider's own hooks. Pacing, turn-taking and checking each write
+by reading it back are the worker's; the duplicate pre-check is this port's
+(``_duplicate_of``). ``async_internal_is_reachable`` is the one base wrapper
+it calls, to retry a deferred setup and for the connection check.
 
 The provider's own lifecycle is kept as it is: setup, setup deferred while
 its integration loads, and resubscribing when that integration reloads or

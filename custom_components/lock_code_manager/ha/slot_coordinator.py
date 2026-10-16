@@ -67,9 +67,9 @@ class SlotEntityCoordinator:
     have to mutate the config entry or call sibling-entity services
     directly.
 
-    Owns the slot's sync managers: one per lock and credential address,
-    started when a lock is set up for the slot and stopped when the lock
-    or the slot goes. The in-sync sensors are views over them, so
+    Tells each of the entry's locks what the slot wants
+    (``async_push_want`` -> ``ha/runtime.async_want``); the lock's worker
+    does the syncing. The in-sync sensors are views over the workers, so
     disabling a sensor never stops a sync.
     """
 
@@ -125,8 +125,6 @@ class SlotEntityCoordinator:
             self._condition_unsub = None
         self._subscribed_condition_entity_id = None
         self._active_view_writers.clear()
-        # The managers are stopped by ``async_stop_sync``: stopping takes an
-        # await this callback cannot make.
 
     # -- What the slot wants on each lock ------------------------------------
 
@@ -194,7 +192,7 @@ class SlotEntityCoordinator:
         """Return the configured condition entity ID for this slot."""
         return self._slot_config().get(CONF_CONDITION)
 
-    # -- Registration (entities, sync managers) ------------------------------
+    # -- Registration (entities) ---------------------------------------------
 
     @callback
     def register_active_view(self, writer: ActiveViewWriter) -> Callable[[], None]:
@@ -385,7 +383,7 @@ class SlotEntityCoordinator:
         Called by ``async_update_listener`` after it refreshes
         ``runtime_data.config``. Updates the condition-entity subscription
         if the condition entity moved, recomputes derived state, and
-        fans the new state out to writers and sync managers.
+        fans the new state out to writers and to the entry's locks.
         """
         if not self._started:
             return

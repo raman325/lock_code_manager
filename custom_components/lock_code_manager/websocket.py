@@ -705,10 +705,10 @@ async def subscribe_lock_codes(
     msg: dict[str, Any],
 ) -> None:
     """
-    Subscribe to coordinator data and LCM entity state updates for a lock.
+    Subscribe to the lock's codes and LCM entity state updates for a lock.
 
     Triggers updates when:
-    - Lock coordinator data changes (codes on lock)
+    - The lock's worker learns of a change (codes on lock)
     - LCM entity states change (enabled, active, name, configured PIN)
     """
     lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
@@ -1074,7 +1074,7 @@ async def subscribe_code_slot(
 
     Provides real-time updates when:
     - Slot entities change (name, PIN, enabled, active)
-    - Lock coordinator data changes (codes on locks)
+    - The locks' workers learn of a change (codes on locks)
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
     """

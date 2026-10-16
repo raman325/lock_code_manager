@@ -324,17 +324,14 @@ class WriteResult(StrEnum):
     """
     Outcome of a credential write (``async_set_credential``).
 
-    - ``NO_CHANGE`` -- the value was already set; nothing was written. The
-      coordinator is not refreshed.
-    - ``CONFIRMED`` -- the write was accepted. On a push provider that is the
-      lock's word: the provider pushes the value (or the driver's event does)
-      and nothing is left pending. On a polled lock it is the cloud service's
-      word only, so the coordinator records the write pending -- unverified
-      until a read shows the slot hold it, given up on if none does in time.
+    - ``NO_CHANGE`` -- the value was already set; nothing was written.
+    - ``CONFIRMED`` -- the write was accepted.
     - ``OPTIMISTIC`` -- the write returned an ambiguous result we treat as
       completed but have NOT confirmed (e.g. a Z-Wave driver
-      ``ERROR_UNKNOWN`` from a masked read-back). Recorded pending with the
-      value believed, and settled the same way.
+      ``ERROR_UNKNOWN`` from a masked read-back).
+
+    The core does not act on the result (``ha/adapter.py``): the lock's
+    worker reads every write back, and the read decides.
     """
 
     NO_CHANGE = "no_change"
@@ -473,7 +470,7 @@ def credential_from_slot(slot: int, state: SlotCredential) -> Credential:
     """
     Build the Personal Identification Number credential for a managed slot.
 
-    The new model relates to the coordinator's ``SlotCredential`` by a
+    The new model relates to the slot-level ``SlotCredential`` by a
     one-to-one projection: a managed slot index becomes a PIN ``Credential``
     at the same index, reusing the ``SlotCredential`` verbatim as its state.
     """

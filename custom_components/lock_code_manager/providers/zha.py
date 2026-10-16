@@ -84,9 +84,8 @@ def _write_answer(
 
     Any other reply, including the raw bytes of a command zigpy could not
     decode, leaves the write's outcome unknown: the lock may have refused
-    it. That raises ``LockOperationFailed``, so sync sends the write again and
-    the slot breaker counts it, rather than confirming a write that did not
-    land.
+    it. That raises ``LockOperationFailed``, so the worker sends the write
+    again rather than confirming a write that did not land.
     """
     if _is_reply(result, cluster, response) or (
         isinstance(result, _DEFAULT_RESPONSE) and result.command_id == request.id
@@ -124,8 +123,8 @@ def _raise_for_status(
 
     A quirk's response may name no status field, which leaves the write
     standing; any status other than 0 rejects it, None included, except a
-    Default Response's transient failure, which fails the write so sync sends
-    it again and the slot breaker counts it.
+    Default Response's transient failure, which fails the write so the worker
+    sends it again.
     """
     status = getattr(answer, "status", 0)
     if status == 0:
@@ -565,8 +564,8 @@ class ZHALock(BaseLock):
             # An Enabled slot whose code comes back masked is untrustworthy
             # in the same way: a lock withholding its codes answers with an
             # asterisk per digit, which can never equal the configured PIN,
-            # so confirming it makes sync reprogram the slot on every tick
-            # forever.
+            # so confirming it makes sync reprogram the slot on every pass
+            # until it is held.
             #
             # Not Supported (0xFF) is a lock that cannot report its users
             # (#1581): no code held, nor none. Silent, as Zigbee2MQTT's

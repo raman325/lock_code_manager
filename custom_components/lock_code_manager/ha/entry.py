@@ -30,7 +30,7 @@ class LockCodeManagerConfigEntryRuntimeData:
     # update listener on every change. Readers should prefer this over
     # parsing config_entry.data/options directly. See data.EntryConfig.
     config: EntryConfig = field(default_factory=EntryConfig.empty)
-    # Per-slot coordinators; each owns that slot's sync managers.
+    # Per-slot coordinators; each tells the locks what its slot wants.
     slot_coordinators: dict[int, SlotEntityCoordinator] = field(default_factory=dict)
     # True once the options update listener has been registered for this
     # entry. Guards against stacking when _setup_entry_after_start runs more

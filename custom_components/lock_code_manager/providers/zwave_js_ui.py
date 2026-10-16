@@ -340,8 +340,8 @@ def _raise_on_supervision_fail(operation: str, code_slot: int, result: Any) -> N
     command, and hands back whatever the command returned: a Supervision
     result when the lock supervised it, nothing when it did not. Fail is the
     lock explicitly refusing the command. It raises as an operation failure
-    rather than a rejection because the lock gives no reason, so the slot
-    breaker decides what repeated refusals mean.
+    rather than a rejection because the lock gives no reason, so the lock's
+    worker decides what repeated refusals mean.
 
     Every other result leaves the write standing. Unlike the ``userIdStatus``
     checks in this module, this needs no boolean guard: ``True == 1`` and
@@ -373,10 +373,9 @@ class ZWaveJSUILock(BaseMqttLock):
     _api_response_unsub: Callable[[], None] | None = field(init=False, default=None)
     # Topic the live subscription covers, or None when there is none.
     _api_response_topic: str | None = field(init=False, default=None)
-    # Serializes ``_async_ensure_api_response_subscription``. Deliberately not
-    # the base's ``_aio_lock``: that is held across every rate-limited
-    # operation, and those resolve the api base, which ensures this
-    # subscription -- sharing it would deadlock on the first read.
+    # Serializes ``_async_ensure_api_response_subscription``. Its own lock:
+    # every operation resolves the api base, which ensures this
+    # subscription, so a lock held across operations would deadlock here.
     _api_subscription_lock: asyncio.Lock = field(
         init=False, default_factory=asyncio.Lock
     )
@@ -441,10 +440,10 @@ class ZWaveJSUILock(BaseMqttLock):
     @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
-        Bring both subscriptions up before the coordinator runs its first poll.
+        Bring both subscriptions up before the lock's worker first reads.
 
         Establishing the api response subscription here rather than leaving it
-        to the first api call is what keeps the coordinator's polls off the
+        to the first api call is what keeps the polls off the
         settling path: by the time one publishes, the wire SUBSCRIBE went out
         long ago. Correctness does not depend on that -- every subscribe
         settles itself -- only the latency does.
@@ -947,7 +946,7 @@ class ZWaveJSUILock(BaseMqttLock):
         Find the gateway running ``home_hex`` on ``prefix``, once per gateway.
 
         The scan is the same question for every lock behind one gateway, and
-        they ask it together: their coordinators refresh on the same tick, and
+        they ask it together: their workers read on the same cadence, and
         a gateway that has just come back invalidates all of their bindings at
         once. So the answer is shared across provider instances and the scan
         is serialized behind it -- the second lock waits out the first one's

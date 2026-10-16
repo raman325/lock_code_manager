@@ -387,8 +387,8 @@ class SchlageLock(BaseLock):
         Returns True unconditionally because Schlage Personal Identification
         Numbers are write-only and we cannot determine whether the value
         actually changed. The get/delete/add sequence runs under the sequence
-        lock so concurrent sync ticks cannot interleave their own multi-step
-        writes against the same slot. Ignores ``user_id``; slot-only providers
+        lock so no other caller (the unmanaged-code sweep, allocation) can
+        interleave its own multi-step writes against the same slot. Ignores ``user_id``; slot-only providers
         address the credential by slot.
         """
         code_slot = credential.slot
@@ -432,7 +432,7 @@ class SchlageLock(BaseLock):
                 # read back and the add is refused for its name or its PIN
                 # "already existing". Since Personal Identification Numbers are
                 # write-only we can't verify the value, but the code IS on the
-                # lock — treat it as success so the sync manager doesn't loop.
+                # lock — treat it as success so sync doesn't loop.
                 # Any other refusal, a PIN another code holds included, is the
                 # lock's answer.
                 key = getattr(err.__cause__, "translation_key", None)
