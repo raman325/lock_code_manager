@@ -1744,9 +1744,11 @@ class BaseLock:
         allocation refuses to write over a code it can still read.
 
         Providers that anchor a slot to a lock-side user (Matter,
-        eventually Z-Wave User Credential CC) override this to delete
-        that user instead; the cascade defined by the lock's protocol
-        removes its credentials, so they must not also clear here.
+        eventually Z-Wave User Credential CC) override this to remove
+        only what LCM wrote to that user: its PIN, and the user itself
+        only when it holds nothing else -- deleting a user cascades to
+        every credential on it, a card or PIN added in the vendor's app
+        among them. They do not also clear here.
         """
         await self.async_clear_usercode(slot)
 
