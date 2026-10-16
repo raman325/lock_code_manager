@@ -323,9 +323,8 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
         # A worker whose device was re-paired leaves as a lock leaving does,
         # whether or not a rebuild saw the re-pair: what it kept since went
         # under the entity id, which names the new device now.
-        leaving = lock_entity_id in data[LEAVING_KEY] or _re_paired(
-            hass, lock_entity_id, worker
-        )
+        re_paired = _re_paired(hass, lock_entity_id, worker)
+        leaving = lock_entity_id in data[LEAVING_KEY] or re_paired
         if leaving:
             # Nothing will answer it now: the lock is gone from here. Nor is
             # it re-paired and still in use.
@@ -334,14 +333,24 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             if (store := data.get(STORE_KEY)) is not None:
                 store.forget_lock(lock_entity_id)
             data[REPORTS_KEY].pop(port.provider.lock.id, None)
-            _warn_not_cleared(
-                lock_entity_id,
-                (
-                    n
-                    for n, slot in worker.slots.items()
-                    if slot.release and slot.hold is None
-                ),
-            )
+            if re_paired:
+                # Work owed to the old device that no rebuild dropped (Home
+                # Assistant stopping first, say): named for the user to
+                # check, as a rebuild would.
+                _async_report_dropped_work(
+                    hass,
+                    lock_entity_id,
+                    (n for n, slot in worker.slots.items() if slot.release),
+                )
+            else:
+                _warn_not_cleared(
+                    lock_entity_id,
+                    (
+                        n
+                        for n, slot in worker.slots.items()
+                        if slot.release and slot.hold is None
+                    ),
+                )
         if port.managed:
             await port.async_unload(leaving)
         else:
@@ -372,32 +381,44 @@ def async_listen_for_re_pairs(
     under the same friendly name) has a new registry id. The worker's
     provider is bound to the old one, so the lock looks offline until the
     entries holding it set up again. Checked at each registry event for the
-    lock, except while a check or rebuild of it is under way. A removal
-    alone, or a rename (the same registry id), is no rebuild; a removal
-    followed by a creation is one, once the creation is in.
+    lock, and when an entry takes a lock still on its old device, except
+    while a check or rebuild of it is under way. A removal alone, or a
+    rename (the same registry id), is no rebuild; a removal followed by a
+    creation is one, once the creation is in.
     """
-    pending: set[str] = hass.data[DATA][REBUILDS_KEY]
-    one_at_a_time: asyncio.Lock = hass.data[DATA][REBUILD_LOCK_KEY]
 
     @callback
     def _changed(event: Event[er.EventEntityRegistryUpdatedData]) -> None:
-        lock = event.data["entity_id"]
-        if lock not in entry.runtime_data.locks or lock in pending:
-            return
-        pending.add(lock)
-
-        async def _check() -> None:
-            try:
-                # Checked once the rebuild before it is done: it may have
-                # rebuilt this lock too.
-                async with one_at_a_time:
-                    await _async_rebuild_if_re_paired(hass, lock)
-            finally:
-                pending.discard(lock)
-
-        hass.async_create_task(_check(), f"Re-pair check of {lock}")
+        if (lock := event.data["entity_id"]) in entry.runtime_data.locks:
+            _async_check_re_pair(hass, lock)
 
     return hass.bus.async_listen(er.EVENT_ENTITY_REGISTRY_UPDATED, _changed)
+
+
+@callback
+def _async_check_re_pair(hass: HomeAssistant, lock: str) -> None:
+    """
+    Check ``lock`` for a re-pair, and rebuild it, unless a check is under way.
+
+    In a task of its own, run once its caller is done: an entry that has
+    just taken the lock holds it by then.
+    """
+    data = hass.data[DATA]
+    pending = data[REBUILDS_KEY]
+    if lock in pending:
+        return
+    pending.add(lock)
+
+    async def _check() -> None:
+        try:
+            # Checked once the rebuild before it is done: it may have rebuilt
+            # this lock too.
+            async with data[REBUILD_LOCK_KEY]:
+                await _async_rebuild_if_re_paired(hass, lock)
+        finally:
+            pending.discard(lock)
+
+    hass.async_create_task(_check(), f"Re-pair check of {lock}", eager_start=False)
 
 
 def _re_paired(
@@ -441,38 +462,8 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
         return
     _LOGGER.info("%s is a different device now (re-paired): starting it over", lock)
     moot = sorted(n for n, slot in worker.slots.items() if slot.release)
-    if moot:
-        # The same lock under a new registry id (moved between integrations)
-        # may still hold a removed user's code. Not replayed: on a new device
-        # the slot may hold a keypad code. The user checks. Slots an earlier
-        # re-pair named, not yet acknowledged, are still named.
-        issue_id = per_lock_issue_id(RE_PAIRED_WORK_DROPPED, lock)
-        earlier = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
-        named = (earlier.translation_placeholders or {}) if earlier else {}
-        if slots := named.get("slots"):
-            moot_named = sorted({*moot, *(int(n) for n in slots.split(", "))})
-        else:
-            moot_named = moot
-        async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=True,
-            is_persistent=True,
-            severity=IssueSeverity.WARNING,
-            translation_key=RE_PAIRED_WORK_DROPPED,
-            translation_placeholders={
-                "lock_entity_id": lock,
-                "slots": ", ".join(map(str, moot_named)),
-            },
-        )
+    _async_report_dropped_work(hass, lock, moot)
     for slot in moot:
-        _LOGGER.warning(
-            "Slot %s on %s was still being cleared or written (a one-off PIN) "
-            "when the device was replaced: that work is dropped with the old device",
-            slot,
-            lock,
-        )
         worker.forget(slot)
         data[GIVEN_UP_KEY].pop((lock, slot), None)
     unloaded = await asyncio.gather(
@@ -514,6 +505,47 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
         await hass.config_entries.async_setup(entry.entry_id)
 
 
+@callback
+def _async_report_dropped_work(
+    hass: HomeAssistant, lock: str, dropped: Iterable[int]
+) -> None:
+    """
+    Name the slots whose clear or one-off write a re-pair of ``lock`` dropped.
+
+    The same lock under a new registry id (moved between integrations) may
+    still hold a removed user's code. Not replayed: on a new device the slot
+    may hold a keypad code. The user checks. Slots an earlier re-pair named,
+    not yet acknowledged, are still named.
+    """
+    if not (dropped := sorted(dropped)):
+        return
+    for slot in dropped:
+        _LOGGER.warning(
+            "Slot %s on %s was still being cleared or written (a one-off PIN) "
+            "when the device was replaced: that work is dropped with the old device",
+            slot,
+            lock,
+        )
+    issue_id = per_lock_issue_id(RE_PAIRED_WORK_DROPPED, lock)
+    earlier = ir.async_get(hass).async_get_issue(DOMAIN, issue_id)
+    named = (earlier.translation_placeholders or {}) if earlier else {}
+    if slots := named.get("slots"):
+        dropped = sorted({*dropped, *(int(n) for n in slots.split(", "))})
+    async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=True,
+        is_persistent=True,
+        severity=IssueSeverity.WARNING,
+        translation_key=RE_PAIRED_WORK_DROPPED,
+        translation_placeholders={
+            "lock_entity_id": lock,
+            "slots": ", ".join(map(str, dropped)),
+        },
+    )
+
+
 async def async_hold_lock(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -542,6 +574,16 @@ async def async_hold_lock(
             del wants[err.slot]
     port = worker.port
     port.releasing.difference_update(wants)
+    if _re_paired(hass, lock_entity_id, worker) and not ir.async_get(
+        hass
+    ).async_get_issue(DOMAIN, per_lock_issue_id(RE_PAIRED_RELOAD, lock_entity_id)):
+        # Still on the device before a re-pair no rebuild saw: no entry held
+        # the lock then -- its one entry unloading, a clear owed to the old
+        # device keeping the worker, or the worker built just before. Not
+        # one a read kept through its rebuild (a reload is asked for):
+        # rebuilt again, it would be kept again. The rebuild's own setup
+        # holds a new worker, on the new device: no check.
+        _async_check_re_pair(hass, lock_entity_id)
     return port.provider
 
 

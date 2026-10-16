@@ -931,8 +931,11 @@ async def test_a_reload_racing_a_rebuild_leaves_the_entry_on_the_new_device(
         hass.config_entries, "async_setup", wraps=hass.config_entries.async_setup
     ) as setup:
         new_id = _re_pair(hass, LOCK_1_ENTITY_ID)
-        # Queued behind the rebuild's check: it unloads first.
-        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        # Queued behind the rebuild's check, which asks to unload first; the
+        # reload's unload starts before the rebuild's does.
+        hass.async_create_task(
+            hass.config_entries.async_reload(entry.entry_id), eager_start=False
+        )
         await hass.async_block_till_done()
 
     assert "Unloading racing for re-paired lock.test_1 failed" in caplog.text
@@ -983,6 +986,24 @@ async def test_an_entry_deleted_during_a_rebuild_is_not_set_up_again(
     assert mock_lock(second, LOCK_1_ENTITY_ID).codes[2] == "2222"
     assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert await hass.config_entries.async_unload(second.entry_id)
+
+
+async def test_a_setup_on_the_same_device_checks_for_no_re_pair(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Setting up, or reloading, on the lock's own device starts no re-pair check."""
+    entry = current_entry("plain", {1: "1111"})
+    entry.add_to_hass(hass)
+    with patch(
+        "custom_components.lock_code_manager.ha.runtime._async_rebuild_if_re_paired"
+    ) as rebuild:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+    rebuild.assert_not_called()
+    assert mock_lock(entry, LOCK_1_ENTITY_ID).codes[1] == "1111"
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def _remove_user_in_slot(
