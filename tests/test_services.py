@@ -658,7 +658,9 @@ async def test_delete_user_service(
     entry = lock_code_manager_config_entry
     released: list[int] = []
     for lock in entry.runtime_data.locks.values():
-        lock.async_release_managed_slot = AsyncMock(side_effect=released.append)
+        lock.async_release_managed_slot = AsyncMock(
+            side_effect=lambda slot, **_: released.append(slot)
+        )
 
     await hass.services.async_call(
         DOMAIN,

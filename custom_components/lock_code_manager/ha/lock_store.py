@@ -27,6 +27,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
+from ..sync.slot import CLEARED
 from ..sync.worker import LockWorker
 
 STORE_KEY = f"{DOMAIN}.core"
@@ -62,6 +63,14 @@ class LockStore:
         return (
             None if record is None else record["slots"].get(str(slot), {}).get("wrote")
         )
+
+    def wrote_pin(self, key: str, slot: int) -> bool:
+        """
+        Return whether a PIN was what was last written to ``slot`` on the lock.
+
+        A slot only ever cleared never held Lock Code Manager's code.
+        """
+        return self.wrote(key, slot) not in (None, CLEARED)
 
     def answered(self, key: str) -> bool:
         """Return whether the lock has ever answered."""

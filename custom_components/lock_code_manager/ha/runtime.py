@@ -709,7 +709,7 @@ def async_give_up(
             clear = False
     try:
         if clear:
-            port.releasing.add(slot)
+            _begin_release(hass, port, slot)
             registry.give_up(lock_entity_id, entry.entry_id, slot)
             hass.data[DATA][GIVEN_UP_KEY][lock_entity_id, slot] = (
                 entry.entry_id,
@@ -903,10 +903,19 @@ async def async_resume_slot(
             slot,
             None,
             # Still a release: a native-user lock deletes the user it tagged.
-            before=lambda new: new.port.releasing.add(slot),
+            before=lambda new: _begin_release(hass, new.port, slot),
         )
         # The clear is this worker's now: its view of the slot resolves it.
         given_up[key] = (given_up[key][0], worker)
+
+
+def _begin_release(hass: HomeAssistant, port: ProviderPort, slot: int) -> None:
+    """Make ``slot``'s next clear on ``port`` a release, saying if LCM wrote a PIN there."""
+    store: LockStore | None = hass.data[DATA].get(STORE_KEY)
+    port.release(
+        slot,
+        written=store is not None and store.wrote_pin(port.provider.lock.id, slot),
+    )
 
 
 def _label(reading: Reading) -> str | SlotCode:
