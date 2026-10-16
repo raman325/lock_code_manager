@@ -30,6 +30,7 @@ from zwave_js_server.const.command_class.notification import (
     NotificationType,
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
+from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 from zwave_js_server.util.lock import get_code_slot_value, get_usercodes
 
@@ -308,6 +309,19 @@ class ZWaveJSLock(BaseLock):
             return SlotCredential.unreadable()
         return SlotCredential.known(code)
 
+    async def _async_read_access_control(
+        self,
+    ) -> tuple[list[UserData], list[CredentialData]]:
+        """Return the driver's cached users and credentials, every type kept."""
+        try:
+            users = await self.node.access_control.get_users_cached()
+            credentials = await self.node.access_control.get_all_credentials_cached()
+        except BaseZwaveJSServerError as err:
+            raise _mapped_zwave_error(err, "get users failed") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"get users failed: {err}") from err
+        return users, credentials
+
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
@@ -334,13 +348,7 @@ class ZWaveJSLock(BaseLock):
         unified API models each User Code CC slot as an implicit user
         carrying its single PIN credential.
         """
-        try:
-            users = await self.node.access_control.get_users_cached()
-            credentials = await self.node.access_control.get_all_credentials_cached()
-        except BaseZwaveJSServerError as err:
-            raise _mapped_zwave_error(err, "get users failed") from err
-        except HomeAssistantError as err:
-            raise LockOperationFailed(f"get users failed: {err}") from err
+        users, credentials = await self._async_read_access_control()
         users_by_id: dict[int, User] = {
             user.user_id: User(
                 user_id=user.user_id,
@@ -680,15 +688,21 @@ class ZWaveJSLock(BaseLock):
     @override
     async def async_release_managed_slot(self, slot: int) -> None:
         """
-        Delete the user LCM tagged for ``slot``; clear the slot on a User Code lock.
+        Remove LCM's PIN from its tagged user for ``slot``; clear a User Code slot.
 
         A User Credential lock keeps a user record per slot, tagged
-        ``lcm:<slot>:``. Clearing only the PIN would leave that user behind
-        (and its name, the slot's display name, on the lock). The user is
-        found by its tag ONLY, never by adoption: deleting a user cascades
-        to its credentials, so adopting an untagged one here would delete a
-        code LCM never created (#1518/#1694). No tagged user: nothing of
-        LCM's is left to release.
+        ``lcm:<slot>:``, holding the PIN LCM wrote at credential slot
+        ``slot``. The user is found by its tag ONLY, never by adoption: an
+        untagged user is never touched here (#1518/#1694).
+
+        LCM wrote only that PIN, so only that PIN is LCM's to remove. The
+        user may also hold credentials someone added in the vendor's app (an
+        RFID tag, a fingerprint, another PIN); deleting the user would
+        cascade to them. So the user goes only when LCM's PIN is all it
+        holds -- one User Delete, whose cascade takes the PIN -- and
+        otherwise only the PIN goes and the user stays. The check reads the
+        driver's raw credentials, not ``async_get_users``, which drops the
+        credential types LCM has no name for (DESFire, BLE, UWB, ...).
 
         A User Code lock has no user records -- each slot is an implicit
         user carrying one PIN -- so the base clears the slot, as before.
@@ -704,7 +718,19 @@ class ZWaveJSLock(BaseLock):
                 slot,
             )
             return
-        await self.async_delete_user(user_id)
+        _, credentials = await self._async_read_access_control()
+        held = [cred for cred in credentials if cred.user_id == user_id]
+        lcm_pin = any(
+            cred.type is UserCredentialType.PIN_CODE and cred.slot == slot
+            for cred in held
+        )
+        if len(held) == int(lcm_pin):
+            await self.async_delete_user(user_id)
+            return
+        if lcm_pin:
+            await self._delete_credential(
+                CredentialRef(user_id=user_id, type=CredentialType.PIN, slot=slot)
+            )
 
     @override
     async def async_delete_user(self, user_id: int) -> None:

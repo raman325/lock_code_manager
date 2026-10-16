@@ -1735,10 +1735,11 @@ class BaseLock:
         door -- and that the slot number can never be reissued, because
         allocation refuses to write over a code it can still read.
 
-        Providers that anchor a slot to a lock-side user (Matter,
-        Z-Wave User Credential CC) override this to delete
-        that user instead; the cascade defined by the lock's protocol
-        removes its credentials, so they must not also clear here.
+        Providers that anchor a slot to a lock-side user override this.
+        Matter deletes that user; the cascade defined by its protocol
+        removes its credentials, so it must not also clear here. Z-Wave
+        User Credential CC removes LCM's PIN and deletes the user only when
+        nothing else is left on it.
         """
         await self.async_clear_usercode(slot)
 

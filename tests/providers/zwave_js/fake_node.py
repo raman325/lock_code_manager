@@ -459,6 +459,7 @@ class FakeZWaveLock:
         max_user_name_length: int = 16,
         max_credential_hash_length: int = 0,
         pin_lengths: tuple[int, int] = (4, 10),
+        other_credential_types: tuple[int, ...] = (),
         codes: dict[int, str] | None = None,
         driver_version: str = "15.31.1",
     ) -> None:
@@ -479,6 +480,7 @@ class FakeZWaveLock:
         self.max_user_name_length = max_user_name_length
         self.max_credential_hash_length = max_credential_hash_length
         self.pin_lengths = pin_lengths
+        self.other_credential_types = other_credential_types
         # Every fault not yet cleared; a spent one matches nothing more but
         # may still hold the exchange it met last.
         self.faults: list[NodeFault] = []
@@ -663,6 +665,22 @@ class FakeZWaveLock:
         else:
             self.uc_slots[slot] = (UserIDStatus.ENABLED, code)
         self.report(slot)
+
+    def enroll(self, user_id: int, kind: int, slot: int, data: str) -> None:
+        """
+        Add a credential of ``kind`` to an existing user at the lock, and report it.
+
+        An RFID tag or a fingerprint enrolled at the lock or in the vendor's
+        app: the lock sends a Credential Report of type Added, which the
+        driver persists and turns into a credential event (U3CC:2874-3040).
+        """
+        assert self.uses_user_credential_cc
+        assert user_id in self.users
+        assert kind in self.other_credential_types
+        self.credentials[(kind, slot)] = (user_id, data)
+        self._u3c_credential_report(
+            CredentialReportType.CREDENTIAL_ADDED, user_id, slot, data, kind
+        )
 
     def report(self, slot: int) -> None:
         """Send the lock's own User Code Report of ``slot``, unsolicited."""
@@ -1057,9 +1075,23 @@ class FakeZWaveLock:
             ("maxUserNameLength", self.max_user_name_length),
             ("supportedUserTypes", [UserCredentialUserType.GENERAL]),
             ("supportedCredentialRules", [UserCredentialRule.SINGLE]),
-            ("supportedCredentialTypes", [_PIN]),
+            ("supportedCredentialTypes", [_PIN, *self.other_credential_types]),
         ):
             self._set(_U3C, prop, None, value)
+        for kind in self.other_credential_types:
+            # Enrolled at the lock or in the vendor's app, never by LCM.
+            self._set(
+                _U3C,
+                "credentialCapabilities",
+                kind,
+                {
+                    "numberOfCredentialSlots": self.pin_slots,
+                    "minCredentialLength": 1,
+                    "maxCredentialLength": 32,
+                    "maxCredentialHashLength": self.max_credential_hash_length,
+                    "supportsCredentialLearn": True,
+                },
+            )
         self._set(
             _U3C,
             "credentialCapabilities",
