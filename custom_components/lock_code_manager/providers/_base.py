@@ -14,8 +14,8 @@ import logging
 from typing import Any, ClassVar, Literal, NoReturn, Protocol, final, override
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -1931,6 +1931,7 @@ class BaseLock:
         target: dict[str, Any] | None = None,
         blocking: bool = True,
         return_response: bool = False,
+        code_slot: int | None = None,
     ) -> dict[str, Any] | None:
         """
         Call a hass service and re-raise failures as LockDisconnected.
@@ -1939,6 +1940,12 @@ class BaseLock:
         dict) so callers don't have to write their own service-call wrapper
         just to access response data. ``target`` mirrors HA's standard
         target dict for platform-aware services.
+
+        A write passes its ``code_slot``: the integration's own
+        ``ServiceValidationError`` is then the lock refusing the code, raised
+        as ``CodeRejectedError``. Home Assistant's own (the action not found,
+        the integration's entry not loaded, the entity not supporting it) is
+        not the lock's answer, and stays a failed operation.
         """
         try:
             return await self.hass.services.async_call(
@@ -1967,6 +1974,16 @@ class BaseLock:
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
+            if (
+                code_slot is not None
+                and isinstance(err, ServiceValidationError)
+                and err.translation_domain != HOMEASSISTANT_DOMAIN
+            ):
+                raise CodeRejectedError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=f"{domain}.{service} refused: {err}",
+                ) from err
             raise LockOperationFailed(
                 f"Service call {domain}.{service} failed: {err}"
             ) from err

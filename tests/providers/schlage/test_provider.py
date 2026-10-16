@@ -7,7 +7,11 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.exceptions import (
+    HomeAssistantError,
+    ServiceNotSupported,
+    ServiceValidationError,
+)
 
 from custom_components.lock_code_manager.model.credentials import (
     Credential,
@@ -17,6 +21,7 @@ from custom_components.lock_code_manager.model.credentials import (
     credential_from_slot,
 )
 from custom_components.lock_code_manager.model.exceptions import (
+    CodeRejectedError,
     LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,
@@ -733,23 +738,36 @@ async def test_set_credential_migrates_legacy_format_tag_on_write(
     assert "[LCM:1] Guest" in deleted_names
 
 
+def _schlage_refusal(key: str) -> ServiceValidationError:
+    """Return the validation error the Schlage integration raises for ``key``."""
+    return ServiceValidationError(
+        translation_domain=SCHLAGE_DOMAIN,
+        translation_key=key,
+        translation_placeholders={"name": "[LCM:1] Guest"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("refusal", "old_pin"),
+    [
+        pytest.param("schlage_name_exists", None, id="name_still_read_back"),
+        pytest.param("schlage_code_exists", "1234", id="deleted_pin_still_read_back"),
+    ],
+)
 async def test_set_credential_already_exists_treated_as_success(
-    hass: HomeAssistant, schlage_lock: SchlageLock
+    hass: HomeAssistant, schlage_lock: SchlageLock, refusal: str, old_pin: str | None
 ) -> None:
     """
-    Test that 'already exists' on add_code is treated as success.
+    An add refused for the code just deleted is a success.
 
     Schlage's cloud API has eventual consistency: a delete may not propagate
-    before the add, causing 'already exists'.  Since Personal Identification
-    Numbers are write-only, we can't verify the value but the code IS on the lock.
+    before the add, so the deleted code's name or PIN "already exists". Since
+    Personal Identification Numbers are write-only, we can't verify the value
+    but the code IS on the lock.
     """
-    get_response = {LOCK_ENTITY_ID: {}}
-    get_handler = AsyncMock(return_value=get_response)
-    add_handler = AsyncMock(
-        side_effect=HomeAssistantError(
-            'A PIN code with the name "lcm:1:Guest" already exists on the lock'
-        )
-    )
+    codes = {} if old_pin is None else {"a": {"name": "[LCM:1] Old", "code": old_pin}}
+    get_handler = AsyncMock(return_value={LOCK_ENTITY_ID: codes})
+    add_handler = AsyncMock(side_effect=_schlage_refusal(refusal))
     delete_handler = AsyncMock(return_value=None)
     register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
     register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
@@ -764,6 +782,66 @@ async def test_set_credential_already_exists_treated_as_success(
     )
 
     assert result is WriteResult.CONFIRMED
+
+
+async def test_set_credential_pin_another_code_holds_is_rejected(
+    hass: HomeAssistant, schlage_lock: SchlageLock
+) -> None:
+    """A PIN held by a code the write did not delete is the lock's refusal."""
+    codes = {"a": {"name": "[LCM:1] Old", "code": "9999"}}
+    get_handler = AsyncMock(return_value={LOCK_ENTITY_ID: codes})
+    add_handler = AsyncMock(side_effect=_schlage_refusal("schlage_code_exists"))
+    delete_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
+
+    with pytest.raises(CodeRejectedError) as caught:
+        await schlage_lock.async_set_credential(
+            1,
+            _pin_cred(1, "1234"),
+            "1234",
+            name="Guest",
+            source="direct",
+        )
+    assert caught.value.code_slot == 1
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(
+            ServiceNotSupported(SCHLAGE_DOMAIN, "add_code", LOCK_ENTITY_ID),
+            id="core_not_supported",
+        ),
+        pytest.param(
+            ServiceValidationError(
+                translation_domain="homeassistant",
+                translation_key="service_config_entry_not_loaded",
+            ),
+            id="core_entry_not_loaded",
+        ),
+    ],
+)
+async def test_set_credential_core_validation_error_is_not_a_refusal(
+    hass: HomeAssistant, schlage_lock: SchlageLock, error: ServiceValidationError
+) -> None:
+    """Home Assistant's own validation error is no answer from the lock."""
+    get_handler = AsyncMock(return_value={LOCK_ENTITY_ID: {}})
+    add_handler = AsyncMock(side_effect=error)
+    delete_handler = AsyncMock(return_value=None)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "add_code", add_handler)
+    register_mock_service(hass, SCHLAGE_DOMAIN, "delete_code", delete_handler)
+
+    with pytest.raises(LockOperationFailed):
+        await schlage_lock.async_set_credential(
+            1,
+            _pin_cred(1, "1234"),
+            "1234",
+            name="Guest",
+            source="direct",
+        )
 
 
 async def test_set_credential_non_exists_error_still_raises(

@@ -140,8 +140,8 @@ class AkuvoxLock(BaseLock):
             )
         return users
 
-    async def _async_add_user(self, name: str, pin: str) -> None:
-        """Add a new user with the given name and PIN."""
+    async def _async_add_user(self, name: str, pin: str, code_slot: int) -> None:
+        """Add a new user with the given name and PIN; a refusal is ``code_slot``'s."""
         entity_id = self.lock.entity_id
         await self.async_call_service(
             AKUVOX_DOMAIN,
@@ -153,6 +153,7 @@ class AkuvoxLock(BaseLock):
                 "lift_floor_num": _DEFAULT_LIFT_FLOOR_NUM,
             },
             target={"entity_id": entity_id},
+            code_slot=code_slot,
         )
 
     async def _async_modify_user(
@@ -161,8 +162,9 @@ class AkuvoxLock(BaseLock):
         *,
         name: str | None = None,
         pin: str | None = None,
+        code_slot: int | None = None,
     ) -> None:
-        """Modify an existing user."""
+        """Modify an existing user; a refusal is ``code_slot``'s, when one is given."""
         entity_id = self.lock.entity_id
         service_data: dict[str, Any] = {"id": device_user_id}
         if name is not None:
@@ -174,16 +176,18 @@ class AkuvoxLock(BaseLock):
             "modify_user",
             service_data=service_data,
             target={"entity_id": entity_id},
+            code_slot=code_slot,
         )
 
-    async def _async_delete_user(self, device_user_id: str) -> None:
-        """Delete a user by their device-internal ID."""
+    async def _async_delete_user(self, device_user_id: str, code_slot: int) -> None:
+        """Delete a user by their device-internal ID; a refusal is ``code_slot``'s."""
         entity_id = self.lock.entity_id
         await self.async_call_service(
             AKUVOX_DOMAIN,
             "delete_user",
             service_data={"id": device_user_id},
             target={"entity_id": entity_id},
+            code_slot=code_slot,
         )
 
     @override
@@ -396,10 +400,10 @@ class AkuvoxLock(BaseLock):
 
             if existing_device_id:
                 await self._async_modify_user(
-                    existing_device_id, name=tagged_name, pin=pin
+                    existing_device_id, name=tagged_name, pin=pin, code_slot=code_slot
                 )
             else:
-                await self._async_add_user(tagged_name, pin)
+                await self._async_add_user(tagged_name, pin, code_slot)
 
         LOGGER.debug(
             "Lock %s: set Personal Identification Number credential on slot %s",
@@ -432,7 +436,7 @@ class AkuvoxLock(BaseLock):
             if not target_device_id:
                 return False
 
-            await self._async_delete_user(target_device_id)
+            await self._async_delete_user(target_device_id, code_slot)
         LOGGER.debug(
             "Lock %s: deleted Personal Identification Number credential on slot %s",
             self.lock.entity_id,

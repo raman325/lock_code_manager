@@ -34,6 +34,7 @@ from ..model.credentials import (
     user_from_slot,
 )
 from ..model.exceptions import (
+    CodeRejectedError,
     LockCodeManagerProviderError,
     LockDisconnected,
     LockOperationError,
@@ -119,13 +120,16 @@ class SchlageLock(BaseLock):
             )
         return entity_response
 
-    async def _async_add_code(self, name: str, code: str) -> None:
-        """Add a new code with the given name and PIN."""
+    async def _async_add_code(
+        self, name: str, code: str, code_slot: int | None = None
+    ) -> None:
+        """Add a new code with the given name and PIN; a refusal is ``code_slot``'s."""
         entity_id = self.lock.entity_id
         await self.async_call_service(
             SCHLAGE_DOMAIN,
             "add_code",
             service_data={"entity_id": entity_id, "name": name, "code": code},
+            code_slot=code_slot,
         )
 
     async def _async_delete_code(self, name: str) -> None:
@@ -409,20 +413,31 @@ class SchlageLock(BaseLock):
             # add_code with a duplicate name, and eventual consistency in the cloud
             # API means get_codes may not reflect a recently-added code.
             names_to_delete = {n for n in (existing_full_name, tagged_name) if n}
+            deleted_pins = {
+                code_data.get("code")
+                for code_data in codes.values()
+                if code_data.get("name") in names_to_delete
+            }
             for code_name in names_to_delete:
                 # code may not exist — that's fine
                 with contextlib.suppress(LockOperationError):
                     await self._async_delete_code(code_name)
 
             try:
-                await self._async_add_code(tagged_name, pin)
-            except LockOperationError as err:
+                await self._async_add_code(tagged_name, pin, code_slot)
+            except CodeRejectedError as err:
                 # Schlage's cloud API has eventual consistency: a delete may not
-                # propagate before the add, causing "already exists".  Since Personal
-                # Identification Numbers are write-only we can't verify the value,
-                # but the code IS on the lock — treat it as success so the sync
-                # manager doesn't loop.
-                if "already exists" not in str(err).lower():
+                # propagate before the add, so the code just deleted is still
+                # read back and the add is refused for its name or its PIN
+                # "already existing". Since Personal Identification Numbers are
+                # write-only we can't verify the value, but the code IS on the
+                # lock — treat it as success so the sync manager doesn't loop.
+                # Any other refusal, a PIN another code holds included, is the
+                # lock's answer.
+                key = getattr(err.__cause__, "translation_key", None)
+                if key != "schlage_name_exists" and (
+                    key != "schlage_code_exists" or pin not in deleted_pins
+                ):
                     raise
 
                 LOGGER.debug(
