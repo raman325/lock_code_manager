@@ -39,6 +39,7 @@ from homeassistant.config_entries import (
     SOURCE_USER,
     ConfigEntryDisabler,
     ConfigEntryState,
+    ConfigSubentry,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -2943,9 +2944,126 @@ class TestReleaseKeepsWhatLCMDidNotWrite:
 
         assert fake_zwave_lock.holds(2) is None
         assert (int(UserCredentialType.PIN_CODE), 2) not in fake_zwave_lock.credentials
-        assert fake_zwave_lock.users[user_id].user_name == name
+        # Kept, and no longer LCM's: its tag is gone, its display stays.
+        assert name == "lcm:2:slot2"
+        assert fake_zwave_lock.users[user_id].user_name == "slot2"
+        assert _users_tagged_for(fake_zwave_lock, 2) == set()
         assert fake_zwave_lock.credentials[(int(kind), 5)] == (user_id, "04A2B3C4")
         assert fake_zwave_lock.holds(1) == "9999"
+
+    async def test_the_slot_used_again_never_writes_onto_the_kept_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Slot 2 given to someone new gets a user of its own.
+
+        With LCM's tag still on the kept user, the new PIN would be written
+        onto it: the homeowner's card would open the door as the new user.
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (kept,) = _users_tagged_for(fake_zwave_lock, 2)
+        fake_zwave_lock.enroll(kept, UserCredentialType.RFID_CODE, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        [subentry] = user_subentries(
+            {2: {CONF_NAME: "guest", CONF_PIN: "4321", CONF_ENABLED: True}}
+        )
+        hass.config_entries.async_add_subentry(entry, ConfigSubentry(**subentry))
+        await hass.async_block_till_done()
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+
+        (anchor,) = _users_tagged_for(fake_zwave_lock, 2)
+        assert anchor != kept
+        assert fake_zwave_lock.users[anchor].user_name == "lcm:2:guest"
+        pin_key = (int(UserCredentialType.PIN_CODE), 2)
+        assert fake_zwave_lock.credentials[pin_key] == (anchor, "4321")
+        assert fake_zwave_lock.users[kept].user_name == "slot2"
+        assert [
+            key
+            for key, (owner, _) in fake_zwave_lock.credentials.items()
+            if owner == kept
+        ] == [(int(UserCredentialType.RFID_CODE), 5)]
+
+    async def test_a_display_that_reads_as_a_tag_is_not_kept(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Slot 2's user is called ``3``: left as ``3``, it would claim slot 3.
+
+        So the kept user is left with no name (the lock names it itself).
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (kept,) = _users_tagged_for(fake_zwave_lock, 2)
+        # As LCM names it for a user called ``3``.
+        fake_zwave_lock.users[kept].user_name = "lcm:2:3"
+        fake_zwave_lock._u3c_persist_user(kept, UserReportType.USER_MODIFIED)
+        fake_zwave_lock.enroll(kept, UserCredentialType.RFID_CODE, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.users[kept].user_name == f"User-{kept}"
+        assert parse_tag(fake_zwave_lock.users[kept].user_name)[0] is None
+
+    async def test_a_failed_rename_still_releases_the_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """LCM's PIN is gone, so the release is done; the stuck tag is logged."""
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (kept,) = _users_tagged_for(fake_zwave_lock, 2)
+        fake_zwave_lock.enroll(kept, UserCredentialType.RFID_CODE, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+        fake_zwave_lock.fail("user", kept)
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert (int(UserCredentialType.PIN_CODE), 2) not in fake_zwave_lock.credentials
+        assert fake_zwave_lock.users[kept].user_name == "lcm:2:slot2"
+        rfid_key = (int(UserCredentialType.RFID_CODE), 5)
+        assert fake_zwave_lock.credentials[rfid_key] == (kept, "04A2B3C4")
+        [warning] = [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "could not rename" in record.message
+        ]
+        assert lock_entity.entity_id in warning.message
+        assert "slot 2" in warning.message
+        # Done: nothing left owed or held for the slot.
+        assert lcm_issue_ids(hass) == []
+        worker = lock_registry(hass).worker(lock_entity.entity_id)
+        assert worker is None or 2 not in worker.slots
 
 
 class TestReleaseOfARenamedUser:
