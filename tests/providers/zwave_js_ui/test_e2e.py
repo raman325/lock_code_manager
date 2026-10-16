@@ -12,6 +12,7 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_capture_events,
     async_fire_mqtt_message,
 )
 
@@ -28,8 +29,9 @@ from homeassistant.const import (
     STATE_ON,
     STATE_UNKNOWN,
 )
-from homeassistant.core import Event, HomeAssistant
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
@@ -46,7 +48,9 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_codes,
     lock_registry,
 )
+from custom_components.lock_code_manager.model.credentials import WriteResult
 from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.model.models import SlotCode
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 from custom_components.lock_code_manager.sync.slot import LIMIT
@@ -54,6 +58,7 @@ from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
     async_configure_flow,
+    async_set_slot_pin,
     async_tick_until,
     code_entity_id,
     current_entry,
@@ -1470,3 +1475,230 @@ class TestLatePush:
         finally:
             await hass.config_entries.async_unload(entry.entry_id)
             await hass.async_block_till_done()
+
+
+# Access Control notification 15, as zwave-js-ui names it under the node topic.
+DUPLICATE_REFUSAL = (
+    "notification/endpoint_0/Access_Control/"
+    "New_user_code_not_added_due_to_duplicate_code"
+)
+# The unmanaged slot the lock holds the duplicated PIN on, and that PIN.
+HIDDEN_SLOT = 5
+HIDDEN_PIN = "5555"
+
+
+class DuplicateRefusingUserCodeTable(UserCodeTable):
+    """
+    A User Code lock that refuses a PIN another slot holds, as zwave-js-ui relays it.
+
+    User Code Command Class has no in-band duplicate result. The set is
+    acknowledged, the lock keeps the slot's old code, and its only word is
+    Access Control notification 15. Meanwhile the driver announces the code
+    it wrote, so the gateway publishes it on the slot as if the lock took it.
+    Both arrive on the node topic before the api answers. A masking lock
+    reads every code back as asterisks. Nothing shows Lock Code Manager the
+    PIN on the hidden slot before the lock refuses it.
+    """
+
+    def __init__(self, hass: HomeAssistant, *, masked: bool, parameters: Any) -> None:
+        """Hold ``HIDDEN_PIN`` on ``HIDDEN_SLOT``; name ``parameters`` in a refusal."""
+        super().__init__({HIDDEN_SLOT: HIDDEN_PIN})
+        self.hass = hass
+        self.masked = masked
+        self.parameters = parameters
+        self.refused: list[tuple[int, str]] = []
+
+    def __call__(self, api_base: str, request: dict[str, Any]) -> dict[str, Any]:
+        """Refuse a duplicate by notification; answer the rest as the table would."""
+        _target, method, method_args = request["args"]
+        if method == "set":
+            slot_num, _status, code = method_args
+            if any(
+                held == code for other, held in self.codes.items() if other != slot_num
+            ):
+                self.refused.append((slot_num, code))
+                fire_zui_node_value(self.hass, f"99/0/userCode/{slot_num}", code)
+                fire_zui_node_value(self.hass, DUPLICATE_REFUSAL, self.parameters)
+                return {"success": True, "result": None}
+        response = super().__call__(api_base, request)
+        if (
+            method == "get"
+            and self.masked
+            and (code := response["result"].get("userCode"))
+        ):
+            response["result"]["userCode"] = "*" * len(code)
+        return response
+
+
+class TestDuplicateRefusedByUserCodeLock:
+    """
+    A User Code lock behind zwave-js-ui refuses a PIN another slot holds.
+
+    The refusal ``tests/providers/zwave_js`` covers for #1651, met over MQTT:
+    the slot is turned off with a repair saying why, the PIN is sent once,
+    and the code already on the lock stays where it is.
+    """
+
+    @pytest.fixture(params=["plain", "masked"])
+    def code_display(self, request: pytest.FixtureRequest) -> str:
+        """How the lock shows a code it holds."""
+        return request.param
+
+    @pytest.fixture(params=[None, {"userId": 0}, {"userId": 2}], ids=["none", "0", "2"])
+    def parameters(self, request: pytest.FixtureRequest) -> Any:
+        """What the lock names in its refusal."""
+        return request.param
+
+    @pytest.fixture
+    def user_code_table(
+        self, hass: HomeAssistant, code_display: str, parameters: Any
+    ) -> DuplicateRefusingUserCodeTable:
+        """The stand-in lock, holding the PIN slot 2 is about to be given."""
+        return DuplicateRefusingUserCodeTable(
+            hass, masked=code_display == "masked", parameters=parameters
+        )
+
+    async def test_a_refused_pin_disables_the_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+        zui_api_responder: ZWaveJSUIApiResponder,
+        user_code_table: DuplicateRefusingUserCodeTable,
+    ) -> None:
+        """
+        The refusal disables the slot, as it does on Z-Wave JS.
+
+        Unheard, the acknowledged set reads as the lock taking the PIN: a
+        masking lock's read-back cannot say otherwise, so the slot shows in
+        sync with a PIN the lock never took. A lock that shows its codes
+        reads back the old one, and the PIN is sent again and again.
+        """
+        lock_entity_id = zui_lock.lock.entity_id
+        entry = lcm_config_entry
+        enabled_id = slot_entity_id(hass, SWITCH_DOMAIN, entry, 2, CONF_ENABLED)
+        in_sync_id = in_sync_entity_id(hass, entry, 2, lock_entity_id)
+        code_id = code_entity_id(hass, entry, 2, lock_entity_id)
+
+        def slot_2() -> tuple[str, str, str]:
+            """Return slot 2's enabled switch, in-sync and code states."""
+            enabled, in_sync, code = (
+                hass.states.get(entity_id).state
+                for entity_id in (enabled_id, in_sync_id, code_id)
+            )
+            return enabled, in_sync, code
+
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: all(
+                hass.states.get(
+                    in_sync_entity_id(hass, entry, slot_num, lock_entity_id)
+                ).state
+                == STATE_ON
+                for slot_num in E2E_SLOT_PINS
+            ),
+            max_ticks=len(E2E_SLOT_PINS) + 3,
+            what="both slots in sync",
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        # Slot 2 as shown from the refusal on.
+        seen: list[tuple[str, str, str]] = []
+
+        @callback
+        def _record(_event: Event) -> None:
+            if user_code_table.refused:
+                seen.append(slot_2())
+
+        unsub = async_track_state_change_event(
+            hass, [enabled_id, in_sync_id, code_id], _record
+        )
+
+        await async_set_slot_pin(hass, entry, 2, HIDDEN_PIN)
+        await async_advance_sync_ticks(hass, freezer, 10)
+        unsub()
+
+        assert slot_2() == (STATE_OFF, STATE_ON, "")
+        issue = ir.async_get(hass).async_get_issue(
+            DOMAIN, f"slot_disabled_{entry.entry_id}_2"
+        )
+        assert issue is not None
+        assert "refused" in issue.translation_placeholders["reason"]
+        # Sent once and refused once: nothing retries it.
+        assert user_code_table.refused == [(2, HIDDEN_PIN)]
+        assert [
+            args
+            for args in send_commands(zui_api_responder)
+            if args[1] == "set" and args[2][2] == HIDDEN_PIN
+        ] == [user_code_call("set", [2, STATUS_ENABLED, HIDDEN_PIN])]
+        # The code already on the lock stays; the disabled slot wants no
+        # code, so its old one is cleared.
+        assert user_code_table.codes == {1: E2E_SLOT_PINS[1], HIDDEN_SLOT: HIDDEN_PIN}
+        # After the refusal, neither the refused PIN nor "in sync" is shown
+        # while the slot still wants that PIN.
+        assert [state for state in seen if state[2] == HIDDEN_PIN] == []
+        assert [state for state in seen if state[:2] == (STATE_ON, STATE_ON)] == []
+        # A refusal is not a use of the slot's code.
+        assert used == []
+
+    # The slot the refusal names, when it names one, is the slot written.
+    @pytest.mark.parametrize(
+        "parameters", [None, {"userId": 0}, {"userId": 3}], ids=["none", "0", "3"]
+    )
+    async def test_a_refused_pin_is_not_what_the_slot_shows(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+    ) -> None:
+        """
+        The driver's announcement of a refused PIN does not stay on the slot.
+
+        Written straight through the provider, no sync write is in flight to
+        drop that announcement as an echo, so it reaches the worker as the
+        lock's word. On a slot Lock Code Manager does not manage nothing
+        writes over it either: unless the provider reads the slot back before
+        raising the refusal, the lock is taken to hold the refused PIN there,
+        and every later write of that PIN is refused unsent as a duplicate.
+        """
+        lock_entity_id = zui_lock.lock.entity_id
+        unmanaged_slot = 3
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: lock_registry(hass).worker(lock_entity_id).started,
+            max_ticks=3,
+            what="worker started",
+        )
+
+        with pytest.raises(DuplicateCodeError):
+            await zui_lock.async_set_usercode(unmanaged_slot, HIDDEN_PIN)
+        await hass.async_block_till_done()
+
+        assert held_codes(hass, lock_entity_id).get(unmanaged_slot) == SlotCode.EMPTY
+
+    @pytest.mark.parametrize("parameters", [{"userId": HIDDEN_SLOT}], ids=["5"])
+    async def test_a_refusal_naming_another_slot_is_not_the_writes(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        lcm_config_entry: MockConfigEntry,
+        zui_lock: ZWaveJSUILock,
+    ) -> None:
+        """
+        A refusal naming a slot other than the one written is not pinned on it.
+
+        Writes to a lock run one at a time, but a slot named outright is not
+        the written one: refusing the write would guess.
+        """
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: lock_registry(hass).worker(zui_lock.lock.entity_id).started,
+            max_ticks=3,
+            what="worker started",
+        )
+
+        assert await zui_lock.async_set_usercode(3, HIDDEN_PIN) == WriteResult.CONFIRMED

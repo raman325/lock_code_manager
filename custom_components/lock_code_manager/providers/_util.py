@@ -143,6 +143,21 @@ def parse_slot_num(value: object) -> int | None:
         return None
 
 
+def refuses_write_in_flight(write_slot: int | None, named_slot: int | None) -> bool:
+    """
+    Return whether a lock's duplicate refusal answers the PIN write in flight.
+
+    User Code Command Class has no in-band duplicate result: a lock refusing
+    a PIN another slot holds keeps the slot's old code and says so only with
+    Access Control notification 15, which arrives while the write is still
+    out. Some locks name no slot in it (no parameters, or user 0). Writes to
+    a lock run one at a time, so one arriving during a write is that write's;
+    one naming another slot, or arriving with no write in flight, is not
+    ours to pin on a slot.
+    """
+    return write_slot is not None and named_slot in (None, 0, write_slot)
+
+
 def is_masked_code(code: str) -> bool:
     """
     Return whether a code is a lock's placeholder for a code it will not show.
