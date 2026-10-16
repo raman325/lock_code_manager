@@ -1,6 +1,9 @@
 """The core wired into Home Assistant: the lock registry and what it raises."""
 
+import asyncio
 from functools import partial
+import logging
+from typing import Any
 from unittest.mock import patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -66,6 +69,7 @@ from .common import (
     LOCK_2_ENTITY_ID,
     TWO_SLOTS_ON_LOCK_1,
     async_advance_clock,
+    async_run_until_quiet,
     async_set_slot_pin,
     async_setup_lcm_entry,
     async_switch_slot,
@@ -905,6 +909,46 @@ async def test_two_locks_re_paired_together_set_every_entry_up_again(
     assert "OperationNotAllowed" not in caplog.text
     for entry in (both, second):
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_an_entry_deleted_during_a_rebuild_is_not_set_up_again(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    One of the lock's entries is deleted once the rebuild has unloaded it.
+
+    It is left deleted, without an error, and the entry after it is set up
+    on the new device.
+    """
+    first = current_entry("first", {1: "1111"})
+    second = current_entry("second", {2: "2222"})
+    for entry in (first, second):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+    deleted = asyncio.Event()
+    unload = hass.config_entries.async_unload
+
+    async def _unload(entry_id: str, **kwargs: Any) -> bool:
+        if entry_id == second.entry_id:
+            await deleted.wait()  # the other is deleted meanwhile
+        return await unload(entry_id, **kwargs)
+
+    with patch.object(hass.config_entries, "async_unload", _unload):
+        new_id = _re_pair(hass, LOCK_1_ENTITY_ID)
+        await async_run_until_quiet()
+        assert first.state is ConfigEntryState.NOT_LOADED
+        assert await hass.config_entries.async_remove(first.entry_id)
+        deleted.set()
+        await hass.async_block_till_done()
+
+    assert hass.config_entries.async_get_entry(first.entry_id) is None
+    assert second.state is ConfigEntryState.LOADED
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID).port.provider.lock.id == new_id
+    assert mock_lock(second, LOCK_1_ENTITY_ID).codes[2] == "2222"
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert await hass.config_entries.async_unload(second.entry_id)
 
 
 async def _remove_user_in_slot(

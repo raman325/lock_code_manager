@@ -491,16 +491,15 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
             translation_placeholders={"lock_entity_id": lock},
         )
     for entry in holders:
-        # One set up again meanwhile (a reload), or not unloaded, is left be.
-        if entry.state is not ConfigEntryState.NOT_LOADED:
+        # One set up again meanwhile (a reload), not unloaded, or deleted
+        # meanwhile is left be. Setting up raises for nothing else: a failed
+        # setup is the entry's state, not an exception.
+        if (
+            entry.state is not ConfigEntryState.NOT_LOADED
+            or hass.config_entries.async_get_entry(entry.entry_id) is not entry
+        ):
             continue
-        try:
-            await hass.config_entries.async_setup(entry.entry_id)
-        except Exception:
-            # The others still set up.
-            _LOGGER.exception(
-                "Setting up %s again for re-paired %s failed", entry.title, lock
-            )
+        await hass.config_entries.async_setup(entry.entry_id)
 
 
 async def async_hold_lock(
