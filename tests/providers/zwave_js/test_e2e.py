@@ -81,6 +81,7 @@ from custom_components.lock_code_manager.model.models import SlotCode, SlotCrede
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.model.util import per_lock_issue_id
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
+from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from custom_components.lock_code_manager.sync.slot import Holds
 from custom_components.lock_code_manager.sync.worker import LockWorker
@@ -134,6 +135,15 @@ def _record_pushes(
 
     port.pushed = _pushed  # type: ignore[method-assign]
     return pushed
+
+
+def _users_tagged_for(lock: FakeZWaveLock, slot: int) -> set[int]:
+    """Return the ids of the lock's users whose name carries LCM's tag for ``slot``."""
+    return {
+        user_id
+        for user_id, user in lock.users.items()
+        if parse_tag(user.user_name)[0] == slot
+    }
 
 
 def _first_push(
@@ -2562,13 +2572,15 @@ class TestUserRemoved:
         lock_entity: er.RegistryEntry,
     ) -> None:
         """
-        The release of a removed slot clears it on a slot-addressed lock.
+        The release of a removed slot clears it, and its user with it.
 
         On a User Code lock there is no lock-side user to carry LCM's tag,
         so a release that adopts no untagged user found no owner and sent
         nothing: the deleted user's PIN still opens the door, the worker
         reads it back twice and raises ``slot_clear_failed`` -- which
-        acknowledging only repeats.
+        acknowledging only repeats. On a User Credential lock the release
+        cleared only the PIN, leaving LCM's tagged user, carrying the
+        slot's name, behind.
         """
 
         entry = fake_zwave_lock_entry
@@ -2576,6 +2588,10 @@ class TestUserRemoved:
         assert fake_zwave_lock.holds(2) == "1234"
         if fake_zwave_lock.node.label == _BOTH:
             assert not fake_zwave_lock.uses_user_credential_cc
+        has_users = fake_zwave_lock.uses_user_credential_cc
+        assert bool(_users_tagged_for(fake_zwave_lock, 2)) == has_users
+        kept = _users_tagged_for(fake_zwave_lock, 1)
+        cleared = len(fake_zwave_lock.clears)
 
         assert hass.config_entries.async_remove_subentry(
             entry, subentry_id_for_slot(entry, 2)
@@ -2586,6 +2602,11 @@ class TestUserRemoved:
         assert fake_zwave_lock.holds(2) is None
         assert fake_zwave_lock.holds(1) == "9999"
         assert not lcm_issue_ids(hass, "slot_suspended")
+        assert not _users_tagged_for(fake_zwave_lock, 2)
+        assert _users_tagged_for(fake_zwave_lock, 1) == kept
+        if not has_users:
+            # A User Code lock has no user to delete: the slot is cleared.
+            assert fake_zwave_lock.clears[cleared:] == [2]
 
 
 class TestSomeoneElsesCodeAtATurnedOffSlot:
@@ -2671,6 +2692,72 @@ class TestSomeoneElsesCodeAtATurnedOffSlot:
             hass, None, [lock_entity.entity_id], [4, 5, 6]
         )
         assert occupancy.locks[0].occupied == {5}
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestReleaseAtSomeoneElsesUser:
+    """A User Credential lock: a homeowner's untagged user at a released slot's index."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_the_homeowner_s_user_and_code_stay(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Releasing a slot never deletes a user LCM did not tag (#1518/#1694).
+
+        The homeowner's user sits at the slot's index and holds a PIN at its
+        credential slot: exactly what the set path adopts as a pre-tag LCM
+        user. Deleting a user deletes its credentials, so a release that
+        adopted it would delete a code LCM never created.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_release_foreign",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        # The homeowner adds a user with a PIN at credential slot 3.
+        fake_zwave_lock.program(3, "5555")
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 5)
+        homeowner = fake_zwave_lock.credentials[(int(UserCredentialType.PIN_CODE), 3)][
+            0
+        ]
+        assert homeowner == 3
+        assert parse_tag(fake_zwave_lock.users[homeowner].user_name)[0] is None
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 3)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert homeowner in fake_zwave_lock.users
+        assert fake_zwave_lock.holds(3) == "5555"
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert fake_zwave_lock.holds(2) == "1234"
         await hass.config_entries.async_unload(entry.entry_id)
 
 

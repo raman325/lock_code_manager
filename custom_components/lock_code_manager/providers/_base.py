@@ -1736,7 +1736,7 @@ class BaseLock:
         allocation refuses to write over a code it can still read.
 
         Providers that anchor a slot to a lock-side user (Matter,
-        eventually Z-Wave User Credential CC) override this to delete
+        Z-Wave User Credential CC) override this to delete
         that user instead; the cascade defined by the lock's protocol
         removes its credentials, so they must not also clear here.
         """
