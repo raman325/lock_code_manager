@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.lock import LockState
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import (
     HomeAssistantError,
@@ -34,7 +36,6 @@ from custom_components.lock_code_manager.providers.schlage import (
 from tests.providers.helpers import (
     ProviderNativeTransportContractTests,
     ServiceProviderConnectionTests,
-    ServiceProviderDeviceAvailabilityTests,
     register_mock_service,
 )
 
@@ -64,10 +65,26 @@ class TestConnection(ServiceProviderConnectionTests):
     """Connection tests for Schlage provider using shared mixin."""
 
 
-class TestDeviceAvailability(ServiceProviderDeviceAvailabilityTests):
-    """Device availability tests for Schlage provider using shared mixin."""
+@pytest.mark.parametrize(
+    ("state", "available"),
+    [
+        pytest.param(LockState.LOCKED, True, id="locked"),
+        pytest.param(STATE_UNKNOWN, True, id="unknown"),
+        pytest.param(STATE_UNAVAILABLE, False, id="unavailable"),
+        pytest.param(None, False, id="no_state"),
+    ],
+)
+async def test_device_available_follows_the_lock_entity(
+    hass: HomeAssistant, schlage_lock: SchlageLock, state: str | None, available: bool
+) -> None:
+    """The lock is available as its entity is, and no code is read to find out."""
+    get_codes = AsyncMock(return_value={LOCK_ENTITY_ID: {}})
+    register_mock_service(hass, SCHLAGE_DOMAIN, "get_codes", get_codes)
+    if state is not None:
+        hass.states.async_set(schlage_lock.lock.entity_id, state)
 
-    availability_service = "get_codes"
+    assert await schlage_lock.async_is_device_available() is available
+    get_codes.assert_not_awaited()
 
 
 class TestNativeTransportContract(ProviderNativeTransportContractTests):
