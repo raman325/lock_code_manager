@@ -445,6 +445,33 @@ def _in_sync(
 class TestBridge:
     """Sync against a stateful Zigbee2MQTT bridge, judged by entities and topics."""
 
+    async def test_lost_read_backs_after_answered_writes_cost_no_try(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        A flaky mesh loses the read-back after every write (#1397 shape).
+
+        The write went through; only its read-back was lost. The slot is
+        read again, not charged a try, and in sync on that read -- written
+        once, no repair -- instead of rewritten and held after its tries
+        with the PIN on the lock all along.
+        """
+        bridge = fake_z2m_bridge
+        bridge.drop_read_backs = True
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id, pins) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+
+            assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
+            worker = lock_registry(hass).worker(lock_id)
+            assert all(worker.slots[slot].tries == 0 for slot in pins)
+            _assert_trouble_free(hass, lock_id)
+
     async def test_reads_answered_through_users_settle_with_one_write_each(
         self,
         hass: HomeAssistant,
