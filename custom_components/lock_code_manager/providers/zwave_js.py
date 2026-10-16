@@ -679,7 +679,9 @@ class ZWaveJSLock(BaseLock):
         return self._user_name_length(f"lcm:{slot}:") > caps.max_user_name_length
 
     @override
-    async def async_release_managed_slot(self, slot: int) -> None:
+    async def async_release_managed_slot(
+        self, slot: int, *, written: bool = False
+    ) -> None:
         """
         Remove LCM's PIN from its tagged user for ``slot``; clear a User Code slot.
 
@@ -687,8 +689,10 @@ class ZWaveJSLock(BaseLock):
         ``lcm:<slot>:``, holding the PIN LCM wrote at credential slot
         ``slot``. The user is found by its tag ONLY, never by adoption: an
         untagged user is never touched here (#1518/#1694). Finding no tagged
-        user logs a warning: LCM's code may still be on the lock under a
-        user it can no longer recognize.
+        user warns only when ``written`` -- LCM's store shows it wrote a PIN
+        to this slot -- as LCM's code may still be on the lock under a user
+        it can no longer recognize. A slot never turned on had no code of
+        LCM's to lose, so that is logged at debug.
 
         LCM wrote only that PIN, so only that PIN is LCM's to remove. The
         user may also hold credentials someone added in the vendor's app (an
@@ -709,12 +713,20 @@ class ZWaveJSLock(BaseLock):
         user carrying one PIN -- so the base clears the slot, as before.
         """
         if not await self._supports_user_records():
-            await super().async_release_managed_slot(slot)
+            await super().async_release_managed_slot(slot, written=written)
             return
         user_id = await self._find_user_index_for_slot(slot, adopt_untagged=False)
         if user_id is None:
             # Never fall back to an untagged user: deleting it, or its PIN,
             # would delete a code LCM may never have created.
+            if not written:
+                _LOGGER.debug(
+                    "Lock %s: released slot %s, which LCM never wrote a PIN "
+                    "to; no user carries its tag, so nothing was removed",
+                    self.lock.entity_id,
+                    slot,
+                )
+                return
             _LOGGER.warning(
                 "Lock %s: released slot %s, but no user on the lock carries "
                 "LCM's tag for it, so nothing was removed. A code may remain "
