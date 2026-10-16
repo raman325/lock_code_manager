@@ -2934,6 +2934,65 @@ class TestReleaseKeepsWhatLCMDidNotWrite:
         assert fake_zwave_lock.holds(1) == "9999"
 
 
+class TestReleaseOfARenamedUser:
+    """A User Credential lock: LCM's user, renamed in the vendor's app."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_nothing_is_deleted_and_a_warning_says_why(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        The tag is gone, so the release cannot tell the user is LCM's.
+
+        It deletes nothing -- an untagged user is as likely the homeowner's
+        -- and warns that a code may remain, naming the lock and the slot.
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (user_id,) = _users_tagged_for(fake_zwave_lock, 2)
+        fake_zwave_lock.users[user_id].user_name = "Alice"
+        fake_zwave_lock._u3c_persist_user(user_id, UserReportType.USER_MODIFIED)
+        await hass.async_block_till_done()
+        sent = len(fake_zwave_lock.commands)
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.users[user_id].user_name == "Alice"
+        assert fake_zwave_lock.holds(2) == "1234"
+        assert not [
+            message["command"]
+            for message in fake_zwave_lock.commands[sent:]
+            if message["command"]
+            in (
+                "endpoint.access_control.delete_user",
+                "endpoint.access_control.delete_credential",
+            )
+        ]
+        (warning,) = [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "carries LCM's tag" in record.message
+        ]
+        assert lock_entity.entity_id in warning.message
+        assert "released slot 2," in warning.message
+
+
 class TestRestartMidWrite:
     """The entry going down (a restart, a reload) with a write out to the lock."""
 
