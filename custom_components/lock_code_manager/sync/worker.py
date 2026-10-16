@@ -180,6 +180,8 @@ class LockWorker[P: LockPort]:
         self._answers = 0
         # The provider raised something that is not a LockError.
         self._bug = False
+        # The lock took a write, and the read-back went unanswered.
+        self._lost = False
         # Slots charged a try since the lock last answered, by Slot and epoch:
         # an outage costs each target one try at most.
         self._charged: dict[int, tuple[Slot, int]] = {}
@@ -603,10 +605,12 @@ class LockWorker[P: LockPort]:
         if slot.epoch == epoch and not paused and self._failed(slot):
             if self._bug:
                 slot.tried()
-            elif self._answers > answers:
+            elif self._answers > answers and not self._lost:
                 self._charge(number, slot)
             elif not self._was_charged(number, slot):
                 self._owed[number] = (slot, epoch)
+        # A read-back lost in this sync is settled: owed, or nothing to owe.
+        self._lost = False
         if (
             slot.release
             and slot.status(self.salt) is Status.IN_SYNC
@@ -639,9 +643,15 @@ class LockWorker[P: LockPort]:
         Anything else, even a write that never left, is read back -- unless
         the lock has just gone into backoff -- and a cause the provider named
         is kept, so a slot held after its tries says it.
+
+        A read-back left unanswered after a write the lock took is owed, not
+        charged: the slot is read afresh next, and only that answer says
+        whether the write failed (#1397). Silence is never an answer: it
+        still counts toward the lock backing off.
         """
         pin = slot.want
         slot.wrote = None
+        took = False
 
         def current() -> bool:
             # Still the slot in place, still wanting what was sent.
@@ -670,6 +680,7 @@ class LockWorker[P: LockPort]:
             if err.kind is ErrorKind.ALREADY_SO:
                 slot.wrote_want(self.salt)
                 slot.released = slot.release
+                took = True
             elif err.kind is ErrorKind.VALUE_REFUSED:
                 slot.refused(value=True, why=err.message)
                 if pin is not None:
@@ -685,8 +696,16 @@ class LockWorker[P: LockPort]:
             slot.released = slot.release
             if changed is not False:
                 slot.wrote_want(self.salt)
+            took = True
         if self._down_until is None:
-            await self._read((number,), follow=False, op="read-back")
+            missed = self._no_answers
+            try:
+                await self._read((number,), follow=False, op="read-back")
+            except LockError:
+                if took and self._no_answers > missed:
+                    slot.seen = None
+                    self._lost = True
+                raise
 
     def _next(self) -> int:
         """Return the next point in the order reports and exchanges happen."""

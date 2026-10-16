@@ -1065,23 +1065,6 @@ async def test_a_second_stop_waits_for_the_first(rig_factory) -> None:
     await asyncio.wait_for(asyncio.gather(first, second), 5)
 
 
-async def test_writes_answered_with_reads_unanswered_hold_the_slot(rig_factory) -> None:
-    """
-    A lock that takes writes but never answers a read-back holds the slot.
-
-    Each answered write resets the lock's no-answers, so the lock never backs
-    off; the slot's tries do not reset, so it stops after three.
-    """
-    lock = FakeLock({1: "0000"})
-    rig = await _started(rig_factory(lock), {1: "0000"})
-    lock.reads_unanswered = True
-    rig.worker.want(1, "1234")
-    await rig.settle()
-
-    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
-    assert len(lock.writes) == LIMIT
-
-
 async def test_many_slots_failing_in_turn_all_hold(rig_factory) -> None:
     """
     Tries do not age out, however long a round of many slots takes.
@@ -1556,6 +1539,83 @@ async def test_a_slot_the_lock_stops_answering_for_holds_while_others_answer(
     assert rig.status(7) == (Status.SUSPENDED, Repair.CANT_SET)
 
 
+def _lose_read_backs(lock: FakeLock, tries: list[int], rig: Rig) -> None:
+    """Lose the read right after every write: a flaky mesh (#1397 shape)."""
+    original = lock.read
+    lost: list[bool] = []
+
+    async def _read(slots):
+        tries.append(rig.worker.slots[1].tries)
+        if lost:
+            lost.clear()
+            raise LockError(ErrorKind.NO_ANSWER)
+        return await original(slots)
+
+    lock.read = _read  # type: ignore[method-assign]
+    lock.during_write.append(lambda: lost.append(True))
+
+
+async def test_a_lost_read_back_after_an_answered_write_is_owed_not_charged(
+    rig_factory,
+) -> None:
+    """
+    The lock took the write; only the read-back was lost. The slot is read
+    again, not charged, and in sync on that read -- not held after its tries
+    while the write was fine all along.
+    """
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    tries: list[int] = []
+    _lose_read_backs(lock, tries, rig)
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert lock.writes == [(1, "1234")]  # read again, not written again
+    assert tries == [0, 0]  # the read-back, then the read: no try charged
+    assert rig.worker.reachable
+
+
+async def test_a_lock_that_takes_writes_and_never_answers_reads_goes_offline(
+    rig_factory,
+) -> None:
+    """
+    A lost read-back is owed, never an answer: a lock whose writes go out
+    (fire and forget) but whose reads never come back backs off and goes
+    offline, the slot never taken for in sync, nor held for the outage.
+    """
+    lock = FakeLock({1: "0000"})
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    lock.reads_unanswered = True
+    rig.worker.want(1, "1234")
+    await _run(rig, lambda: rig.worker.offline, 200)
+
+    assert rig.worker.offline
+    assert rig.status(1)[0] is not Status.IN_SYNC
+    assert rig.status(1)[1] is None
+    assert lock.writes == [(1, "1234")]
+
+
+async def test_an_owed_read_back_is_charged_once_the_lock_answers_otherwise(
+    rig_factory,
+) -> None:
+    """
+    The write did not take after all: the next read, answered, says so, and
+    the owed try is charged then -- once.
+    """
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    tries: list[int] = []
+    _lose_read_backs(lock, tries, rig)
+    rig.worker.want(1, "1234")
+    await rig.settle()
+
+    # Every write is read back lost and then read afresh: one try each.
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert len(lock.writes) == LIMIT
+    assert tries == [0, 0, 1, 1, 2, 2]
+
+
 async def test_a_sync_that_tips_the_lock_into_backoff_is_not_charged(
     rig_factory,
 ) -> None:
@@ -1725,32 +1785,10 @@ async def test_a_sync_that_fails_answered_is_charged(rig_factory, lock) -> None:
     assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
 
 
-async def test_writes_answered_and_reads_not_hold(rig_factory) -> None:
-    """Each sync heard the write answered: charged, though its read-back was not."""
-    lock = FakeLock({1: "0000"}, ignore_writes=True)
-    rig = await _started(rig_factory(lock), {1: "0000"})
-    original = lock.read
-
-    async def _unanswered(slots):
-        if lock.writes:
-            raise LockError(ErrorKind.NO_ANSWER)
-        return await original(slots)
-
-    lock.read = _unanswered  # type: ignore[method-assign]
-    rig.worker.want(1, "1234")
-    for _ in range(50):
-        if rig.status(1)[0] is Status.SUSPENDED or rig.worker.offline:
-            break
-        await rig.settle()
-        await asyncio.sleep(0)
-
-    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
-
-
 async def test_an_outage_mid_sync_costs_one_try_and_recovery_clears_it(
     rig_factory,
 ) -> None:
-    """The write was answered, then the lock went: one try at most, then cleared."""
+    """The write was answered, then the lock went: its lost read-back is owed."""
     lock = FakeLock({1: "0000"})
     rig = await _started(rig_factory(lock), {1: "0000"})
     original = lock.write
@@ -1766,7 +1804,7 @@ async def test_an_outage_mid_sync_costs_one_try_and_recovery_clears_it(
         await rig.settle()
         await asyncio.sleep(0)
     assert rig.worker.offline
-    assert rig.worker.slots[1].tries == 1
+    assert rig.worker.slots[1].tries == 0
 
     lock.reads_unanswered = lock.writes_unanswered = False
     for _ in range(50):
