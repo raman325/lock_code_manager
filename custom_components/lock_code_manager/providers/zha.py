@@ -100,6 +100,48 @@ def _write_answer(
     )
 
 
+# A Default Response's status says how the lock fared carrying the command
+# out, and these say it failed to, not that it refused the code: the write's
+# outcome is unknown, so it is sent again. Every other non-zero status, and
+# any non-zero status in the write's own response, is the lock's refusal.
+_TRANSIENT_DEFAULT_STATUSES = frozenset(
+    {
+        foundation.Status.FAILURE,
+        foundation.Status.HARDWARE_FAILURE,
+        foundation.Status.SOFTWARE_FAILURE,
+    }
+)
+
+
+def _raise_for_status(
+    answer: Any,
+    request: foundation.ZCLCommandDef,
+    code_slot: int,
+    lock_entity_id: str,
+) -> None:
+    """
+    Raise if ``answer``, the write's own reply, says the write did not land.
+
+    A quirk's response may name no status field, which leaves the write
+    standing; any status other than 0 rejects it, None included, except a
+    Default Response's transient failure, which fails the write so sync sends
+    it again and the slot breaker counts it.
+    """
+    status = getattr(answer, "status", 0)
+    if status == 0:
+        return
+    if isinstance(answer, _DEFAULT_RESPONSE) and status in _TRANSIENT_DEFAULT_STATUSES:
+        raise LockOperationFailed(
+            f"Lock {lock_entity_id}: {request.name} on slot {code_slot} failed: "
+            f"status {_status_text(status)}"
+        )
+    raise CodeRejectedError(
+        code_slot=code_slot,
+        lock_entity_id=lock_entity_id,
+        reason=f"{request.name} rejected: status {_status_text(status)}",
+    )
+
+
 def _status_text(status: Any) -> str:
     """Name a reply's status for a person: zigpy formats its enums as a repr."""
     name = getattr(status, "name", None)
@@ -367,7 +409,8 @@ class ZHALock(BaseLock):
         Only the write's own reply can reject it, and a reply that is about
         something else fails the write so sync sends it again
         (``_write_answer``). The write's own reply with no status field
-        leaves it standing.
+        leaves it standing, and a Default Response's transient failure
+        fails it so sync sends it again (``_raise_for_status``).
 
         ``user_id`` is ignored; slot-only providers address the credential
         by ``credential.slot``.
@@ -389,22 +432,16 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
+        request = DoorLock.ServerCommandDefs.set_pin_code
         answer = _write_answer(
             result,
             cluster,
-            DoorLock.ServerCommandDefs.set_pin_code,
+            request,
             DoorLock.ClientCommandDefs.set_pin_code_response,
             code_slot,
             self.lock.entity_id,
         )
-        # A quirk's response may name no status field, which leaves the write
-        # standing; any status other than 0 rejects it, None included.
-        if hasattr(answer, "status") and answer.status != 0:
-            raise CodeRejectedError(
-                code_slot=code_slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"set_pin_code rejected: status {_status_text(answer.status)}",
-            )
+        _raise_for_status(answer, request, code_slot, self.lock.entity_id)
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
@@ -429,22 +466,16 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
+        request = DoorLock.ServerCommandDefs.clear_pin_code
         answer = _write_answer(
             result,
             cluster,
-            DoorLock.ServerCommandDefs.clear_pin_code,
+            request,
             DoorLock.ClientCommandDefs.clear_pin_code_response,
             code_slot,
             self.lock.entity_id,
         )
-        # A quirk's response may name no status field, which leaves the write
-        # standing; any status other than 0 rejects it, None included.
-        if hasattr(answer, "status") and answer.status != 0:
-            raise CodeRejectedError(
-                code_slot=code_slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"clear_pin_code rejected: status {_status_text(answer.status)}",
-            )
+        _raise_for_status(answer, request, code_slot, self.lock.entity_id)
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
