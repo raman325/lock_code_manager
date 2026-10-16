@@ -1072,12 +1072,13 @@ class TestWriteOnlyLock:
             await async_advance_clock(hass, freezer, 600, settle=False)
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             store = hass.data[DOMAIN][STORE_KEY]
-            assert store.reports(lock_id)
+            key = er.async_get(hass).async_get(lock_id).id
+            assert store.reports(key)
             assert locks_that_cannot_report(hass, [lock_id]) == []
 
             await _hard_refresh(hass, freezer, lock_id, forget_reporting=True)
 
-            assert not store.reports(lock_id)
+            assert not store.reports(key)
             assert locks_that_cannot_report(hass, [lock_id]) == [lock_id]
             flow = await hass.config_entries.subentries.async_init(
                 (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
@@ -1461,8 +1462,9 @@ class TestRePairedLock:
         async with _bridge_entry(hass, freezer, lock_id) as entry:
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             old = lock_registry(hass).worker(lock_id)
+            old_id = old.port.provider.lock.id
             store = hass.data[DOMAIN][STORE_KEY]
-            assert store.reports(lock_id)
+            assert store.reports(old_id)
             assert locks_that_cannot_report(hass, [lock_id]) == []
 
             # The new device holds nothing, and cannot say what it holds.
@@ -1470,12 +1472,15 @@ class TestRePairedLock:
             bridge.users.clear()
             bridge.cannot_tell = True
 
+            changed: list[bool] = []
+
             @callback
             def _old_worker_changes(event: Event) -> None:
                 # The old worker finishing an exchange once the new device is
-                # in: what it remembers is filed under the new registry id.
-                if event.data["action"] == "create":
+                # in: what it remembers stays under the old registry id.
+                if event.data == {"action": "create", "entity_id": lock_id}:
                     old.on_change()
+                    changed.append(old_id in store._locks)
                     # And the new entity updated as its rebuild starts: one
                     # rebuild still.
                     er.async_get(hass).async_update_entity(lock_id, name="Front door")
@@ -1487,6 +1492,8 @@ class TestRePairedLock:
                 new_lock = await _re_pair(hass)
                 unsub()
                 assert new_lock.entity_id == lock_id
+                assert changed == [True]
+                assert not store.reports(new_lock.id)
                 await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             assert unload.call_count == 1
 
@@ -1496,8 +1503,10 @@ class TestRePairedLock:
             # Each written to the new device once.
             assert [len(bridge.sets_for(slot)) for slot in pins] == [2, 2]
             _assert_trouble_free(hass, lock_id)
-            # What was kept of the old device is not the new one's.
-            assert not store.reports(lock_id)
+            # What was kept of the old device is not the new one's, and goes
+            # with its worker.
+            assert not store.reports(new_lock.id)
+            assert old_id not in store._locks
             assert locks_that_cannot_report(hass, [lock_id]) == [lock_id]
 
             # Allocation numbers the next slots, and says the lock cannot report.
@@ -1665,9 +1674,10 @@ class TestRePairedLock:
         """
         No entry is loaded to rebuild for: the old worker stops as a lock leaving.
 
-        It remembered its slots after the new device came in, under the new
-        registry id. Taken for the new device's, the new worker would trust
-        them and write nothing to a lock that cannot say what it holds.
+        It remembered its slots after the new device came in. Taken for the
+        new device's, the new worker would trust them and write nothing to a
+        lock that cannot say what it holds: they are kept under the old
+        device's registry id, and go with its worker.
         """
         bridge = fake_z2m_bridge
         lock_id = mqtt_lock_discovered.entity_id
@@ -1700,14 +1710,16 @@ class TestRePairedLock:
                 await async_run_until_quiet()
                 new_lock = er.async_get(hass).async_get(lock_id)
                 assert new_lock.id != old.port.provider.lock.id
-                old.on_change()  # still holding its slots: filed under the new id
-                assert store.wrote(lock_id, 1) is not None
+                old_id = old.port.provider.lock.id
+                old.on_change()  # still holding its slots: under its own id
+                assert store.wrote(old_id, 1) is not None
+                assert store.wrote(new_lock.id, 1) is None
                 re_paired.set()
                 assert await unload
             await hass.async_block_till_done()
             assert lock_registry(hass).worker(lock_id) is None
-            # What the old device was written is not the new one's.
-            assert store.wrote(lock_id, 1) is None
+            # What the old device was written goes with its worker.
+            assert old_id not in store._locks
 
             setup = hass.async_create_task(
                 hass.config_entries.async_setup(entry.entry_id)
@@ -1814,8 +1826,7 @@ class TestRePairedLock:
 
         Not yet the entry's lock when the event comes, so the entry, once it
         holds the lock, finds the worker on the old device and rebuilds it.
-        What the stale worker kept meanwhile -- under the new registry id --
-        is not trusted for the new device.
+        What the stale worker kept meanwhile is not trusted for the new device.
         """
         bridge = fake_z2m_bridge
         lock_id = mqtt_lock_discovered.entity_id
@@ -1852,9 +1863,12 @@ class TestRePairedLock:
                 provider = await hold(*args)
                 stale.append(worker := lock_registry(hass).worker(lock_id))
                 if len(stale) == 1:
-                    # Its slots filed under the new registry id, before the check.
+                    # Its slots remembered after the re-pair, before the check:
+                    # under the old device's registry id, not the new one's.
                     worker.on_change()
-                    assert store.wrote(lock_id, 1) is not None
+                    assert store.wrote(worker.port.provider.lock.id, 1) is not None
+                    new_id = er.async_get(hass).async_get(lock_id).id
+                    assert store.wrote(new_id, 1) is None
                 return provider
 
             with (

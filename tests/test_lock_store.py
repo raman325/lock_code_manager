@@ -17,6 +17,7 @@ from custom_components.lock_code_manager.ha.lock_store import (
 from custom_components.lock_code_manager.ha.runtime import (
     REPORTS_KEY,
     STORE_KEY,
+    async_want,
     lock_registry,
 )
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
@@ -54,7 +55,8 @@ def _writes(lock) -> list:
 def _record(hass: HomeAssistant, lock: str = LOCK_1_ENTITY_ID) -> dict | None:
     """Return what the store keeps for ``lock`` now."""
     store: LockStore = hass.data[DOMAIN][STORE_KEY]
-    return store._find(lock)
+    entity = er.async_get(hass).async_get(lock)
+    return None if entity is None else store._locks.get(entity.id)
 
 
 async def _remove_user(hass: HomeAssistant, entry: MockConfigEntry, slot: int) -> None:
@@ -435,7 +437,7 @@ async def test_a_renamed_lock_keeps_its_record(
     await store.async_load()
 
     salt = hass.data[DOMAIN]["instance_id"].encode()
-    assert store.wrote("lock.renamed", 1) == fingerprint("4321", salt)
+    assert store.wrote(entity.id, 1) == fingerprint("4321", salt)
     assert store.prune({"lock.renamed"}) == []
 
 
@@ -532,9 +534,10 @@ async def test_a_lock_replaced_under_the_same_entity_id_starts_over(
     store = LockStore(hass)
     await store.async_load()
 
-    assert store.wrote(LOCK_1_ENTITY_ID, 1) is None
-    assert not store.answered(LOCK_1_ENTITY_ID)
-    assert not store.reports(LOCK_1_ENTITY_ID)
+    key = er.async_get(hass).async_get(LOCK_1_ENTITY_ID).id
+    assert store.wrote(key, 1) is None
+    assert not store.answered(key)
+    assert not store.reports(key)
     assert [r["entity_id"] for r in store.prune({LOCK_1_ENTITY_ID})] == [
         LOCK_1_ENTITY_ID
     ]
@@ -620,3 +623,69 @@ async def test_a_clear_owed_on_a_lock_only_a_disabled_entry_lists_is_sent(
     [lock_2] = [lock for lock in built if lock.lock.entity_id == LOCK_2_ENTITY_ID]
     assert 2 not in lock_2.codes
     assert _record(hass, LOCK_2_ENTITY_ID)["slots"].get("2") is None
+
+
+# Kept by the registry id the worker is bound to ----------------------------------
+
+
+async def test_a_lock_renamed_while_it_runs_is_still_remembered(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Its worker, still under the old entity id, writes under the same record.
+
+    Looked up by the entity id at each write, the record of a lock renamed
+    mid-run was missed: nothing it wrote until a restart was remembered.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    entities = er.async_get(hass)
+    key = entities.async_get(LOCK_1_ENTITY_ID).id
+    entities.async_update_entity(LOCK_1_ENTITY_ID, new_entity_id="lock.renamed")
+    await hass.async_block_till_done()
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is not None
+
+    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, "4321")
+    await hass.async_block_till_done()
+
+    assert mock_lock(entry).codes[1] == "4321"
+    store: LockStore = hass.data[DOMAIN][STORE_KEY]
+    salt = hass.data[DOMAIN]["instance_id"].encode()
+    assert list(store._locks) == [key]
+    assert store.wrote(key, 1) == fingerprint("4321", salt)
+
+
+async def test_a_device_re_paired_back_starts_over(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A, then B, then A again under one entity id: A's first worker's writes are moot.
+
+    The lock is re-paired: its codes may be gone. Trusting what the first
+    worker wrote, A's new worker would write nothing to a lock that will
+    not show its codes.
+    """
+    entities = er.async_get(hass)
+    with when_mock_lock_built(_masked):
+        entry = await async_setup_lcm_entry(hass)
+        first = entities.async_get(LOCK_1_ENTITY_ID)
+        # B under the entity id, A moved aside.
+        entities.async_update_entity(LOCK_1_ENTITY_ID, new_entity_id="lock.first")
+        other = entities.async_get_or_create(
+            "lock",
+            first.platform,
+            f"{first.unique_id}-re-paired",
+            suggested_object_id="test_1",
+            config_entry=hass.config_entries.async_get_entry(first.config_entry_id),
+        )
+        await hass.async_block_till_done()
+        assert lock_registry(hass).worker(LOCK_1_ENTITY_ID).port.provider.lock.id == (
+            other.id
+        )
+        # And A back.
+        entities.async_update_entity(LOCK_1_ENTITY_ID, new_entity_id="lock.other")
+        entities.async_update_entity("lock.first", new_entity_id=LOCK_1_ENTITY_ID)
+        await hass.async_block_till_done()
+
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker.port.provider.lock.id == first.id
+    assert len(_writes(mock_lock(entry))) == 2
