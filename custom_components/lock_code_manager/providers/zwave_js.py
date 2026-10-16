@@ -686,7 +686,9 @@ class ZWaveJSLock(BaseLock):
         A User Credential lock keeps a user record per slot, tagged
         ``lcm:<slot>:``, holding the PIN LCM wrote at credential slot
         ``slot``. The user is found by its tag ONLY, never by adoption: an
-        untagged user is never touched here (#1518/#1694).
+        untagged user is never touched here (#1518/#1694). Finding no tagged
+        user logs a warning: LCM's code may still be on the lock under a
+        user it can no longer recognize.
 
         LCM wrote only that PIN, so only that PIN is LCM's to remove. The
         user may also hold credentials someone added in the vendor's app (an
@@ -705,8 +707,14 @@ class ZWaveJSLock(BaseLock):
             return
         user_id = await self._find_user_index_for_slot(slot, adopt_untagged=False)
         if user_id is None:
-            _LOGGER.debug(
-                "Lock %s: no LCM-owned user to release for slot %s",
+            # Never fall back to an untagged user: deleting it, or its PIN,
+            # would delete a code LCM may never have created.
+            _LOGGER.warning(
+                "Lock %s: released slot %s, but no user on the lock carries "
+                "LCM's tag for it, so nothing was removed. A code may remain "
+                "that LCM cannot identify as its own (for example, if its "
+                "user was renamed in the lock vendor's app); remove it there "
+                "if it should not open the door",
                 self.lock.entity_id,
                 slot,
             )
