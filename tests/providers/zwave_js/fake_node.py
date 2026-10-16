@@ -436,8 +436,9 @@ class FakeZWaveLock:
     ``driver_before_15_25_2``: on User Code CC it took a supervised Set's
     outcome at its word: a success persisted nothing, so the cache kept the
     slot's old values, and a failure was answered Error_Unknown without
-    reading the slot. What ``_async_uc_reconcile_value_db`` in the provider
-    exists for. A version that does not parse behaves as the current driver.
+    reading the slot. The worker's read-back after every write is what
+    puts that cache right. A version that does not parse behaves as the
+    current driver.
 
     Faults (``ignore``, ``refuse``, ``fail``, ``hang``, ``drop_reply``,
     ``slow``) act on radio exchanges; see ``NodeFault``.
