@@ -70,7 +70,7 @@ from ..model.exceptions import (
 )
 from ..model.models import SlotCredential
 from ._base import BaseLock
-from ._util import is_masked_code, parse_tag
+from ._util import is_masked_code, parse_tag, refuses_write_in_flight
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1137,15 +1137,11 @@ class ZWaveJSLock(BaseLock):
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
 
-        # Some locks name no slot in a duplicate refusal (no parameters, or
-        # user 0). Writes to a lock run one at a time, so one arriving during
-        # a write is that write's; one naming another slot, or arriving with
-        # no write in flight, is not ours to pin on a slot.
-        if (
-            evt.data[ATTR_EVENT]
-            == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-            and self._uc_write_slot is not None
-            and code_slot in (0, self._uc_write_slot)
+        duplicate = (
+            AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+        )
+        if evt.data[ATTR_EVENT] == duplicate and refuses_write_in_flight(
+            self._uc_write_slot, code_slot
         ):
             self._uc_write_refused = True
             return

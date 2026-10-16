@@ -28,13 +28,19 @@ from ..model.credentials import (
     WriteResult,
 )
 from ..model.exceptions import (
+    DuplicateCodeError,
     LockDisconnected,
     LockOperationError,
     LockOperationFailed,
 )
 from ..model.models import SlotCredential
 from ._mqtt import BaseMqttLock
-from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
+from ._util import (
+    is_masked_code,
+    parse_slot_num,
+    refuses_write_in_flight,
+    resolve_discovery_payload,
+)
 from .const import LOGGER
 
 # Tail of the HA discovery device identifier zwave-js-ui publishes
@@ -137,6 +143,8 @@ KEYPAD_EVENT_TO_LOCKED = {
     "keypad_lock_operation": True,
     "keypad_unlock_operation": False,
 }
+# Access Control event 15: the lock refused a PIN another slot holds.
+DUPLICATE_CODE_EVENT = "new_user_code_not_added_due_to_duplicate_code"
 # Where the gateways found by scanning a topic prefix live, keyed by
 # ``(prefix, home hex)``. Deliberately in ``hass.data`` rather than on the
 # instance: the scan answers a question about a gateway, not about a lock, and
@@ -391,6 +399,11 @@ class ZWaveJSUILock(BaseMqttLock):
     # subscription covered: kept across a teardown, a status seen before an
     # unload would gate codes published after the resubscribe.
     _slot_enabled: dict[int, bool] = field(init=False, default_factory=dict)
+    # The slot of a PIN write in flight, and whether the lock refused it as a
+    # duplicate (see ``refuses_write_in_flight``): the set itself is
+    # acknowledged either way.
+    _write_slot: int | None = field(init=False, default=None)
+    _write_refused: bool = field(init=False, default=False)
     _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
 
     @property
@@ -681,15 +694,22 @@ class ZWaveJSUILock(BaseMqttLock):
         ``userId`` is the slot that operated the lock. Raw-buffer parameters
         arrive as a hex string instead and name nobody, so anything that is
         not a dict with a numeric user id is dropped rather than guessed at.
+
+        A duplicate refusal is no use of a code: it marks the write in
+        flight refused when it answers that write, and is dropped otherwise.
         """
         if label.lower() != NOTIFICATION_ACCESS_CONTROL:
+            return
+        value = _unwrap_mqtt_value(payload)
+        user_id = value.get("userId") if isinstance(value, dict) else None
+        if event_label.lower() == DUPLICATE_CODE_EVENT:
+            if refuses_write_in_flight(self._write_slot, parse_slot_num(user_id)):
+                self._write_refused = True
             return
         # ``False`` is a valid mapping value (an unlock), so this compares
         # against None -- a truthiness test would drop every unlock event.
         if (to_locked := KEYPAD_EVENT_TO_LOCKED.get(event_label.lower())) is None:
             return
-        value = _unwrap_mqtt_value(payload)
-        user_id = value.get("userId") if isinstance(value, dict) else None
         if (code_slot := parse_slot_num(user_id)) is None:
             LOGGER.debug(
                 "Lock %s: ignoring %s notification naming no code slot: %r",
@@ -1319,7 +1339,11 @@ class ZWaveJSUILock(BaseMqttLock):
         because zwave-js-ui answers only once the driver's supervised set has
         completed, so success here means the lock acknowledged the write --
         unless the Supervision result it returns is a Fail, which is the lock
-        refusing it (``_raise_on_supervision_fail``).
+        refusing it (``_raise_on_supervision_fail``), or the lock refused the
+        PIN as a duplicate by notification while the write was out. That
+        refusal is the only word User Code Command Class has for it, and the
+        driver announces the refused code as written, so the slot is read
+        back to replace that announcement before the refusal is raised.
 
         Failures from the api client propagate untouched: the base and sync
         layers decide what a refused or disconnected write means, and the
@@ -1327,16 +1351,23 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         code_slot = credential.slot
         await self._async_ensure_operational()
-        _raise_on_supervision_fail(
-            "set",
-            code_slot,
-            await self._async_user_code_command(
+        self._write_slot, self._write_refused = code_slot, False
+        try:
+            result = await self._async_user_code_command(
                 # ``int`` for the same reason the command class id is cast:
                 # the wire payload's shape stays obvious at the call site.
                 "set",
                 [code_slot, int(CodeSlotStatus.ENABLED), pin],
-            ),
-        )
+            )
+        finally:
+            self._write_slot = None
+        _raise_on_supervision_fail("set", code_slot, result)
+        if self._write_refused:
+            if (held := await self._async_read_slot(code_slot)) is not None:
+                self._push_credential_update(code_slot, held)
+            raise DuplicateCodeError(
+                code_slot=code_slot, lock_entity_id=self.lock.entity_id
+            )
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
