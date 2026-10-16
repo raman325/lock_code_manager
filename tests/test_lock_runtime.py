@@ -911,6 +911,39 @@ async def test_two_locks_re_paired_together_set_every_entry_up_again(
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+async def test_a_reload_racing_a_rebuild_leaves_the_entry_on_the_new_device(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    The user reloads the entry as the rebuild starts unloading it.
+
+    The rebuild's unload is refused (the reload's is under way), and the
+    reload sets the entry up again: the rebuild leaves it be. It ends loaded
+    once, on the new device, with no repair asking for another reload.
+    """
+    entry = current_entry("racing", {1: "1111", 2: "2222"})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with patch.object(
+        hass.config_entries, "async_setup", wraps=hass.config_entries.async_setup
+    ) as setup:
+        new_id = _re_pair(hass, LOCK_1_ENTITY_ID)
+        # Queued behind the rebuild's check: it unloads first.
+        hass.async_create_task(hass.config_entries.async_reload(entry.entry_id))
+        await hass.async_block_till_done()
+
+    assert "Unloading racing for re-paired lock.test_1 failed" in caplog.text
+    # The reload set it up (within its own lock): the rebuild did not try to.
+    assert [c.kwargs for c in setup.call_args_list] == [{"_lock": False}]
+    assert entry.state is ConfigEntryState.LOADED
+    assert lock_registry(hass).worker(LOCK_1_ENTITY_ID).port.provider.lock.id == new_id
+    assert mock_lock(entry, LOCK_1_ENTITY_ID).codes == {1: "1111", 2: "2222"}
+    assert lcm_issue_ids(hass) == []
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_an_entry_deleted_during_a_rebuild_is_not_set_up_again(
     hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
 ) -> None:
