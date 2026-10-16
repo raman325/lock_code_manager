@@ -550,3 +550,117 @@ class TestRefusedPin:
             assert sorted(
                 code for _n, code in fake_schlage_cloud.codes.values()
             ) == sorted(c[CONF_PIN] for c in SCHLAGE_LCM_CONFIG_SLOTS.values())
+
+
+def _slot_pins(cloud: FakeSchlageCloud, slot: int) -> list[str]:
+    """Return the PINs of the codes tagged for ``slot`` on the cloud."""
+    return [code for name, code in cloud.codes.values() if parse_tag(name)[0] == slot]
+
+
+def _rename_slot_code(cloud: FakeSchlageCloud, slot: int, name: str | None) -> None:
+    """Rename ``slot``'s code on the cloud, as the app would; None leaves it."""
+    if name is None:
+        return
+    ((code_id, (_old, pin)),) = (
+        (code_id, entry)
+        for code_id, entry in cloud.codes.items()
+        if parse_tag(entry[0])[0] == slot
+    )
+    cloud.codes[code_id] = (name, pin)
+
+
+# The slot's code as LCM wrote it, or renamed in the app so the new code's
+# name differs from the old one's.
+_OLD_CODE_NAMES = pytest.mark.parametrize(
+    "cloud_name",
+    [
+        pytest.param(None, id="same_name"),
+        pytest.param(make_tagged_name(1, "Mom"), id="renamed"),
+    ],
+)
+
+
+class TestChangingAPin:
+    """A new PIN replaces the slot's old code, never sits beside or behind it."""
+
+    @_OLD_CODE_NAMES
+    async def test_an_old_code_the_cloud_will_not_delete_holds_the_new_pin(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+        cloud_name: str | None,
+    ) -> None:
+        """
+        A cloud failure deleting the old code is no answer: retried, and no add.
+
+        Swallowed, a same-name add was refused as "already exists" and taken
+        for success, leaving the old PIN live and the slot shown in sync; a
+        renamed slot gained the new code beside the old one.
+        """
+        async with _schlage_entry(hass, schlage_lock_entity) as entry:
+            await async_advance_sync_ticks(hass, freezer, 5)
+            _rename_slot_code(fake_schlage_cloud, 1, cloud_name)
+            adds = fake_schlage_cloud.count("add_code")
+
+            with fake_schlage_cloud.fail_deletes(times=None) as fault:
+                await async_set_slot_pin(hass, entry, 1, "4321")
+                await async_advance_sync_ticks(hass, freezer, 5)
+
+            assert _slot_pins(fake_schlage_cloud, 1) == ["1234"]
+            assert fake_schlage_cloud.count("add_code") == adds
+            in_sync = in_sync_entity_id(hass, entry, 1, schlage_lock_entity.entity_id)
+            assert hass.states.get(in_sync).state != STATE_ON
+            assert fault.hits > 1
+
+    @_OLD_CODE_NAMES
+    async def test_a_failed_delete_is_retried_until_the_old_code_is_gone(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+        cloud_name: str | None,
+    ) -> None:
+        """A delete the cloud fails, then does, ends with the new PIN alone on the slot."""
+        async with _schlage_entry(hass, schlage_lock_entity) as entry:
+            await async_advance_sync_ticks(hass, freezer, 5)
+            _rename_slot_code(fake_schlage_cloud, 1, cloud_name)
+            # Fewer failures than a slot's tries, so the retries see it through.
+            fault = fake_schlage_cloud.fail_deletes(times=2)
+
+            await async_set_slot_pin(hass, entry, 1, "4321")
+            await async_advance_sync_ticks(hass, freezer, 5)
+
+            assert _slot_pins(fake_schlage_cloud, 1) == ["4321"]
+            in_sync = in_sync_entity_id(hass, entry, 1, schlage_lock_entity.entity_id)
+            assert hass.states.get(in_sync).state == STATE_ON
+            assert fault.hits == 2
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+
+    async def test_an_old_code_already_gone_does_not_hold_the_new_pin(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_schlage_cloud: FakeSchlageCloud,
+        schlage_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A slot whose code was deleted on the lock takes its new PIN: nothing to clear."""
+        async with _schlage_entry(hass, schlage_lock_entity) as entry:
+            await async_advance_sync_ticks(hass, freezer, 5)
+            fake_schlage_cloud.codes = {
+                code_id: code
+                for code_id, code in fake_schlage_cloud.codes.items()
+                if parse_tag(code[0])[0] != 1
+            }
+            # The cloud fails any delete it reaches; with no code to find,
+            # core answers before reaching it.
+            fake_schlage_cloud.fail_deletes(times=None)
+
+            await async_set_slot_pin(hass, entry, 1, "4321")
+            await async_advance_sync_ticks(hass, freezer, 5)
+
+            assert _slot_pins(fake_schlage_cloud, 1) == ["4321"]
+            in_sync = in_sync_entity_id(hass, entry, 1, schlage_lock_entity.entity_id)
+            assert hass.states.get(in_sync).state == STATE_ON
