@@ -108,6 +108,9 @@ class Slot:
     # Bumped each time the counts start over: a sync begun before is not
     # charged to what came after.
     epoch: int = 0
+    # After a failed try, no write before this time (the worker's clock): a
+    # pause that only a new target or a resume ends, never a report.
+    not_before: float | None = None
 
     def aim(self, want: Want, *, release: bool = False) -> None:
         """Set what is wanted; a change of target starts the counts over."""
@@ -226,6 +229,7 @@ class Slot:
         self.tries = 0
         self.fights.clear()
         self.hold = None
+        self.not_before = None
         self.why = self.cause = ""
 
     def _give_up(self) -> Repair:

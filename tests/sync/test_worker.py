@@ -40,6 +40,10 @@ SALT = b"salt"
 
 # Real seconds a scenario may take to settle.
 SETTLE_LIMIT = 5
+# The worker's gap between exchanges: longer sleeps are pauses or backoffs.
+GAP = 2.0
+# Turns of the event loop the worker's timer takes to end on the fake clock.
+TIMER_TURNS = 5
 
 
 class Clock:
@@ -188,10 +192,14 @@ class Rig:
         """
         async with asyncio.timeout(SETTLE_LIMIT):
             await self.worker.settled()
-            # A slot waiting before its next try: the fake clock lets it go.
-            while any(not wait.done() for wait in self.worker._waits.values()):
-                await asyncio.sleep(0)
+            # The worker's timer -- a slot's pause, the next probe -- on the
+            # fake clock: it ends within a few turns of the loop.
+            while True:
+                for _ in range(TIMER_TURNS):
+                    await asyncio.sleep(0)
                 await self.worker.settled()
+                if all(s.not_before is None for s in self.worker.slots.values()):
+                    break
 
     async def pass_(self) -> None:
         """Run one more sync pass to the end."""
@@ -1398,6 +1406,7 @@ async def test_no_read_back_once_the_lock_backs_off(rig_factory) -> None:
         return await original(slots)
 
     lock.read = _count  # type: ignore[method-assign]
+    rig.worker.sleep = _forever_if_long(rig.clock.sleep)  # no probe ends the backoff
     lock.writes_unanswered = True
     lock.reads_unanswered = True
     rig.worker.want(1, "1234")
@@ -1567,6 +1576,7 @@ async def test_a_sync_that_tips_the_lock_into_backoff_is_not_charged(
         return await original(slots)
 
     lock.read = _count  # type: ignore[method-assign]
+    rig.worker.sleep = _forever_if_long(rig.clock.sleep)  # no probe ends the backoff
     rig.worker.want(1, "1234")
     await rig.settle()
 
@@ -2586,8 +2596,7 @@ async def test_a_slot_wanted_after_the_probe_found_none_starts_the_probing(
     rig.worker.forget(1)
     # A probe already queued goes unanswered; the next finds nothing to read.
     await rig.settle()
-    await _run(rig, rig.worker._retry.done)
-    await rig.settle()
+    assert rig.worker._probe_at is not None  # due, with nothing to read
     assert not rig.worker.reachable
     lock.unreachable = False
     rig.worker.want(2, "2222")
@@ -2774,7 +2783,7 @@ async def test_waking_a_lock_that_answers_does_nothing(rig_factory) -> None:
     rig = await _started(rig_factory(FakeLock({1: "0000"})), {1: "0000"})
     rig.worker.wake()
 
-    assert rig.worker._retry is None
+    assert rig.worker._probe_at is None
 
 
 async def test_a_clear_on_a_lock_that_hides_its_codes_is_trusted(rig_factory) -> None:
@@ -2853,18 +2862,20 @@ async def test_a_new_target_does_not_wait_out_the_old_ones_pause(rig_factory) ->
     rig.worker.sleep = rig.clock.sleep
     rig.worker.want(1, "1234")
     await rig.worker.settled()
-    assert rig.worker._waits  # waiting out its pause
+    assert rig.worker.slots[1].not_before is not None  # waiting out its pause
     lock.ignore_writes = False
     rig.worker.want(1, "5678")
     await rig.worker.settled()
 
     assert lock.codes[1] == "5678"
-    assert not rig.worker._waits
+    assert rig.worker.slots[1].not_before is None
 
 
 def _forever_if_long(sleep):
+    """Let the gap between exchanges pass; a pause or a backoff never ends."""
+
     async def _sleep(seconds: float) -> None:
-        if seconds >= RETRY_AFTER[0]:
+        if seconds > GAP:
             await asyncio.Event().wait()
         await sleep(seconds)
 
@@ -2913,14 +2924,17 @@ async def test_stopping_cancels_a_slot_waiting_to_try_again(rig_factory) -> None
     lock = FakeLock({1: "0000"}, ignore_writes=True)
     rig = await _started(rig_factory(lock), {1: "0000"})
     rig.worker.sleep = _forever_if_long(rig.clock.sleep)
+    others = asyncio.all_tasks() - {rig.worker._task}
     rig.worker.want(1, "1234")
     await rig.worker.settled()
-    [waiting] = rig.worker._waits.values()
+    assert rig.worker.slots[1].not_before is not None  # waiting out its pause
 
-    await rig.worker.stop(grace=0.1)
+    # At once: the loop is not left waiting out the pause first.
+    async with asyncio.timeout(1):
+        await rig.worker.stop(grace=SETTLE_LIMIT)
+    await asyncio.sleep(0)
 
-    assert waiting.cancelled() or waiting.done()
-    assert not rig.worker._waits
+    assert asyncio.all_tasks() <= others
 
 
 @pytest.mark.paced
@@ -2939,7 +2953,37 @@ async def test_a_poll_during_a_pause_does_not_bring_the_next_try_forward(
     await rig.worker.settled()
 
     assert len(lock.writes) == writes
-    assert len(rig.worker._waits) == 1
+    assert rig.worker.slots[1].not_before is not None
+
+
+@pytest.mark.paced
+async def test_a_push_during_a_pause_does_not_bring_the_next_try_forward(
+    rig_factory,
+) -> None:
+    """
+    A lock reporting the slot during its pause: no write until the pause ends.
+
+    The push says what the read-back said -- the slot is out of sync -- and
+    is no reason to try again early (#1257), nor to spend a try doing so.
+    """
+    lock = FakeLock({1: "0000"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "0000"})
+    rig.worker.sleep = _forever_if_long(rig.clock.sleep)
+    rig.worker.want(1, "1234")
+    await rig.worker.settled()
+    writes, tries = len(lock.writes), rig.worker.slots[1].tries
+    assert rig.status(1) == (Status.OUT_OF_SYNC, None)
+
+    # Polls on either side: the lock answering would charge any try owed.
+    await rig.worker.read()
+    rig.worker.push(1, Holds("0000"))
+    await rig.worker.settled()
+    await rig.worker.read()
+    await rig.worker.settled()
+
+    assert len(lock.writes) == writes
+    assert rig.worker.slots[1].tries == tries
+    assert rig.worker.slots[1].not_before is not None
 
 
 @pytest.mark.paced
@@ -2950,15 +2994,17 @@ async def test_a_resumed_slot_starts_its_pauses_over(rig_factory) -> None:
     rig.worker.sleep = _forever_if_long(rig.clock.sleep)
     rig.worker.want(1, "1234")
     await rig.worker.settled()
-    [before] = rig.worker._waits.values()
+    before = rig.worker.slots[1].not_before
+    assert before is not None
 
     rig.worker.resume(1)
     await rig.worker.settled()
 
-    [after] = rig.worker._waits.values()
-    assert after is not before
-    await asyncio.sleep(0)
-    assert before.cancelled()
+    # Tried again at once, and paused again from then.
+    assert len(lock.writes) == 2
+    after = rig.worker.slots[1].not_before
+    assert after is not None
+    assert after > before
 
 
 async def test_a_turn_waits_out_the_gap_like_any_exchange(rig_factory) -> None:
