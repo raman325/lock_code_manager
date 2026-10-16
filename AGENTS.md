@@ -491,7 +491,9 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   `pylocal-akuvox` `User` field listed; local users marked as A08S/E18C firmware marks them).
   `ignore(service)` acknowledges a write without applying it. Fixture `fake_akuvox_device`.
   Both knobs take `times` and return a `ServiceFault` (`tests/providers/service_fault.py`:
-  `times`, `hits`, `clear()`, context manager), shaped like the other fakes' faults. Neither
+  `times`, `hits`, `clear()`, context manager), shaped like the other fakes' faults.
+  `refuse_pin(pin)` makes Akuvox's `add_user` answer that PIN with the integration's device error,
+  as firmware refusing a PIN another user holds would. Neither
   fixture can be combined with the canned `*_mock_services` one: both answer the same services.
   Both fakes have self-tests in `test_fake_service.py`.
 

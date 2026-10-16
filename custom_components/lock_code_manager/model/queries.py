@@ -14,10 +14,8 @@ entry's:
   flow's check for slots already configured.
 - ``slots_configured_on``: the slot numbers their users hold. Read scope,
   operation budgets, confirmation scope, the websocket's ``managed`` flag,
-  the unmanaged-code sweep, the numbers allocation treats as claimed by
-  other entries, and the Akuvox and Schlage tag passes -- which write: they
-  assign each untagged user on the device to one of these numbers that no
-  tagged user holds.
+  the unmanaged-code sweep, and the numbers allocation treats as claimed by
+  other entries.
 - ``configured_owner``: the entry holding one slot, first match wins.
   Duplicate-code attribution, and crediting a credential use to an entry.
 

@@ -4,20 +4,18 @@ Local Akuvox lock provider.
 Akuvox door controllers manage access codes as *users* identified by an
 internal device ID, not by numeric slot numbers. This provider bridges
 that gap by tagging user names with a slot prefix in the format
-``[LCM:<slot>] <friendly name>``. Pre-existing users discovered on the
-device are automatically tagged and assigned to the next available slot
-number.
+``lcm:<slot>:<friendly name>`` (older releases wrote ``[LCM:<slot>]``,
+which is still read). A user without the tag is not Lock Code Manager's:
+it is never read as a slot, renamed, changed or deleted.
 
 All operations go through the Home Assistant ``local_akuvox`` integration
 services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``).
 """
 
 from collections.abc import Collection
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal, override
-
-from homeassistant.config_entries import ConfigEntry
 
 from ..model.credentials import (
     Credential,
@@ -27,13 +25,9 @@ from ..model.credentials import (
     WriteResult,
     user_from_slot,
 )
-from ..model.exceptions import (
-    LockCodeManagerProviderError,
-    LockDisconnected,
-    LockOperationError,
-)
+from ..model.exceptions import LockCodeManagerProviderError
 from ._base import BaseLock
-from ._util import make_tagged_name as _make_tagged_name, parse_tag as _parse_tag
+from ._util import make_tagged_name as _make_tagged_name, parse_full_tag
 from .const import LOGGER
 
 AKUVOX_DOMAIN = "local_akuvox"
@@ -67,16 +61,11 @@ class AkuvoxLock(BaseLock):
 
     Users on Akuvox controllers are identified by a device-internal ID
     and a name, not by slot numbers. This provider assigns virtual slot
-    numbers by embedding a ``[LCM:<slot>]`` tag in each user's name.
+    numbers by embedding a ``lcm:<slot>:`` tag in each user's name.
 
     PINs are readable from the device, so occupied slots report the actual
     PIN value. Cleared slots report ``SlotCredential.empty()``.
     """
-
-    # Guards the initial auto-tag pass: skips re-tagging on reconnects so a
-    # drifted device list cannot produce double-tag / rename storms. Reset
-    # on full reload when the provider instance is recreated.
-    _tagged_once: bool = field(default=False, init=False)
 
     @property
     @override
@@ -191,136 +180,19 @@ class AkuvoxLock(BaseLock):
         )
 
     @override
-    async def async_setup(self, config_entry: ConfigEntry) -> None:
-        """
-        Set up lock by tagging any pre-existing unmanaged users.
-
-        Idempotent: the tag pass runs only once per provider instance to
-        prevent double-tag / rename storms on reconnect (the device list
-        may have drifted since the previous load).
-        """
-        await super().async_setup(config_entry)
-        if self._tagged_once:
-            return
-        await self._async_tag_unmanaged_users()
-        self._tagged_once = True
-
-    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
-        """
-        Re-tag unmanaged users, then return all codes.
-
-        Hard refresh is an explicit drift-detection request, so the
-        setup-time idempotency gate does not apply.
-        """
-        managed_slots = self.managed_slots
-        if managed_slots:
-            async with self._serialize_sequence():
-                await self._async_run_tag_pass(managed_slots)
+        """Return all codes; the device keeps no cache, so every read is fresh."""
         return await self.async_get_usercodes()
-
-    async def _async_tag_unmanaged_users(self) -> None:
-        """
-        Discover untagged local users and tag them with a slot number.
-
-        Untagged local users that have a PIN are assigned to the next
-        available managed slot and their names are updated on the device
-        to include the ``[LCM:<slot>]`` tag via ``modify_user``. The
-        list/modify sequence runs under the sequence lock so concurrent
-        set/clear/hard-refresh callers do not interleave their own
-        multi-step writes.
-        """
-        managed_slots = self.managed_slots
-        if not managed_slots:
-            return
-
-        async with self._serialize_sequence():
-            await self._async_run_tag_pass(managed_slots)
-
-    async def _async_run_tag_pass(self, managed_slots: set[int]) -> None:
-        """
-        Body of the tag pass; caller holds the sequence lock.
-
-        Per-user ``LockDisconnected`` is logged and the loop continues so
-        any remaining users still get a chance to tag, but the disconnect
-        is re-raised at the end. ``async_setup`` then leaves
-        ``_tagged_once`` False so the reconnect path retries once the lock
-        is reachable. ``LockOperationFailed`` is a per-user condition and
-        does not gate idempotency.
-        """
-        users = await self._async_list_users()
-
-        assigned_slots: set[int] = set()
-        # (device_user_id, pin, original_name) for untagged users needing assignment
-        untagged: list[tuple[str, str, str]] = []
-
-        for user in users:
-            if not _is_local_user(user):
-                continue
-            name = user.get("name", "")
-            pin = user.get("private_pin", "")
-            device_id = str(user.get("id", ""))
-            slot_num, _ = _parse_tag(name)
-
-            if slot_num is not None:
-                assigned_slots.add(slot_num)
-            elif pin:
-                untagged.append((device_id, pin, name))
-
-        available = sorted(managed_slots - assigned_slots)
-        first_disconnect: LockDisconnected | None = None
-        for device_id, _pin, original_name in untagged:
-            if not available:
-                LOGGER.debug(
-                    "Lock %s: no managed slot available for untagged user '%s'; "
-                    "leaving untouched",
-                    self.lock.entity_id,
-                    original_name,
-                )
-                break
-
-            slot_num = available[0]
-            tagged_name = _make_tagged_name(slot_num, original_name)
-            try:
-                await self._async_modify_user(device_id, name=tagged_name)
-            except LockOperationError as err:
-                LOGGER.error(
-                    "Lock %s: failed to tag user '%s' for slot %d: %s",
-                    self.lock.entity_id,
-                    original_name,
-                    slot_num,
-                    err,
-                )
-                if first_disconnect is None and isinstance(err, LockDisconnected):
-                    first_disconnect = err
-                continue
-
-            available.pop(0)
-            LOGGER.debug(
-                "Lock %s: tagged user '%s' (id=%s) as slot %d: '%s'",
-                self.lock.entity_id,
-                original_name,
-                device_id,
-                slot_num,
-                tagged_name,
-            )
-
-        if first_disconnect is not None:
-            raise LockDisconnected(
-                f"Lock {self.lock.entity_id}: disconnect during tag pass; "
-                "will be retried on reconnect"
-            ) from first_disconnect
 
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading tagged local users from the Akuvox device.
 
-        Users bearing a ``[LCM:<slot>]`` tag in their name are mapped to the
-        embedded slot number. Only reads and classifies; auto-tagging of
-        unmanaged users is handled separately by ``_async_tag_unmanaged_users()``.
+        Users bearing a ``lcm:<slot>:`` (or legacy ``[LCM:<slot>]``) tag in their name are mapped to the
+        embedded slot number; a user without the tag is not one of them.
         Only users whose slot numbers fall within the managed set are returned.
         Personal Identification Numbers are readable on Akuvox, so occupied
         slots report the actual value.
@@ -340,7 +212,7 @@ class AkuvoxLock(BaseLock):
                 continue
             name = user.get("name", "")
             pin = user.get("private_pin", "")
-            slot_num, _ = _parse_tag(name)
+            slot_num, _ = parse_full_tag(name)
 
             if slot_num is not None and slot_num in managed_slots:
                 slot_states[slot_num] = (
@@ -389,7 +261,7 @@ class AkuvoxLock(BaseLock):
                 if not _is_local_user(user):
                     continue
                 user_name = user.get("name", "")
-                parsed_slot, friendly = _parse_tag(user_name)
+                parsed_slot, friendly = parse_full_tag(user_name)
                 if parsed_slot == code_slot:
                     existing_device_id = str(user.get("id", ""))
                     existing_friendly_name = friendly
@@ -428,7 +300,7 @@ class AkuvoxLock(BaseLock):
             for user in users:
                 if not _is_local_user(user):
                     continue
-                parsed_slot, _ = _parse_tag(user.get("name", ""))
+                parsed_slot, _ = parse_full_tag(user.get("name", ""))
                 if parsed_slot == code_slot:
                     target_device_id = str(user.get("id", ""))
                     break

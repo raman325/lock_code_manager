@@ -37,6 +37,11 @@ read for locks whose names were written by older releases.
   integration can identify its own users on locks that haven't been
   rewritten yet. The next write naturally replaces the lock-stored name
   with the canonical format.
+
+Schlage and Akuvox never write the compact or slot-only fallbacks, so on
+their locks a name in either shape is somebody else's code: they read tags
+with ``parse_full_tag``, which recognizes only the canonical and legacy
+formats.
 """
 
 from collections.abc import Iterable
@@ -101,6 +106,19 @@ def parse_tag(name: str) -> tuple[int | None, str]:
         return int(match.group(1)), ""
     if match := _SLOT_ONLY_RE.match(name):
         return int(match.group(1)), ""
+    return None, name
+
+
+def parse_full_tag(name: str) -> tuple[int | None, str]:
+    """
+    Parse a canonical or legacy slot tag, the formats that carry a name.
+
+    Returns ``(slot_num, friendly_name)``, or ``(None, original_name)`` for
+    anything else -- a compact ``lcm<slot>`` or bare-digit name included,
+    which a provider that never writes those must not take for its own.
+    """
+    if match := _TAG_RE.match(name) or _LEGACY_SLOT_TAG_RE.match(name):
+        return int(match.group(1)), match.group(2)
     return None, name
 
 

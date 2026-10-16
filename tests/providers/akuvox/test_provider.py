@@ -20,7 +20,6 @@ from custom_components.lock_code_manager.model.credentials import (
 )
 from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerError,
-    LockDisconnected,
     LockOperationFailed,
 )
 from custom_components.lock_code_manager.providers.akuvox import (
@@ -584,215 +583,12 @@ class TestListUsersErrors:
 
 
 # ---------------------------------------------------------------------------
-# Auto-tagging
+# Sequencing
 # ---------------------------------------------------------------------------
 
 
-class TestAutoTagging:
-    """Tests for _async_tag_unmanaged_users."""
-
-    async def test_tags_untagged_users(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """Test that untagged local users with Personal Identification Numbers are auto-tagged."""
-        mock_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("200", "Visitor", "9999"),
-                ],
-            },
-        }
-        list_handler = AsyncMock(return_value=mock_response)
-        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
-
-        modify_calls: list[dict[str, Any]] = []
-
-        async def _capture_modify(call):
-            modify_calls.append(dict(call.data))
-
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
-        )
-
-        await akuvox_lock._async_tag_unmanaged_users()
-
-        assert len(modify_calls) == 1
-        assert modify_calls[0]["id"] == "200"
-        assert modify_calls[0]["name"] == "lcm:1:Visitor"
-
-    async def test_failed_modify_does_not_consume_slot(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """Test that a failed modify does not consume a slot number."""
-        mock_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("200", "Visitor A", "1111"),
-                    make_user("201", "Visitor B", "2222"),
-                ],
-            },
-        }
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=mock_response)
-        )
-
-        modify_calls: list[dict[str, Any]] = []
-        call_tracker: list[int] = []
-
-        async def _failing_then_ok(call):
-            call_tracker.append(1)
-            if len(call_tracker) == 1:
-                raise HomeAssistantError("device busy")
-            modify_calls.append(dict(call.data))
-
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_failing_then_ok)
-        )
-
-        await akuvox_lock._async_tag_unmanaged_users()
-
-        # First modify failed so slot 1 should be reused for the second user
-        assert len(modify_calls) == 1
-        assert modify_calls[0]["id"] == "201"
-        assert modify_calls[0]["name"] == "lcm:1:Visitor B"
-
-    async def test_tag_pass_skips_cloud_users_and_reuses_free_slot(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """Cloud users are ignored, and an already-tagged local user reserves its slot."""
-        mock_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("50", "Cloud Visitor", "0000", source_type="2"),
-                    make_user("100", "lcm:1:Guest", "1111"),
-                    make_user("200", "New Local", "3333"),
-                ],
-            },
-        }
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=mock_response)
-        )
-
-        modify_calls: list[dict[str, Any]] = []
-
-        async def _capture_modify(call):
-            modify_calls.append(dict(call.data))
-
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "modify_user", AsyncMock(side_effect=_capture_modify)
-        )
-
-        await akuvox_lock._async_tag_unmanaged_users()
-
-        # Only the untagged local user is touched; slot 1 is already reserved
-        # by the tagged local user, and the cloud user is ignored entirely.
-        assert len(modify_calls) == 1
-        assert modify_calls[0]["id"] == "200"
-        assert modify_calls[0]["name"] == "lcm:2:New Local"
-
-    async def test_tag_pass_no_available_slot_leaves_untouched(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """Untagged local users are left untouched once all managed slots are assigned."""
-        mock_response = {
-            LOCK_ENTITY_ID: {
-                "users": [
-                    make_user("100", "lcm:1:Guest", "1111"),
-                    make_user("101", "lcm:2:Family", "2222"),
-                    make_user("200", "Visitor", "9999"),
-                ],
-            },
-        }
-        register_mock_service(
-            hass, AKUVOX_DOMAIN, "list_users", AsyncMock(return_value=mock_response)
-        )
-        modify_handler = AsyncMock(return_value=None)
-        register_mock_service(hass, AKUVOX_DOMAIN, "modify_user", modify_handler)
-
-        await akuvox_lock._async_tag_unmanaged_users()
-
-        # Both managed slots are already assigned, so the untagged visitor
-        # cannot be tagged; no modify_user call should be made for them.
-        modify_handler.assert_not_called()
-
-    async def test_no_managed_slots_is_noop(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-    ) -> None:
-        """Test that auto-tagging is a no-op when no slots are managed."""
-        # No LCM config entry means no managed slots
-        await akuvox_lock._async_tag_unmanaged_users()
-        # No service calls should have been made (no list_users registered)
-
-    async def test_async_setup_idempotent_skips_repeat_tag_pass(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """A second async_setup call must not re-run the tag pass."""
-        register_mock_service(
-            hass,
-            AKUVOX_DOMAIN,
-            "list_users",
-            AsyncMock(return_value={LOCK_ENTITY_ID: {"users": []}}),
-        )
-
-        with patch.object(
-            akuvox_lock,
-            "_async_run_tag_pass",
-            wraps=akuvox_lock._async_run_tag_pass,
-        ) as mock_pass:
-            await akuvox_lock.async_setup(lcm_config_entry)
-            await akuvox_lock.async_setup(lcm_config_entry)
-
-        assert mock_pass.await_count == 1
-        assert akuvox_lock._tagged_once is True
-
-    async def test_async_setup_retries_after_disconnect_during_first_pass(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """LockDisconnected during the first tag pass must leave _tagged_once False so reconnect retries."""
-        untagged_users = {
-            LOCK_ENTITY_ID: {
-                "users": [make_user("200", "Guest", "9999")],
-            },
-        }
-        register_mock_service(
-            hass,
-            AKUVOX_DOMAIN,
-            "list_users",
-            AsyncMock(return_value=untagged_users),
-        )
-
-        with patch.object(
-            akuvox_lock,
-            "_async_modify_user",
-            side_effect=LockDisconnected("offline"),
-        ):
-            with pytest.raises(LockDisconnected, match="disconnect during tag pass"):
-                await akuvox_lock.async_setup(lcm_config_entry)
-        assert akuvox_lock._tagged_once is False
-
-        # Reconnect: now the underlying modify succeeds.
-        await akuvox_lock.async_setup(lcm_config_entry)
-        assert akuvox_lock._tagged_once is True
+class TestSequencing:
+    """Multi-step writes run under the sequence lock."""
 
     async def test_concurrent_set_credential_serialized_under_sequence_lock(
         self,
@@ -834,42 +630,6 @@ class TestAutoTagging:
         )
 
         assert max_overlap[0] == 1
-
-
-# ---------------------------------------------------------------------------
-# Hard refresh
-# ---------------------------------------------------------------------------
-
-
-class TestHardRefresh:
-    """Tests for async_hard_refresh_codes."""
-
-    async def test_hard_refresh_tags_then_reads(
-        self,
-        hass: HomeAssistant,
-        akuvox_lock: AkuvoxLock,
-        lcm_config_entry: MockConfigEntry,
-    ) -> None:
-        """Test that hard refresh auto-tags first, then reads codes via base projection."""
-        # First call returns untagged user, second call returns tagged user
-        untagged_response = {
-            LOCK_ENTITY_ID: {
-                "users": [make_user("200", "Visitor", "9999")],
-            },
-        }
-        tagged_response = {
-            LOCK_ENTITY_ID: {
-                "users": [make_user("200", "lcm:1:Visitor", "9999")],
-            },
-        }
-        list_handler = AsyncMock(side_effect=[untagged_response, tagged_response])
-        register_mock_service(hass, AKUVOX_DOMAIN, "list_users", list_handler)
-        register_mock_service(hass, AKUVOX_DOMAIN, "modify_user", AsyncMock())
-
-        codes = await akuvox_lock.async_hard_refresh_codes()
-
-        assert codes[1] == SlotCredential.known("9999")
-        assert codes[2] is SlotCredential.empty()
 
 
 # ---------------------------------------------------------------------------
