@@ -118,6 +118,7 @@ from .ha.runtime import (
     async_release_lock,
     async_setup_core,
     lock_registry,
+    slot_conflict_issue_id,
 )
 from .ha.services import (
     async_add_users,
@@ -1229,6 +1230,11 @@ async def async_remove_entry(
                 hass,
                 DOMAIN,
                 f"slot_suspended_{entry_id}_{lock_entity_id}_{slot_num}",
+            )
+            async_delete_issue(
+                hass,
+                DOMAIN,
+                slot_conflict_issue_id(entry_id, lock_entity_id, slot_num),
             )
 
 

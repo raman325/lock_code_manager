@@ -706,7 +706,12 @@ right is the read:
 ## Important Constraints
 
 - Slots are numeric (usually 1-100) but can be strings for some lock types
-- Multiple config entries can share the same lock but not the same slot
+- Multiple config entries can share the same lock but not the same slot. Old storage can still
+  have two entries configure one slot on one lock: the oldest entry (`created_at`, then
+  `entry_id`; `configured_owner`) owns it in any load state, so a younger one never writes it,
+  even while the owner is disabled or reloading, and has a `slot_conflict` repair instead
+  (`ha/runtime.py` `async_owns_slot`). It takes the slot only when the owner stops configuring
+  it (`async_hand_off`)
 - Entity unique IDs: `{entry_id}|{slot}|{entity_type}` (per-lock entities add `|{lock_entity_id}`)
 - Lock device is linked to config entry via `dev_reg.async_update_device()`
 

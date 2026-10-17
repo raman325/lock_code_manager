@@ -35,7 +35,7 @@ from homeassistant.helpers.start import async_at_started
 from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
 from ..model.credentials import SlotCode
 from ..model.exceptions import LockCodeManagerProviderError
-from ..model.locks import per_lock_issue_id
+from ..model.locks import lock_display_name, per_lock_issue_id
 from ..model.queries import (
     configured_owner,
     entries_configuring,
@@ -95,6 +95,10 @@ RE_PAIRED_WORK_DROPPED: Final = "lock_re_paired_work_dropped"
 # The repair asking for a reload: a one-off read kept a re-paired lock's old
 # worker through its rebuild.
 RE_PAIRED_RELOAD: Final = "lock_re_paired_reload"
+
+# The repair on a slot an entry configures on a lock where an older entry
+# configures it too (old storage): the older one owns it (``configured_owner``).
+SLOT_CONFLICT: Final = "slot_conflict"
 
 # How long a one-off write from a repair or the card is waited for.
 WRITE_ONCE_WAIT = 60.0
@@ -548,6 +552,49 @@ def _async_report_dropped_work(
     )
 
 
+def slot_conflict_issue_id(entry_id: str, lock_entity_id: str, slot: int) -> str:
+    """Return the id of ``entry_id``'s repair for a slot an older entry owns."""
+    return f"{SLOT_CONFLICT}_{entry_id}_{lock_entity_id}_{slot}"
+
+
+@callback
+def async_owns_slot(
+    hass: HomeAssistant, entry: ConfigEntry, lock_entity_id: str, slot: int
+) -> bool:
+    """
+    Return whether ``entry`` may claim ``slot`` on the lock, and say so if not.
+
+    Old storage can have two entries configure one slot on one lock. The
+    oldest owns it (``configured_owner``) in any load state: while it is
+    disabled, reloading or not yet set up, the younger one still does not
+    write the slot, so the owner never comes back to find it taken. The
+    younger one gets it only once the owner stops configuring it -- the slot
+    or the lock removed from it, or the entry deleted (``async_hand_off``).
+    Until then the younger entry has a repair naming the owner.
+    """
+    issue_id = slot_conflict_issue_id(entry.entry_id, lock_entity_id, slot)
+    owner = configured_owner(hass, lock_entity_id, slot)
+    if owner is None or owner.entry_id == entry.entry_id:
+        async_delete_issue(hass, DOMAIN, issue_id)
+        return True
+    async_create_issue(
+        hass,
+        DOMAIN,
+        issue_id,
+        is_fixable=False,
+        severity=IssueSeverity.WARNING,
+        translation_key=SLOT_CONFLICT,
+        translation_placeholders={
+            "slot_num": str(slot),
+            "lock_entity_id": lock_entity_id,
+            "lock_name": lock_display_name(hass, lock_entity_id),
+            "entry_title": entry.title,
+            "owner_title": owner.title,
+        },
+    )
+    return False
+
+
 async def async_hold_lock(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -555,7 +602,11 @@ async def async_hold_lock(
     wants: Mapping[int, Want],
 ) -> BaseLock:
     """Hold ``lock_entity_id`` for ``entry`` with its slots' wants; return the provider."""
-    wants = dict(wants)
+    wants = {
+        slot: pin
+        for slot, pin in wants.items()
+        if async_owns_slot(hass, entry, lock_entity_id, slot)
+    }
     while True:
         try:
             worker = await lock_registry(hass).hold(
@@ -608,36 +659,41 @@ def async_hand_off(
     hass: HomeAssistant, leaving: ConfigEntry, lock_entity_id: str, slots: Iterable[int]
 ) -> None:
     """
-    Hand ``slots``, which ``leaving`` let go of, to another entry configuring them.
+    Hand ``slots``, which ``leaving`` let go of, to the next entry configuring them.
 
     Only old storage has two entries on one slot (the config flow forbids
-    it): the second one's claim was dropped when it held the lock, so once
-    the owner lets the slot go, nobody would want it again. Telling the
-    other entry what it wants claims the slot; for a slot it already owns,
-    that is nothing new.
+    it), and the oldest owns it (``async_owns_slot``): the younger one never
+    claimed it. Once the owner stops configuring the slot -- given up, or
+    its entry deleted -- the next oldest is the owner: its repair is
+    answered, and telling the lock what it wants claims the slot. One not
+    loaded claims it when it sets up.
 
-    Only for an owner that stops configuring the slot: given up, or its
-    entry deleted. One that merely unloads -- a reload, or disabled --
-    still configures it, and takes it back when it loads, unless the other
-    entry claimed the slot meanwhile by telling the lock what it wants.
+    One that merely unloads -- a reload, or disabled -- still configures the
+    slot, so still owns it: nothing is handed off.
     """
     for slot in slots:
-        for entry in iter_loaded_lcm_entries(hass):
-            runtime = entry.runtime_data
-            if (
-                entry.entry_id != leaving.entry_id
-                and lock_entity_id in runtime.locks
-                and (coordinator := runtime.slot_coordinators.get(slot))
-            ):
-                coordinator.async_push_want([lock_entity_id])
-                break
+        owner = configured_owner(hass, lock_entity_id, slot)
+        if owner is None or owner.entry_id == leaving.entry_id:
+            continue
+        async_delete_issue(
+            hass, DOMAIN, slot_conflict_issue_id(owner.entry_id, lock_entity_id, slot)
+        )
+        if owner.state is not ConfigEntryState.LOADED:
+            continue
+        runtime = owner.runtime_data
+        if lock_entity_id in runtime.locks and (
+            coordinator := runtime.slot_coordinators.get(slot)
+        ):
+            coordinator.async_push_want([lock_entity_id])
 
 
 @callback
 def async_want(
     hass: HomeAssistant, entry: ConfigEntry, lock_entity_id: str, slot: int, pin: Want
 ) -> None:
-    """Set what ``slot`` should hold on a lock ``entry`` holds."""
+    """Set what ``slot`` should hold on a lock ``entry`` holds, if it owns the slot."""
+    if not async_owns_slot(hass, entry, lock_entity_id, slot):
+        return
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
@@ -683,6 +739,10 @@ def async_give_up(
     their code left programmed): a release, which goes on after the entry
     unloads.
     """
+    # No longer this entry's slot: a conflict over it is over.
+    async_delete_issue(
+        hass, DOMAIN, slot_conflict_issue_id(entry.entry_id, lock_entity_id, slot)
+    )
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return

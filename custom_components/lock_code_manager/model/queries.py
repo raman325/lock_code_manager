@@ -16,8 +16,10 @@ entry's:
   operation budgets, confirmation scope, the websocket's ``managed`` flag,
   the unmanaged-code sweep, and the numbers allocation treats as claimed by
   other entries.
-- ``configured_owner``: the entry holding one slot, first match wins.
-  Duplicate-code attribution, and crediting a credential use to an entry.
+- ``configured_owner``: the entry holding one slot, the oldest if old storage
+  has two. Which entry writes the slot on the lock (a younger one never does,
+  even while the oldest is disabled or reloading), duplicate-code
+  attribution, and crediting a credential use to an entry.
 
 Entries that are not ignored, in any load state, disabled ones included:
 
@@ -111,14 +113,21 @@ def _configuring(
 def _owner(
     entries: Iterable[ConfigEntry], lock_entity_id: str, code_slot: int | str
 ) -> ConfigEntry | None:
-    """Return the first of ``entries`` with a user at the slot on the lock."""
-    return next(
+    """
+    Return the oldest of ``entries`` with a user at the slot on the lock.
+
+    By when each was created, then by entry id: the same entry whatever order
+    they load or claim the slot in (entries from before Home Assistant kept a
+    creation time all share one, and fall to their ids).
+    """
+    return min(
         (
             entry
             for entry, config in _configuring(entries, lock_entity_id)
             if config.has_slot(code_slot)
         ),
-        None,
+        key=lambda entry: (entry.created_at, entry.entry_id),
+        default=None,
     )
 
 
@@ -170,7 +179,9 @@ def configured_owner(
     Return the entry whose user holds the slot on the lock, in any state.
 
     Disabled and ignored entries count. There should be at most one, by the
-    config flow's uniqueness check; if storage holds more, the first wins.
+    config flow's uniqueness check; if storage holds more, the oldest wins.
+    It owns the slot on the lock even while it is disabled or reloading:
+    nothing else writes it until that entry stops configuring the slot.
     """
     return _owner(_every_entry(hass), lock_entity_id, code_slot)
 
