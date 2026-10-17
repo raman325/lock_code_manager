@@ -12,6 +12,7 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.matter import lock_helpers as matter_lock_helpers
 from homeassistant.components.matter.helpers import get_node_from_device_entry
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -3449,6 +3450,428 @@ class TestReleaseManagedSlot:
         clear_user.assert_not_called()
         clear_credential.assert_not_called()
         assert set_user.call_args.kwargs["user_name"] == "Carol"
+
+    # -- A lock that cannot list its users (#1689) ----------------------------
+
+    @staticmethod
+    def _patch_unlisted() -> Any:
+        """Patch get_lock_users to fail, as the Aqara U400 in #1689 did."""
+        return patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(side_effect=HomeAssistantError("Failure (code 1)")),
+        )
+
+    @staticmethod
+    def _patch_get_user(matter_lock: MatterLock, answer: Any) -> Any:
+        """Patch the single GetUser to answer ``answer``, or raise it."""
+        client, _node = matter_lock._require_client_and_node()
+        mock = (
+            AsyncMock(side_effect=answer)
+            if isinstance(answer, BaseException)
+            else AsyncMock(return_value=answer)
+        )
+        return patch.object(client, "send_device_command", mock)
+
+    @staticmethod
+    def _get_user_answer(name: str, credentials: list[tuple[int, int]]) -> dict:
+        """A GetUser answer for user 42 (credential type 1 is a PIN, 2 a card)."""
+        return {
+            "userIndex": 42,
+            "userName": name,
+            "userStatus": 1,
+            "userType": 0,
+            "credentialRule": 0,
+            "credentials": [
+                {"credentialType": kind, "credentialIndex": index}
+                for kind, index in credentials
+            ],
+            "creatorFabricIndex": 1,
+            "lastModifiedFabricIndex": 1,
+            "nextUserIndex": None,
+        }
+
+    @staticmethod
+    def _patch_statuses(by_index: dict[int, dict[str, Any]]) -> Any:
+        """Patch get_lock_credential_status to answer per credential index."""
+
+        async def _status(*_args: Any, credential_index: int, **_kw: Any) -> dict:
+            return by_index[credential_index]
+
+        return patch(
+            f"{_PROVIDER_MODULE}.get_lock_credential_status",
+            AsyncMock(side_effect=_status),
+        )
+
+    async def test_unlisted_release_clears_only_lcm_s_recorded_pin(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        The listing and the user's own read fail: LCM's recorded PIN is cleared by its index.
+
+        Of two PINs recorded on the user, only the one Home Assistant's fabric
+        made is cleared. The user is never cleared or renamed -- what else it
+        holds cannot be seen -- and the warning says it may remain.
+        """
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7, 8}
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        set_user = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(matter_lock, UnknownError("Failure")),
+            self._patch_statuses(
+                {
+                    7: {
+                        "credential_exists": True,
+                        "user_index": 42,
+                        "creator_fabric_index": self._HA_FABRIC,
+                    },
+                    8: {
+                        "credential_exists": True,
+                        "user_index": 42,
+                        "creator_fabric_index": self._HA_FABRIC + 1,
+                    },
+                }
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        clear_credential.assert_called_once()
+        assert clear_credential.call_args.kwargs["credential_index"] == 7
+        clear_user.assert_not_called()
+        set_user.assert_not_called()
+        assert matter_lock._slot_by_user_index == {42: 5}
+        assert matter_lock._pins_by_user_index == {42: {8}}
+        assert "index(es) 7 on user 42" in caplog.text
+        assert "remove it in the lock vendor's app" in caplog.text
+
+    @pytest.mark.parametrize(
+        "missing", ["_get_lock_endpoint_or_raise", "_format_user_response"]
+    )
+    async def test_unlisted_release_without_ha_s_single_user_read_clears_the_pin(
+        self,
+        matter_lock: MatterLock,
+        monkeypatch: pytest.MonkeyPatch,
+        missing: str,
+    ) -> None:
+        """
+        Home Assistant no longer has the private helpers the single read uses.
+
+        The read fails like an unanswered one, so the release falls back to
+        clearing LCM's recorded PIN, rather than the integration failing to
+        load.
+        """
+        monkeypatch.delattr(matter_lock_helpers, missing)
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        send = AsyncMock()
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        client, _node = matter_lock._require_client_and_node()
+        with (
+            self._patch_unlisted(),
+            patch.object(client, "send_device_command", send),
+            self._patch_status(creator_fabric_index=self._HA_FABRIC),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        send.assert_not_called()
+        clear_user.assert_not_called()
+        clear_credential.assert_called_once()
+        assert clear_credential.call_args.kwargs["credential_index"] == 7
+
+    @pytest.mark.parametrize(
+        "status",
+        [
+            {"creator_fabric_index": 2},
+            {"user_index": 41},
+            {"credential_exists": False},
+        ],
+        ids=["another_fabric_s", "another_user_s", "gone"],
+    )
+    @pytest.mark.parametrize("written", [True, False], ids=["written", "unwritten"])
+    async def test_unlisted_release_leaves_a_pin_that_is_not_lcm_s(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        caplog: pytest.LogCaptureFixture,
+        status: dict[str, Any],
+        written: bool,
+    ) -> None:
+        """
+        A recorded index the lock says is not LCM's PIN on this user is left alone.
+
+        Said at WARNING only if LCM had written a PIN for the slot.
+        """
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(matter_lock, UnknownError("Failure")),
+            self._patch_statuses(
+                {
+                    7: {
+                        "credential_exists": True,
+                        "user_index": 42,
+                        "creator_fabric_index": self._HA_FABRIC,
+                    }
+                    | status
+                }
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+        ):
+            await matter_lock.async_release_managed_slot(5, written=written)
+
+        clear_credential.assert_not_called()
+        clear_user.assert_not_called()
+        assert matter_lock._pins_by_user_index == {42: {7}}
+        assert ("nothing was removed" in caplog.text) is written
+
+    @pytest.mark.parametrize(
+        ("slots", "pins"),
+        [({}, {}), ({42: 5, 43: 5}, {42: {7}, 43: {8}}), ({42: 5}, {42: set()})],
+        ids=["nothing_recorded", "two_users_recorded", "no_pin_recorded"],
+    )
+    async def test_unlisted_release_does_not_guess(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        slots: dict[int, int],
+        pins: dict[int, set[int]],
+    ) -> None:
+        """
+        No single recorded user with a recorded PIN: the listing's failure is raised.
+
+        Nothing is asked of the lock and nothing is cleared; the release is
+        retried.
+        """
+        matter_lock._slot_by_user_index.update(slots)
+        matter_lock._pins_by_user_index.update(pins)
+        status = AsyncMock()
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(matter_lock, UnknownError("Failure")),
+            patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            pytest.raises(LockDisconnected, match="get_lock_users"),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        status.assert_not_called()
+        clear_credential.assert_not_called()
+        clear_user.assert_not_called()
+
+    async def test_unlisted_release_with_an_unknown_fabric_removes_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """Whose a recorded PIN is cannot be told: raised, to retry."""
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        status = AsyncMock()
+        clear_credential = AsyncMock(return_value=None)
+        _client, node = matter_lock._require_client_and_node()
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(matter_lock, UnknownError("Failure")),
+            patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            patch.object(node, "get_attribute_value", return_value=None),
+            pytest.raises(LockDisconnected, match="fabric index"),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        status.assert_not_called()
+        clear_credential.assert_not_called()
+
+    async def test_unlisted_release_with_a_failed_status_read_removes_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A recorded PIN's status went unanswered: raised, to retry."""
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        clear_credential = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(matter_lock, UnknownError("Failure")),
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_credential_status",
+                AsyncMock(side_effect=HomeAssistantError("timed out")),
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            pytest.raises(LockDisconnected, match="get_lock_credential_status"),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        clear_credential.assert_not_called()
+        assert matter_lock._pins_by_user_index == {42: {7}}
+
+    @pytest.mark.parametrize(
+        ("credentials", "deleted"),
+        [([(1, 7)], True), ([(1, 7), (2, 1)], False)],
+        ids=["only_lcm_s_pin", "a_card_too"],
+    )
+    async def test_unlisted_release_reads_the_recorded_user(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        credentials: list[tuple[int, int]],
+        deleted: bool,
+    ) -> None:
+        """
+        The listing fails, but the recorded user reads: it is released as listed.
+
+        Holding only LCM's PIN, it is cleared with ClearUser; holding a card
+        too, LCM's PIN is cleared and the user renamed without the tag.
+        """
+        matter_lock._slot_by_user_index[42] = 5
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        set_user = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(
+                matter_lock, self._get_user_answer("lcm:5:Carol", credentials)
+            ),
+            self._patch_status(creator_fabric_index=self._HA_FABRIC),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        if deleted:
+            clear_user.assert_called_once()
+            clear_credential.assert_not_called()
+            set_user.assert_not_called()
+        else:
+            clear_user.assert_not_called()
+            assert clear_credential.call_args.kwargs["credential_index"] == 7
+            assert set_user.call_args.kwargs["user_name"] == "Carol"
+        assert 42 not in matter_lock._slot_by_user_index
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            {"userName": "Guest"},
+            {"userName": "lcm:6:Dan"},
+            {"userName": None, "userStatus": None, "credentials": None},
+        ],
+        ids=["untagged", "another_slot_s", "empty"],
+    )
+    @pytest.mark.parametrize("written", [True, False], ids=["written", "unwritten"])
+    async def test_unlisted_release_of_a_user_no_longer_lcm_s_removes_nothing(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        caplog: pytest.LogCaptureFixture,
+        answer: dict[str, Any],
+        written: bool,
+    ) -> None:
+        """The recorded user reads, but without this slot's tag: nothing is removed."""
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        status = AsyncMock()
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        set_user = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(
+                matter_lock, self._get_user_answer("lcm:5:Carol", [(1, 7)]) | answer
+            ),
+            patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+        ):
+            await matter_lock.async_release_managed_slot(5, written=written)
+
+        status.assert_not_called()
+        clear_user.assert_not_called()
+        clear_credential.assert_not_called()
+        set_user.assert_not_called()
+        assert matter_lock._slot_by_user_index == {}
+        assert matter_lock._pins_by_user_index == {}
+        assert ("nothing was removed" in caplog.text) is written
+
+    async def test_release_prefers_the_listing_over_the_record(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """When the lock can list its users, a stale record is never acted on."""
+        matter_lock._slot_by_user_index[99] = 5  # stale: the index was reused
+        matter_lock._pins_by_user_index[99] = {3}
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        with (
+            self._patch_users([self._CAROL]),
+            self._patch_status(creator_fabric_index=self._HA_FABRIC),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        clear_user.assert_called_once()
+        call = clear_user.call_args
+        assert 42 in call.args or call.kwargs.get("user_index") == 42
+        clear_credential.assert_not_called()
+
+    async def test_the_pin_record_follows_reads_writes_and_deletes(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """
+        A read records a tagged user's PINs, a write adds the index it wrote, a delete drops them.
+
+        An untagged user is never recorded.
+        """
+        stranger = {
+            "user_index": 3,
+            "user_name": "Guest",
+            "credentials": [{"type": "pin", "index": 1}],
+        }
+        with self._patch_users([self._CAROL, stranger]):
+            await matter_lock.async_get_users()
+        assert matter_lock._pins_by_user_index == {42: {7}}
+
+        with (
+            self._patch_users([self._CAROL]),
+            self._patch_status(),
+            patch(
+                f"{_PROVIDER_MODULE}.set_lock_credential",
+                AsyncMock(return_value={"credential_index": 9, "user_index": 42}),
+            ),
+        ):
+            await matter_lock.async_set_credential(
+                42,
+                Credential(
+                    type=CredentialType.PIN,
+                    slot=5,
+                    state=SlotCredential.known("1234"),
+                ),
+                "1234",
+                name="Carol",
+                source="direct",
+            )
+        assert matter_lock._pins_by_user_index == {42: {7, 9}}
+
+        with patch(f"{_PROVIDER_MODULE}.clear_lock_user", AsyncMock()):
+            await matter_lock.async_delete_user(42)
+        assert 42 not in matter_lock._pins_by_user_index
+        assert 42 not in matter_lock._slot_by_user_index
 
 
 # =============================================================================

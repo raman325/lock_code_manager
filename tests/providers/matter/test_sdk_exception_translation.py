@@ -28,6 +28,8 @@ _SDK_FUNCTION_NAMES = frozenset(
         "set_lock_credential",
         "clear_lock_credential",
         "get_lock_credential_status",
+        # The raw single-user GetUser (no lock helper exists for it).
+        "send_device_command",
     }
 )
 

@@ -11,8 +11,9 @@ and occupancy updates (LockUserChange).
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal, override
+from typing import Any, Literal, cast, override
 
+from chip.clusters import Objects as clusters
 from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import (
     MatterError,
@@ -22,6 +23,7 @@ from matter_server.common.errors import (
 )
 from matter_server.common.models import EventType
 
+from homeassistant.components.matter import lock_helpers as matter_lock_helpers
 from homeassistant.components.matter.const import (
     DOMAIN as MATTER_DOMAIN,
     ID_TYPE_DEVICE_ID,
@@ -197,6 +199,11 @@ class MatterLock(BaseLock):
     # resolved by reading the lock -- ClearUser takes the user and its
     # credentials away together -- so this is what says which slot emptied.
     _slot_by_user_index: dict[int, int] = field(default_factory=dict, init=False)
+    # The PIN credential indices LCM last saw on, or wrote to, each tagged
+    # user. Only a release on a lock that cannot list its users reads it
+    # (#1689); it lives and dies with the user's ``_slot_by_user_index``
+    # entry.
+    _pins_by_user_index: dict[int, set[int]] = field(default_factory=dict, init=False)
 
     @property
     @override
@@ -482,6 +489,35 @@ class MatterLock(BaseLock):
         )
         return lock_data.get("users", [])
 
+    async def _raw_lock_user(self, user_index: int) -> dict[str, Any] | None:
+        """
+        Return one raw user, as ``get_lock_users`` lists it, or ``None`` if empty.
+
+        One GetUser for ``user_index``, for a lock that fails the full walk
+        (#1689). Home Assistant's lock helpers have no single-user read, so
+        this sends the command and formats the answer with their private
+        helpers. They are looked up here, not imported, so a rename in Home
+        Assistant costs only this read (``LockDisconnected``: the caller falls
+        back to the PIN-only release), never the integration's import.
+        """
+        endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
+        format_user = getattr(matter_lock_helpers, "_format_user_response", None)
+        if endpoint_of is None or format_user is None:
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: Home Assistant's Matter lock helpers "
+                f"no longer provide a single-user read"
+            )
+        client, node = self._require_client_and_node()
+        response = await self._invoke_sdk(
+            "get_lock_user",
+            client.send_device_command(
+                node_id=node.node_id,
+                endpoint_id=endpoint_of(node).endpoint_id,
+                command=clusters.DoorLock.Commands.GetUser(userIndex=user_index),
+            ),
+        )
+        return cast(dict[str, Any] | None, format_user(response))
+
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
@@ -513,6 +549,7 @@ class MatterLock(BaseLock):
         # Matter helper types both as ``int | None``.
         users: list[User] = []
         anchors: dict[int, int | None] = {}
+        pins: dict[int, set[int]] = {}
         for raw_user in await self._raw_lock_users():
             user_index = raw_user.get("user_index")
             if user_index is None:
@@ -527,6 +564,7 @@ class MatterLock(BaseLock):
                 credential_index = cred.get("index")
                 if cred.get("type") != "pin" or credential_index is None:
                     continue
+                pins.setdefault(user_index, set()).add(credential_index)
                 slot = (
                     lcm_slot_from_tag
                     if lcm_slot_from_tag is not None
@@ -552,10 +590,16 @@ class MatterLock(BaseLock):
         # user still present overwrites its entry -- or, untagged, removes it.
         for index, anchored in anchors.items():
             if anchored is None:
-                self._slot_by_user_index.pop(index, None)
+                self._forget_user_index(index)
             else:
                 self._slot_by_user_index[index] = anchored
+                self._pins_by_user_index[index] = pins.get(index, set())
         return users
+
+    def _forget_user_index(self, user_index: int) -> int | None:
+        """Drop what LCM recorded about a lock user; return the slot it anchored."""
+        self._pins_by_user_index.pop(user_index, None)
+        return self._slot_by_user_index.pop(user_index, None)
 
     @override
     async def async_get_capabilities(self) -> LockCapabilities:
@@ -738,6 +782,7 @@ class MatterLock(BaseLock):
                 ", ".join(f"{name!r}: {err}" for name, err in prior_failures),
                 name_used,
             )
+        self._forget_user_index(result["user_index"])
         self._slot_by_user_index[result["user_index"]] = slot
         return SetUserResult(user_id=result["user_index"], created=True)
 
@@ -910,7 +955,7 @@ class MatterLock(BaseLock):
         await self._invoke_sdk(
             "clear_lock_user", clear_lock_user(client, node, user_id)
         )
-        self._slot_by_user_index.pop(user_id, None)
+        self._forget_user_index(user_id)
 
     @override
     async def async_release_managed_slot(
@@ -943,19 +988,49 @@ class MatterLock(BaseLock):
         lock under a user renamed in the vendor's app. Otherwise there was
         nothing of LCM's to find.
 
+        A lock that cannot list its users (#1689) is asked for the one user
+        index recorded for ``slot`` instead (one GetUser), which is released
+        as above if it still carries the tag. If that read fails too, LCM's
+        recorded PINs on it are cleared without seeing the user
+        (``_release_recorded_pins``). No single recorded user, or (for the
+        PIN-only path) no recorded PIN: the listing's failure is raised. A
+        listing that works always wins over the record.
+
         Lock-side failures raise, so the release is retried: nothing is
         deleted on an unanswered question about whose a PIN is.
         """
-        user = next(
-            (
-                raw_user
-                for raw_user in await self._raw_lock_users()
-                if raw_user.get("user_index") is not None
-                and raw_user.get("user_name")
-                and parse_tag(raw_user["user_name"])[0] == slot
-            ),
-            None,
-        )
+        try:
+            raw_users = await self._raw_lock_users()
+        except LockDisconnected as err:
+            recorded = [
+                index
+                for index, anchored in self._slot_by_user_index.items()
+                if anchored == slot
+            ]
+            if len(recorded) != 1:
+                raise
+            recorded_index = recorded[0]
+            try:
+                user = await self._raw_lock_user(recorded_index)
+            except LockDisconnected:
+                if not self._pins_by_user_index.get(recorded_index):
+                    raise err from None
+                await self._release_recorded_pins(slot, recorded_index, written=written)
+                return
+            if user is None or parse_tag(user.get("user_name") or "")[0] != slot:
+                self._forget_user_index(recorded_index)
+                user = None
+        else:
+            user = next(
+                (
+                    raw_user
+                    for raw_user in raw_users
+                    if raw_user.get("user_index") is not None
+                    and raw_user.get("user_name")
+                    and parse_tag(raw_user["user_name"])[0] == slot
+                ),
+                None,
+            )
         if user is None:
             if written:
                 LOGGER.warning(
@@ -1012,7 +1087,80 @@ class MatterLock(BaseLock):
                 slot,
             )
             return
-        self._slot_by_user_index.pop(user_index, None)
+        self._forget_user_index(user_index)
+
+    async def _release_recorded_pins(
+        self, slot: int, user_index: int, *, written: bool
+    ) -> None:
+        """
+        Clear LCM's recorded PINs on ``user_index`` without reading the user.
+
+        A recorded PIN is cleared only if the lock says it exists, on this
+        user, created by Home Assistant's fabric; anything else is left (gone,
+        moved, or not LCM's). What else the user holds cannot be seen, so it
+        is neither cleared nor renamed, and may remain with LCM's tag.
+        """
+        client, node = self._require_client_and_node()
+        fabric = self._own_fabric_index(node, slot)
+        recorded = self._pins_by_user_index[user_index]
+        cleared: list[int] = []
+        for credential_index in sorted(recorded):
+            status = await self._invoke_sdk(
+                "get_lock_credential_status",
+                get_lock_credential_status(
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=credential_index,
+                ),
+            )
+            if (
+                not status.get("credential_exists")
+                or status.get("user_index") != user_index
+                or status.get("creator_fabric_index") != fabric
+            ):
+                continue
+            await self._invoke_sdk(
+                "clear_lock_credential",
+                clear_lock_credential(
+                    client,
+                    node,
+                    credential_type="pin",
+                    credential_index=credential_index,
+                ),
+            )
+            recorded.discard(credential_index)
+            cleared.append(credential_index)
+        if cleared:
+            LOGGER.warning(
+                "Lock %s: released slot %s by clearing LCM's PIN(s) at credential "
+                "index(es) %s on user %s, because the lock could not read its "
+                "users. That user may remain on the lock, empty, with LCM's tag; "
+                "no later release will retry it, so remove it in the lock "
+                "vendor's app",
+                self.lock.entity_id,
+                slot,
+                ", ".join(map(str, cleared)),
+                user_index,
+            )
+        elif written:
+            LOGGER.warning(
+                "Lock %s: released slot %s, but the lock could not read its users "
+                "and none of the PINs LCM recorded on user %s is still LCM's, so "
+                "nothing was removed. That user may remain on the lock with "
+                "LCM's tag; no later release will retry it, so remove it in the "
+                "lock vendor's app",
+                self.lock.entity_id,
+                slot,
+                user_index,
+            )
+        else:
+            LOGGER.debug(
+                "Lock %s: no LCM PIN to release for slot %s on user %s",
+                self.lock.entity_id,
+                slot,
+                user_index,
+            )
 
     async def _lcm_pins(
         self,
@@ -1306,6 +1454,8 @@ class MatterLock(BaseLock):
                 ) from retry_err
 
         await self._verify_credential_landed(client, node, slot, user_id, result)
+        if (credential_index := result.get("credential_index")) is not None:
+            self._pins_by_user_index.setdefault(user_id, set()).add(credential_index)
         self._push_credential_update(slot, SlotCredential.unreadable())
         return WriteResult.CONFIRMED
 
@@ -1823,9 +1973,9 @@ class MatterLock(BaseLock):
             ):
                 # Present but untagged: somebody else's user now, whatever
                 # this index anchored before.
-                self._slot_by_user_index.pop(user_index, None)
+                self._forget_user_index(user_index)
         if code_slot is None and resolved.is_empty:
-            code_slot = self._slot_by_user_index.pop(user_index, None)
+            code_slot = self._forget_user_index(user_index)
         if code_slot is None:
             LOGGER.debug(
                 "Lock %s: LockUserChange userIndex %s did not resolve to an "
