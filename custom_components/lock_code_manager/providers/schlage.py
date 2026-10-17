@@ -3,9 +3,9 @@ Schlage WiFi lock provider.
 
 Schlage locks manage access codes by name rather than numeric slot numbers.
 This provider bridges that gap by tagging code names with a slot prefix
-in the format ``[LCM:<slot>] <friendly name>``.  Pre-existing codes
-discovered on the lock are automatically tagged and assigned to the next
-available slot number.
+in the format ``lcm:<slot>:<friendly name>`` (older releases wrote
+``[LCM:<slot>]``, which is still read). A code without the tag is not Lock
+Code Manager's: it is never read as a slot, renamed or deleted.
 
 All lock operations go through the Home Assistant Schlage integration
 services (``schlage.get_codes``, ``schlage.add_code``,
@@ -17,34 +17,30 @@ service returns masked PINs (``****``), so occupied slots report
 ``SlotCredential.empty()``.
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection
-import contextlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import Literal
+from typing import Literal, override
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import STATE_UNAVAILABLE
 
-from ..domain.credentials import (
+from ..const import PENDING_WRITE_TTL
+from ..model.credentials import (
     Credential,
     CredentialRef,
+    SlotCredential,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
+    CodeRejectedError,
     LockCodeManagerProviderError,
-    LockDisconnected,
-    LockOperationFailed,
 )
-from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import (
-    is_masked_code,
     make_tagged_name as _make_tagged_name,
-    parse_tag as _parse_tag,
+    parse_full_tag,
 )
 from .const import LOGGER
 
@@ -58,29 +54,30 @@ class SchlageLock(BaseLock):
 
     Codes on Schlage locks are identified by friendly name, not by slot
     number.  This provider assigns virtual slot numbers by embedding a
-    ``[LCM:<slot>]`` tag in each code's name.
+    ``lcm:<slot>:`` tag in each code's name.
 
     PINs are write-only: ``get_codes`` returns masked values, so the
     coordinator sees ``SlotCredential.unreadable()`` for occupied slots
     and ``SlotCredential.empty()`` for cleared slots.
     """
 
-    # Guards the initial auto-tag pass: skips re-tagging on reconnects so a
-    # drifted device list cannot produce double-tag / rename storms. Reset
-    # on full reload when the provider instance is recreated.
-    _tagged_once: bool = field(default=False, init=False)
+    # The cloud reads back the table from before a write for a while (#1083).
+    read_lag = PENDING_WRITE_TTL
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return SCHLAGE_DOMAIN
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return False
 
     @property
+    @override
     def usercode_scan_interval(self) -> timedelta:
         """Return scan interval for usercodes."""
         return timedelta(minutes=5)
@@ -114,13 +111,16 @@ class SchlageLock(BaseLock):
             )
         return entity_response
 
-    async def _async_add_code(self, name: str, code: str) -> None:
-        """Add a new code with the given name and PIN."""
+    async def _async_add_code(
+        self, name: str, code: str, code_slot: int | None = None
+    ) -> None:
+        """Add a new code with the given name and PIN; a refusal is ``code_slot``'s."""
         entity_id = self.lock.entity_id
         await self.async_call_service(
             SCHLAGE_DOMAIN,
             "add_code",
             service_data={"entity_id": entity_id, "name": name, "code": code},
+            code_slot=code_slot,
         )
 
     async def _async_delete_code(self, name: str) -> None:
@@ -132,172 +132,21 @@ class SchlageLock(BaseLock):
             service_data={"entity_id": entity_id, "name": name},
         )
 
+    @override
     async def async_is_device_available(self) -> bool:
-        """Return whether the Schlage lock device is available for commands."""
-        try:
-            await self._async_get_codes()
-        except LockCodeManagerProviderError as err:
-            LOGGER.debug(
-                "Lock %s: availability check failed: %s",
-                self.lock.entity_id,
-                err,
-            )
-            return False
-        return True
-
-    async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
-        Set up lock by performing initial auto-tagging of unmanaged codes.
+        Return whether the Schlage lock is reachable, per the lock entity's state.
 
-        Idempotent: the tag pass runs only once per provider instance to
-        prevent double-tag / rename storms on reconnect (the device list
-        may have drifted since the previous load).
+        The Schlage integration already asks the cloud about every lock every
+        30 seconds, and its lock entity is available only while that answers
+        and the cloud says the lock itself is connected. Reading that state
+        costs nothing; reading the codes to find out was a full cloud read of
+        them every connection check, outside the worker's pacing.
         """
-        await super().async_setup(config_entry)
-        if self._tagged_once:
-            return
-        await self._async_tag_unmanaged_codes()
-        self._tagged_once = True
+        state = self.hass.states.get(self.lock.entity_id)
+        return state is not None and state.state != STATE_UNAVAILABLE
 
-    async def _async_tag_unmanaged_codes(self) -> None:
-        """
-        Tag unmanaged codes on the lock with Lock Code Manager slot numbers.
-
-        Discovers untagged codes and assigns them to the next available managed
-        slot by renaming (add tagged, delete original). Runs under the
-        sequence lock so concurrent set/clear/hard-refresh callers do not
-        interleave with the multi-step rename.
-        """
-        managed_slots = self.managed_slots
-        if not managed_slots:
-            return
-
-        async with self._serialize_sequence():
-            await self._async_run_tag_pass(managed_slots)
-
-    async def _async_run_tag_pass(self, managed_slots: set[int]) -> None:
-        """
-        Body of the tag pass; caller holds the sequence lock.
-
-        Per-code ``LockDisconnected`` is logged and the loop continues so
-        any remaining codes still get a chance to tag, but the disconnect
-        is re-raised at the end. ``async_setup`` then leaves
-        ``_tagged_once`` False so the reconnect path retries once the lock
-        is reachable. ``LockOperationFailed`` is a per-code condition and
-        does not gate idempotency.
-        """
-        codes = await self._async_get_codes()
-
-        assigned_slots: set[int] = set()
-        # (code_id, original_name, pin)
-        untagged: list[tuple[str, str, str]] = []
-
-        for code_id, code_data in codes.items():
-            name = code_data.get("name", "")
-            pin = code_data.get("code", "")
-            slot_num, _friendly_name = _parse_tag(name)
-            if slot_num is not None:
-                assigned_slots.add(slot_num)
-            else:
-                untagged.append((code_id, name, pin))
-
-        sorted_managed = sorted(managed_slots)
-        next_slot_idx = 0
-        first_disconnect: LockDisconnected | None = None
-        for _code_id, original_name, pin in untagged:
-            if not original_name or not original_name.strip():
-                LOGGER.debug(
-                    "Lock %s: skipping code with empty or whitespace name",
-                    self.lock.entity_id,
-                )
-                continue
-
-            # Empty or all-asterisk (masked) PINs are untaggable.
-            if not pin or is_masked_code(pin):
-                LOGGER.debug(
-                    "Lock %s: skipping untaggable code '%s' (PIN is masked or empty)",
-                    self.lock.entity_id,
-                    original_name,
-                )
-                continue
-
-            # Find next available managed slot
-            prospective_slot: int | None = None
-            while next_slot_idx < len(sorted_managed):
-                candidate = sorted_managed[next_slot_idx]
-                next_slot_idx += 1
-                if candidate not in assigned_slots:
-                    prospective_slot = candidate
-                    break
-
-            if prospective_slot is None:
-                LOGGER.debug(
-                    "Lock %s: no managed slot available for untagged code '%s'",
-                    self.lock.entity_id,
-                    original_name,
-                )
-                continue
-
-            tagged_name = _make_tagged_name(prospective_slot, original_name)
-
-            try:
-                await self._async_add_code(tagged_name, pin)
-            except (LockDisconnected, LockOperationFailed) as err:
-                LOGGER.error(
-                    "Lock %s: failed to tag code '%s' for slot %d: %s",
-                    self.lock.entity_id,
-                    original_name,
-                    prospective_slot,
-                    err,
-                )
-                if first_disconnect is None and isinstance(err, LockDisconnected):
-                    first_disconnect = err
-                continue
-
-            try:
-                await self._async_delete_code(original_name)
-            except (LockDisconnected, LockOperationFailed) as err:
-                LOGGER.warning(
-                    "Lock %s: tagged code added but failed to delete original '%s' "
-                    "for slot %d: %s, attempting rollback",
-                    self.lock.entity_id,
-                    original_name,
-                    prospective_slot,
-                    err,
-                )
-                if first_disconnect is None and isinstance(err, LockDisconnected):
-                    first_disconnect = err
-                try:
-                    await self._async_delete_code(tagged_name)
-                except (LockDisconnected, LockOperationFailed) as rollback_err:
-                    LOGGER.error(
-                        "Lock %s: rollback failed for tagged code '%s', "
-                        "lock may have duplicate entries: %s",
-                        self.lock.entity_id,
-                        tagged_name,
-                        rollback_err,
-                    )
-                    if first_disconnect is None and isinstance(
-                        rollback_err, LockDisconnected
-                    ):
-                        first_disconnect = rollback_err
-                continue
-
-            assigned_slots.add(prospective_slot)
-            LOGGER.debug(
-                "Lock %s: tagged code '%s' as slot %d: '%s'",
-                self.lock.entity_id,
-                original_name,
-                prospective_slot,
-                tagged_name,
-            )
-
-        if first_disconnect is not None:
-            raise LockDisconnected(
-                f"Lock {self.lock.entity_id}: disconnect during tag pass; "
-                "will be retried on reconnect"
-            ) from first_disconnect
-
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading all tagged codes from the Schlage lock.
@@ -306,8 +155,8 @@ class SchlageLock(BaseLock):
         masked values by ``get_codes``), so occupied slots surface as
         ``SlotCredential.unreadable()`` users and empty managed slots surface
         as ``SlotCredential.empty()`` users. Only codes whose slot numbers
-        fall within the managed set are returned. Auto-tagging of unmanaged
-        codes is handled separately by ``_async_tag_unmanaged_codes()``.
+        fall within the managed set are returned; a code without the tag is
+        not one of them.
         """
         managed_slots = self.managed_slots if slots is None else set(slots)
         if not managed_slots:
@@ -321,7 +170,7 @@ class SchlageLock(BaseLock):
         tagged: list[tuple[str, int, str]] = []
         for code_id, code_data in codes.items():
             name = code_data.get("name", "")
-            slot_num, friendly_name = _parse_tag(name)
+            slot_num, friendly_name = parse_full_tag(name)
             if slot_num is not None:
                 tagged.append((code_id, slot_num, friendly_name))
 
@@ -358,6 +207,7 @@ class SchlageLock(BaseLock):
         }
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -374,8 +224,8 @@ class SchlageLock(BaseLock):
         Returns True unconditionally because Schlage Personal Identification
         Numbers are write-only and we cannot determine whether the value
         actually changed. The get/delete/add sequence runs under the sequence
-        lock so concurrent sync ticks cannot interleave their own multi-step
-        writes against the same slot. Ignores ``user_id``; slot-only providers
+        lock so no other caller (the unmanaged-code sweep, allocation) can
+        interleave its own multi-step writes against the same slot. Ignores ``user_id``; slot-only providers
         address the credential by slot.
         """
         code_slot = credential.slot
@@ -387,7 +237,7 @@ class SchlageLock(BaseLock):
             existing_friendly_name: str | None = None
             for code_data in codes.values():
                 code_name = code_data.get("name", "")
-                parsed_slot, friendly = _parse_tag(code_name)
+                parsed_slot, friendly = parse_full_tag(code_name)
                 if parsed_slot == code_slot:
                     existing_full_name = code_name
                     existing_friendly_name = friendly
@@ -398,22 +248,34 @@ class SchlageLock(BaseLock):
 
             # Clear any existing code on this slot before adding. Schlage rejects
             # add_code with a duplicate name, and eventual consistency in the cloud
-            # API means get_codes may not reflect a recently-added code.
+            # API means get_codes may not reflect a recently-added code. A name
+            # not on the lock is a quiet success in core's delete_code, so a
+            # failure here is real: it propagates before the add, or the old
+            # code stays live beside (or, same name, in place of) the new one.
             names_to_delete = {n for n in (existing_full_name, tagged_name) if n}
+            deleted_pins = {
+                code_data.get("code")
+                for code_data in codes.values()
+                if code_data.get("name") in names_to_delete
+            }
             for code_name in names_to_delete:
-                # code may not exist — that's fine
-                with contextlib.suppress(LockDisconnected, LockOperationFailed):
-                    await self._async_delete_code(code_name)
+                await self._async_delete_code(code_name)
 
             try:
-                await self._async_add_code(tagged_name, pin)
-            except (LockDisconnected, LockOperationFailed) as err:
+                await self._async_add_code(tagged_name, pin, code_slot)
+            except CodeRejectedError as err:
                 # Schlage's cloud API has eventual consistency: a delete may not
-                # propagate before the add, causing "already exists".  Since Personal
-                # Identification Numbers are write-only we can't verify the value,
-                # but the code IS on the lock — treat it as success so the sync
-                # manager doesn't loop.
-                if "already exists" not in str(err).lower():
+                # propagate before the add, so the code just deleted is still
+                # read back and the add is refused for its name or its PIN
+                # "already existing". Since Personal Identification Numbers are
+                # write-only we can't verify the value, but the code IS on the
+                # lock — treat it as success so sync doesn't loop.
+                # Any other refusal, a PIN another code holds included, is the
+                # lock's answer.
+                key = getattr(err.__cause__, "translation_key", None)
+                if key != "schlage_name_exists" and (
+                    key != "schlage_code_exists" or pin not in deleted_pins
+                ):
                     raise
 
                 LOGGER.debug(
@@ -430,6 +292,7 @@ class SchlageLock(BaseLock):
         )
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ``ref``; return whether it changed.
@@ -444,7 +307,7 @@ class SchlageLock(BaseLock):
             codes = await self._async_get_codes()
             target_name: str | None = None
             for code_data in codes.values():
-                parsed_slot, _ = _parse_tag(code_data.get("name", ""))
+                parsed_slot, _ = parse_full_tag(code_data.get("name", ""))
                 if parsed_slot == code_slot:
                     target_name = code_data.get("name", "")
                     break
@@ -466,18 +329,9 @@ class SchlageLock(BaseLock):
         )
         return True
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
-        """
-        Perform hard refresh and return all codes.
-
-        Schlage has no cache to invalidate; re-tags unmanaged codes and then
-        reads the current state. Hard refresh is an explicit drift-detection
-        request, so the setup-time idempotency gate does not apply here.
-        """
-        managed_slots = self.managed_slots
-        if managed_slots:
-            async with self._serialize_sequence():
-                await self._async_run_tag_pass(managed_slots)
+        """Return all codes; Schlage keeps no cache, so every read is fresh."""
         return await self.async_get_usercodes()

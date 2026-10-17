@@ -44,18 +44,17 @@ zwave-js/zwave-js#8930 (v16) changes that; the provider's report shim and
 this fake both follow the released driver.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
 import time
 from typing import Any, Literal, Self
 from unittest.mock import MagicMock
 
+from awesomeversion import AwesomeVersion, AwesomeVersionCompareException
 import pytest
 from zwave_js_server.const import CommandClass
 from zwave_js_server.const.command_class.access_control import (
@@ -431,12 +430,15 @@ class FakeZWaveLock:
     ``codes`` is what the lock holds, by slot, when it differs from what the
     dump caches (a masking lock's dump caches asterisks).
 
-    ``driver_before_15_25_2``: the driver before zwave-js/zwave-js#8927
-    (5239ec3c6, released in 15.25.2), still common on add-on installs. On
-    User Code CC it took a supervised Set's outcome at its word: a success
-    persisted nothing, so the cache kept the slot's old values, and a failure
-    was answered Error_Unknown without reading the slot. What
-    ``_async_uc_reconcile_value_db`` in the provider exists for.
+    ``driver_version`` is the driver the client reports connecting to
+    (``client.version``, PY_CLIENT). One before zwave-js/zwave-js#8927
+    (5239ec3c6, released in 15.25.2), still common on add-on installs, is
+    ``driver_before_15_25_2``: on User Code CC it took a supervised Set's
+    outcome at its word: a success persisted nothing, so the cache kept the
+    slot's old values, and a failure was answered Error_Unknown without
+    reading the slot. The worker's read-back after a write that returns is what
+    puts that cache right. A version that does not parse behaves as the
+    current driver.
 
     Faults (``ignore``, ``refuse``, ``fail``, ``hang``, ``drop_reply``,
     ``slow``) act on radio exchanges; see ``NodeFault``.
@@ -458,8 +460,9 @@ class FakeZWaveLock:
         max_user_name_length: int = 16,
         max_credential_hash_length: int = 0,
         pin_lengths: tuple[int, int] = (4, 10),
+        other_credential_types: tuple[int, ...] = (),
         codes: dict[int, str] | None = None,
-        driver_before_15_25_2: bool = False,
+        driver_version: str = "15.31.1",
     ) -> None:
         """Wrap ``node``, seed the driver cache from its dump, and install."""
         self.client = client
@@ -473,11 +476,12 @@ class FakeZWaveLock:
         elif self._supports(SUPERVISION_CC_ID):
             self.supervision = SupervisionStatus.SUCCESS
         self.rejects_duplicates = rejects_duplicates
-        self.driver_before_15_25_2 = driver_before_15_25_2
+        self.driver_version = driver_version
         self.duplicate_parameters = duplicate_parameters
         self.max_user_name_length = max_user_name_length
         self.max_credential_hash_length = max_credential_hash_length
         self.pin_lengths = pin_lengths
+        self.other_credential_types = other_credential_types
         # Every fault not yet cleared; a spent one matches nothing more but
         # may still hold the exchange it met last.
         self.faults: list[NodeFault] = []
@@ -511,6 +515,24 @@ class FakeZWaveLock:
     # ------------------------------------------------------------------
     # The lock, seen from the test
     # ------------------------------------------------------------------
+
+    @property
+    def driver_version(self) -> str:
+        """Return the driver version the client reports."""
+        return self.client.version.driver_version
+
+    @driver_version.setter
+    def driver_version(self, version: str) -> None:
+        """Put the lock behind another driver, as reconnecting to it would."""
+        self.client.version = replace(self.client.version, driver_version=version)
+
+    @property
+    def driver_before_15_25_2(self) -> bool:
+        """Return whether the driver predates zwave-js/zwave-js#8927."""
+        try:
+            return AwesomeVersion(self.driver_version) < AwesomeVersion("15.25.2")
+        except AwesomeVersionCompareException:
+            return False
 
     @property
     def supervision(self) -> SupervisionStatus | None:
@@ -644,6 +666,22 @@ class FakeZWaveLock:
         else:
             self.uc_slots[slot] = (UserIDStatus.ENABLED, code)
         self.report(slot)
+
+    def enroll(self, user_id: int, kind: int, slot: int, data: str) -> None:
+        """
+        Add a credential of ``kind`` to an existing user at the lock, and report it.
+
+        An RFID tag or a fingerprint enrolled at the lock or in the vendor's
+        app: the lock sends a Credential Report of type Added, which the
+        driver persists and turns into a credential event (U3CC:2874-3040).
+        """
+        assert self.uses_user_credential_cc
+        assert user_id in self.users
+        assert kind in self.other_credential_types
+        self.credentials[(kind, slot)] = (user_id, data)
+        self._u3c_credential_report(
+            CredentialReportType.CREDENTIAL_ADDED, user_id, slot, data, kind
+        )
 
     def report(self, slot: int) -> None:
         """Send the lock's own User Code Report of ``slot``, unsolicited."""
@@ -1038,9 +1076,23 @@ class FakeZWaveLock:
             ("maxUserNameLength", self.max_user_name_length),
             ("supportedUserTypes", [UserCredentialUserType.GENERAL]),
             ("supportedCredentialRules", [UserCredentialRule.SINGLE]),
-            ("supportedCredentialTypes", [_PIN]),
+            ("supportedCredentialTypes", [_PIN, *self.other_credential_types]),
         ):
             self._set(_U3C, prop, None, value)
+        for kind in self.other_credential_types:
+            # Enrolled at the lock or in the vendor's app, never by LCM.
+            self._set(
+                _U3C,
+                "credentialCapabilities",
+                kind,
+                {
+                    "numberOfCredentialSlots": self.pin_slots,
+                    "minCredentialLength": 1,
+                    "maxCredentialLength": 32,
+                    "maxCredentialHashLength": self.max_credential_hash_length,
+                    "supportsCredentialLearn": True,
+                },
+            )
         self._set(
             _U3C,
             "credentialCapabilities",

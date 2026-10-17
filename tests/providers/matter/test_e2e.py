@@ -1,9 +1,8 @@
 """Full lifecycle E2E tests for Matter lock provider."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,8 +11,12 @@ from matter_server.client.exceptions import InvalidState
 from matter_server.client.models.node import MatterNode
 from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 
+from homeassistant.components.matter import lock_helpers
 from homeassistant.config_entries import SOURCE_USER, ConfigEntriesFlowManager
 from homeassistant.const import (
     CONF_ENABLED,
@@ -24,30 +27,36 @@ from homeassistant.const import (
     STATE_ON,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
     CONF_USERS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
-    TICK_INTERVAL,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.runtime import (
+    lock_registry,
+)
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
     WriteResult,
-    pin_address,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.matter import MatterLock
+from custom_components.lock_code_manager.sync.slot import Seen
+from custom_components.lock_code_manager.sync.worker import RETRY_AFTER
 
 # Module path where lock_helpers functions are imported in the provider
 from tests.common import (
     async_add_users,
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_options,
     async_set_slot_pin,
     async_switch_slot,
     async_tick_until,
@@ -59,25 +68,18 @@ from tests.common import (
 )
 from tests.conftest import async_advance_time, async_initial_tick
 
+from ...common import TICK_INTERVAL
 from .conftest import FAKE_MATTER_SLOTS, matter_helpers_patched
-from .fake_node import DlStatus, FakeMatterLock, ImStatus
+from .fake_node import DlStatus, DoorLock, FakeMatterLock, ImStatus
+
+_PIN = DoorLock.Enums.CredentialTypeEnum.kPin
 
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
+WORKER = "custom_components.lock_code_manager.sync.worker"
 
 
 class TestFullSetupLifecycle:
     """Verify LCM correctly discovers and sets up the Matter provider."""
-
-    async def test_provider_discovered_as_matter(
-        self,
-        hass: HomeAssistant,
-        lcm_config_entry: MockConfigEntry,
-        lock_entity: er.RegistryEntry,
-    ) -> None:
-        """Verify LCM discovers the Matter lock and creates a MatterLock."""
-        lock = lcm_config_entry.runtime_data.locks.get(lock_entity.entity_id)
-        assert lock is not None
-        assert isinstance(lock, MatterLock)
 
     async def test_coordinator_created(
         self,
@@ -91,16 +93,21 @@ class TestFullSetupLifecycle:
 class TestSetAndClearUsercodes:
     """Verify set/clear operations call the correct Matter helpers via base orchestration."""
 
-    async def test_set_usercode(
+    async def test_set_usercode_optimistic_update(
         self,
         hass: HomeAssistant,
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """Set a code via the base orchestration and verify set_lock_credential was called."""
+        """
+        After set, the provider's push tells the core the slot holds a masked code.
+
+        Matter PINs are write-only so the push carries an unreadable code
+        instead of the actual PIN value. The push comes from
+        async_set_credential; slot 4 is managed by no entry, so the push
+        lands with the lock's untracked codes.
+        """
         matter_mock_helpers["set_lock_credential"].reset_mock()
-        matter_mock_helpers["get_lock_users"].reset_mock()
-        matter_mock_helpers["set_lock_user"].reset_mock()
         with (
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
@@ -119,68 +126,9 @@ class TestSetAndClearUsercodes:
 
         assert result is WriteResult.CONFIRMED
         assert matter_mock_helpers["set_lock_credential"].call_count >= 1
-
-    async def test_clear_usercode(
-        self,
-        hass: HomeAssistant,
-        e2e_matter_lock: MatterLock,
-        matter_mock_helpers: dict[str, AsyncMock],
-    ) -> None:
-        """Clear a code via the base orchestration and verify clear_lock_credential was called."""
-        matter_mock_helpers["clear_lock_credential"].reset_mock()
-        matter_mock_helpers["get_lock_users"].reset_mock()
-        # Slot 2 is occupied (user_index 2) in the default fixture helpers
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                matter_mock_helpers["get_lock_users"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.clear_lock_credential",
-                matter_mock_helpers["clear_lock_credential"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.clear_lock_user",
-                matter_mock_helpers["clear_lock_user"],
-            ),
-        ):
-            result = await e2e_matter_lock.async_clear_usercode(2)
-
-        assert result is True
-        assert matter_mock_helpers["clear_lock_credential"].call_count >= 1
-
-    async def test_set_usercode_optimistic_update(
-        self,
-        hass: HomeAssistant,
-        e2e_matter_lock: MatterLock,
-        matter_mock_helpers: dict[str, AsyncMock],
-    ) -> None:
-        """
-        After set, the coordinator has the optimistic UNREADABLE_CODE value.
-
-        Matter PINs are write-only so optimistic updates use UNREADABLE_CODE
-        instead of the actual PIN value. The push comes from async_set_credential.
-        """
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                matter_mock_helpers["get_lock_users"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.set_lock_user",
-                matter_mock_helpers["set_lock_user"],
-            ),
-            patch(
-                f"{_PROVIDER_MODULE}.set_lock_credential",
-                matter_mock_helpers["set_lock_credential"],
-            ),
-        ):
-            await e2e_matter_lock.async_set_usercode(4, "5678", "Test User")
-
-        assert (
-            e2e_matter_lock.coordinator.data.get(pin_address(4))
-            is SlotCredential.unreadable()
-        )
+        worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
+        assert worker is not None
+        assert worker.port.others.get(4) is Seen.MASKED
 
     async def test_clear_usercode_optimistic_update(
         self,
@@ -188,8 +136,15 @@ class TestSetAndClearUsercodes:
         e2e_matter_lock: MatterLock,
         matter_mock_helpers: dict[str, AsyncMock],
     ) -> None:
-        """After clear, the coordinator has SlotCredential.empty()."""
+        """After clear, the provider pushes an empty slot 2 to the lock's worker."""
+        worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
+        assert worker is not None
+        matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
+        pushed: list[tuple[int, object]] = []
         with (
+            patch.object(
+                worker, "push", lambda slot, value: pushed.append((slot, value))
+            ),
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
                 matter_mock_helpers["get_lock_users"],
@@ -205,10 +160,7 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_clear_usercode(2)
 
-        assert (
-            e2e_matter_lock.coordinator.data.get(pin_address(2))
-            is SlotCredential.empty()
-        )
+        assert (2, Seen.EMPTY) in pushed
 
 
 class TestGetUsercodes:
@@ -319,8 +271,8 @@ class TestOutOfBandDeletion:
         Manage access sends ClearUser, so the lock no longer lists the user
         when the event arrives; the slot it anchored is resolved from the
         provider's last read. The in-sync sensor goes off on the event, the
-        next tick writes the PIN back for the same user, and the sensor
-        returns to on once the lock lists the user again.
+        worker writes the PIN back for the same user, and the sensor
+        returns to on once the write's read-back lists the user again.
         """
         in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, lock_entity.entity_id)
         await async_initial_tick(hass, in_sync)
@@ -342,35 +294,46 @@ class TestOutOfBandDeletion:
         )
 
         matter_mock_helpers["get_lock_users"].return_value = _AFTER_USER_ONE_DELETED
-        matter_mock_helpers["set_lock_credential"].reset_mock()
-        deliver(EventType.NODE_EVENT, _user_cleared_event(matter_node.node_id, 1))
-        await hass.async_block_till_done()
-        assert hass.states.get(in_sync).state == STATE_OFF
+        set_credential = matter_mock_helpers["set_lock_credential"]
+        set_credential.reset_mock()
+        write = set_credential.side_effect
 
-        await async_advance_time(hass, TICK_INTERVAL * 2)
+        async def _write_back(*args: Any, **kwargs: Any) -> Any:
+            # The lock lists the user again once the PIN is written: the
+            # write's read-back sees it.
+            result = await write(*args, **kwargs)
+            matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
+            return result
+
+        set_credential.side_effect = _write_back
+        states: list[str] = []
+        unsub = async_track_state_change_event(
+            hass, in_sync, lambda event: states.append(event.data["new_state"].state)
+        )
+        deliver(EventType.NODE_EVENT, _user_cleared_event(matter_node.node_id, 1))
+        await hass.async_block_till_done(wait_background_tasks=True)
+        unsub()
+        # The deletion turned the sensor off, then the write-back on again.
+        assert states[:1] == [STATE_OFF], states
+
         writes = matter_mock_helpers["set_lock_credential"].await_args_list
         assert any(
             call.kwargs.get("credential_data") == "1234"
             and call.kwargs.get("user_index") == 1
             for call in writes
         ), [call.kwargs for call in writes]
-
-        matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
-        await async_advance_time(hass, TICK_INTERVAL * 3)
         assert hass.states.get(in_sync).state == STATE_ON
 
 
 class TestAddingThroughTheUserInterface:
-    """A Matter lock has nothing for allocation to read, so the flow never waits.
+    """An allocation that finishes at once goes straight on, never to progress.
 
-    Matter allocates its own credential index, so allocation skips the lock
-    and finishes the moment it starts. Shown as progress anyway, the dialog
-    hears nothing: Home Assistant announces the step moved on before the
-    dialog has subscribed to hear it, and setup sits on the progress screen
-    for good (issue #1639).
-
-    These helpers never wait, so a flow that asked the lock would also skip
-    the progress screen; each test checks the lock was asked nothing.
+    Allocation reads a Matter lock's users in one call (the indices writing
+    would adopt), and these helpers answer it without waiting, so it finishes
+    the moment it starts. Shown as progress anyway, the dialog hears nothing:
+    Home Assistant announces the step moved on before the dialog has
+    subscribed to hear it, and setup sits on the progress screen for good
+    (issue #1639). Each test checks that one read was all the lock was asked.
     """
 
     @pytest.fixture(autouse=True)
@@ -419,7 +382,7 @@ class TestAddingThroughTheUserInterface:
         assert result["type"] == "form"
         assert result["step_id"] == "code_slot"
         assert result["description_placeholders"] == {"user_num": 1, "num_users": 3}
-        assert _asked(matter_mock_helpers) == []
+        assert _asked(matter_mock_helpers) == ["get_lock_users"]
 
         for num in (1, 2, 3):
             result = await hass.config_entries.flow.async_configure(
@@ -464,8 +427,113 @@ class TestAddingThroughTheUserInterface:
 
         assert result["type"] == "create_entry"
         assert flow_users(result) == users
-        assert asked_before_saving == [[]]
+        assert asked_before_saving == [["get_lock_users"]]
         await hass.config_entries.async_unload(result["result"].entry_id)
+
+
+class TestAddingTheLockToAnEntry:
+    """
+    Regression for #1684: an added Matter lock's own users are not taken over.
+
+    Writing slot n on a Matter lock adopts an untagged user holding a PIN at
+    credential index n, renaming them and writing over their PIN. The
+    options flow reads the lock for those before letting it join.
+    """
+
+    async def _async_add(
+        self,
+        hass: HomeAssistant,
+        lock: er.RegistryEntry,
+        slots: dict[int, dict[str, Any]] = FAKE_MATTER_SLOTS,
+    ) -> dict[str, Any]:
+        """Add ``lock`` to an entry on no lock whose users hold ``slots``."""
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: []},
+            subentries_data=user_subentries(slots),
+        )
+        entry.add_to_hass(hass)
+        started = await hass.config_entries.options.async_init(entry.entry_id)
+        return await async_configure_options(
+            hass, started["flow_id"], {CONF_LOCKS: [lock.entity_id]}
+        )
+
+    async def test_a_user_at_one_of_the_entry_s_indices_keeps_the_lock_out(
+        self,
+        hass: HomeAssistant,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Mom, added through Home Assistant's own Matter actions, is named."""
+        await _async_add_user(fake_matter_lock, "Mom", credential_index=1)
+
+        result = await self._async_add(hass, fake_matter_lock_entity)
+
+        assert result["type"] == "form"
+        assert result["errors"] == {"base": "existing_codes"}
+        assert result["description_placeholders"] == {
+            "error_lock": fake_matter_lock_entity.entity_id,
+            "slots": "1",
+        }
+        assert fake_matter_lock.holds(1) == "246810"
+
+    @pytest.mark.parametrize(
+        ("name", "credential_index"), [("lcm:1:Old", 1), ("Mom", 3)]
+    )
+    async def test_a_tagged_user_or_one_elsewhere_lets_the_lock_in(
+        self,
+        hass: HomeAssistant,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        name: str,
+        credential_index: int,
+    ) -> None:
+        """Lock Code Manager's own user, or one at no index of the entry's, is not in the way."""
+        await _async_add_user(fake_matter_lock, name, credential_index=credential_index)
+
+        result = await self._async_add(hass, fake_matter_lock_entity)
+
+        assert result["type"] == "create_entry"
+        assert result["data"][CONF_LOCKS] == [fake_matter_lock_entity.entity_id]
+
+    async def test_a_lock_another_entry_holds_is_read_in_its_turn(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Shared with an entry on slots 1 and 2, Mom at index 3 is still named."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        await _async_add_user(fake_matter_lock, "Mom", credential_index=3)
+
+        result = await self._async_add(
+            hass,
+            fake_matter_lock_entity,
+            {3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: True}},
+        )
+
+        assert result["errors"] == {"base": "existing_codes"}
+        assert result["description_placeholders"]["slots"] == "3"
+
+
+async def _async_add_user(
+    fake: FakeMatterLock, name: str, *, credential_index: int
+) -> None:
+    """Put a user and its PIN on the lock through Home Assistant's own Matter actions."""
+    added = await lock_helpers.set_lock_credential(
+        fake.client,
+        fake.node,
+        credential_type="pin",
+        credential_data="246810",
+        credential_index=credential_index,
+    )
+    await lock_helpers.set_lock_user(
+        fake.client, fake.node, user_index=added["user_index"], user_name=name
+    )
 
 
 def _asked(helpers: dict[str, AsyncMock]) -> list[str]:
@@ -559,6 +627,7 @@ class TestKeypadAndSwitch:
             if state.attributes.get("code_slot") == 2
         )
         before = hass.states.get(event_entity).state
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
         fake_matter_lock.keypad_unlock(
             _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
@@ -566,6 +635,7 @@ class TestKeypadAndSwitch:
         await async_advance_sync_ticks(hass, freezer)
 
         assert hass.states.get(event_entity).state != before
+        assert [event.data["name"] for event in used] == ["slot2"]
 
     async def test_turning_a_user_off_takes_its_pin_off_the_lock(
         self,
@@ -611,18 +681,43 @@ class TestStartup:
         Right after a restart the lock answered SetCredential with status 133
         (InvalidField, which Home Assistant names ``unknown(133)``), and the
         client, not yet connected, raised ``InvalidState`` (MS_CLIENT:771-772):
-        the slots were disabled or suspended for good. Each slot is refused
-        more times than the breaker allows.
+        the slots were disabled or suspended for good. Here the lock refuses
+        every write for its first stretch of time; each slot waits longer
+        before each try again, so its last try lands once the lock is ready.
         """
-        refusals = len(FAKE_MATTER_SLOTS) * MAX_SYNC_ATTEMPTS
+        not_ready_for = RETRY_AFTER[0] + RETRY_AFTER[1] / 2
         refused = fake_matter_lock.refuse(
-            "SetCredential", status=DlStatus.kInvalidField, times=refusals
+            "SetCredential", status=DlStatus.kInvalidField
         )
         not_connected = fake_matter_lock.fail(
-            "SetUser", error=InvalidState("Not connected"), times=MAX_SYNC_ATTEMPTS
+            "SetUser", error=InvalidState("Not connected")
         )
 
+        # The spacing that ships (imported before the harness zeroes it).
+        with patch(f"{WORKER}.RETRY_AFTER", RETRY_AFTER):
+            await self._a_lock_not_ready_for(
+                hass,
+                freezer,
+                fake_matter_lock_entity,
+                refused,
+                not_connected,
+                not_ready_for,
+            )
+
+    async def _a_lock_not_ready_for(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock_entity: er.RegistryEntry,
+        refused: Any,
+        not_connected: Any,
+        not_ready_for: float,
+    ) -> None:
         async with _entry_on(hass, fake_matter_lock_entity) as entry:
+            await async_advance_clock(hass, freezer, not_ready_for)
+            assert refused.hits + not_connected.hits > 0
+            refused.clear()
+            not_connected.clear()
             await async_tick_until(
                 hass,
                 freezer,
@@ -630,12 +725,10 @@ class TestStartup:
                     _states(hass, entry, fake_matter_lock_entity, slot)[0] == STATE_ON
                     for slot in FAKE_MATTER_SLOTS
                 ),
-                max_ticks=4 * refusals,
+                max_ticks=int(RETRY_AFTER[1]),
                 what="every slot in sync",
             )
 
-            assert refused.hits == refusals
-            assert not_connected.hits == MAX_SYNC_ATTEMPTS
             assert lcm_issue_ids(hass, "slot_disabled") == []
             assert lcm_issue_ids(hass, "slot_suspended") == []
 
@@ -823,18 +916,6 @@ class TestOtherUsersOnTheLock:
 
         assert FAKE_MATTER_SLOTS[1][CONF_PIN] in fake_matter_lock.codes.values()
 
-
-class TestOpenBugs:
-    """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
-
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open: a turned-off slot's clear adopts an untagged user holding a "
-            "PIN at the slot's credential index and removes the homeowner's code"
-        ),
-    )
     async def test_a_turned_off_user_leaves_a_homeowner_s_code_alone(
         self,
         hass: HomeAssistant,
@@ -846,10 +927,13 @@ class TestOpenBugs:
         Neither turning a user off nor deleting it removes a code Lock Code Manager did not write.
 
         Slot 3's user is turned off, so nothing was ever written for it, and
-        the homeowner's own user holds a PIN at credential index 3. #1518
-        (PR #1522) kept the release from adopting that untagged user; the
-        turned-off slot's clear still adopts it by the old index-equals-slot
-        rule and clears the homeowner's credential before any release runs.
+        the homeowner's own user holds a PIN at credential index 3. Regression
+        for #1518: PR #1522 kept the release from adopting that untagged
+        user; the turned-off slot's clear still adopted it by the old
+        index-equals-slot rule and cleared the homeowner's credential before
+        any release ran. And for #1695: the slot read the homeowner's code as
+        its own, so the clear that leaves it alone never brought it in sync,
+        and it was suspended with a repair nothing could resolve.
         """
         fake_matter_lock.program(7, "777777", name="Mom", credential_index=3)
         slots = {
@@ -859,7 +943,17 @@ class TestOpenBugs:
         async with _entry_on(
             hass, fake_matter_lock_entity, slots, "batch5_release"
         ) as entry:
-            await _async_settle(hass, freezer, entry, fake_matter_lock_entity)
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            await async_advance_sync_ticks(hass, freezer, 5)
+
+            assert _states(hass, entry, fake_matter_lock_entity, 3) == (STATE_ON, "")
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+            worker = lock_registry(hass).worker(fake_matter_lock_entity.entity_id)
+            assert worker is not None
+            # Reported as a code nobody here manages.
+            assert worker.port.others[3] is Seen.MASKED
+            assert fake_matter_lock.holds(3) == "777777"
+
             subentry = next(
                 (s for s in entry.subentries.values() if s.data.get(CONF_SLOT) == 3),
                 None,
@@ -875,6 +969,603 @@ class TestOpenBugs:
 
             assert fake_matter_lock.holds(3) == "777777"
             assert fake_matter_lock.users[7].name == "Mom"
+            assert lcm_issue_ids(hass, "slot_suspended") == []
+
+    async def test_a_turned_on_slot_still_adopts_a_user_at_its_index(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        An untagged user at a slot's index is the slot's to adopt when it wants a PIN.
+
+        How Lock Code Manager 2.0 left its users: the write tags the user and
+        puts the slot's PIN on it, instead of leaving it holding the old one
+        (#1695 reads that user as someone else's code only while the slot is off).
+        """
+        await _async_add_user(fake_matter_lock, "Old", credential_index=3)
+        user_index = fake_matter_lock.owner(3)
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: True},
+        }
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_adopt"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+
+            assert fake_matter_lock.holds(3) == "333333"
+            assert fake_matter_lock.owner(3) == user_index
+            assert user_index is not None
+            assert parse_tag(fake_matter_lock.users[user_index].name)[0] == 3
+
+    async def test_a_user_at_a_slot_s_index_the_lock_will_not_rename_is_named(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        No PIN goes on a user the slot cannot tag, and the repair says why.
+
+        Slot 3 is on, and the homeowner's user, made by another admin, holds
+        a PIN at credential index 3. Writing the slot adopts that user, but
+        Matter lets only the fabric that made a user rename it. A PIN written
+        onto a user left untagged could never be cleared (#1518), so none is
+        written; the slot was then held with "the lock did not take the code"
+        and advice about the Thread link, which pointed nowhere near the cause.
+        """
+        fake_matter_lock.program(7, "777777", name="Mom", credential_index=3)
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: True},
+        }
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [fake_matter_lock_entity.entity_id]},
+            subentries_data=user_subentries(slots),
+            unique_id="batch5_foreign_on",
+        )
+        entry.add_to_hass(hass)
+        # Not settled here: the slot's tries are paced by the clock.
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        try:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: bool(lcm_issue_ids(hass, "slot_suspended")),
+                max_ticks=20,
+                what="slot 3 held",
+            )
+
+            assert fake_matter_lock.holds(3) == "777777"
+            assert fake_matter_lock.users[7].name == "Mom"
+            assert "333333" not in fake_matter_lock.codes.values()
+            issue = ir.async_get(hass).async_get_issue(
+                DOMAIN,
+                f"slot_suspended_{entry.entry_id}_{fake_matter_lock_entity.entity_id}_3",
+            )
+            assert issue is not None
+            assert issue.translation_placeholders is not None
+            reason = issue.translation_placeholders["reason"]
+            assert reason.startswith("User 7 on the lock holds a PIN at this slot's")
+            assert "may not let Lock Code Manager rename it" in reason
+            assert "If this keeps happening, check that user" in reason
+            assert "lock maker's app" in reason
+            # Advice about the Thread link points away from the cause.
+            assert "Thread" not in reason
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_node_it_cannot_reach_is_not_a_user_to_remove(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A rename that never reached the lock does not send anyone to the vendor's app.
+
+        Lock Code Manager 2.0's own user for slot 3 is untagged at index 3, so
+        the write adopts it. The server answering that it cannot reach the
+        node is no refusal of the name: blaming the user at the index would
+        have the homeowner remove a code that is Lock Code Manager's own.
+        """
+        fake_matter_lock.program(7, "333333", name="slot3", credential_index=3)
+        fake_matter_lock.fail("SetUser")
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "444444", CONF_ENABLED: True},
+        }
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [fake_matter_lock_entity.entity_id]},
+            subentries_data=user_subentries(slots),
+            unique_id="batch5_adopt_unreachable",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        try:
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: bool(lcm_issue_ids(hass, "slot_suspended")),
+                max_ticks=40,
+                what="slot 3 held",
+            )
+
+            assert fake_matter_lock.users[7].name == "slot3"
+            issue = ir.async_get(hass).async_get_issue(
+                DOMAIN,
+                f"slot_suspended_{entry.entry_id}_{fake_matter_lock_entity.entity_id}_3",
+            )
+            assert issue is not None
+            assert issue.translation_placeholders is not None
+            reason = issue.translation_placeholders["reason"]
+            # Unexplained: the generic reason, as any transport failure.
+            assert reason.startswith(
+                "the lock did not take the code after several tries"
+            )
+            assert "lock maker's app" not in reason
+        finally:
+            await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _async_remove_user(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entry: MockConfigEntry,
+    slot: int,
+) -> None:
+    """Delete the slot's user from the entry, and let its release run."""
+    if not hass.config_entries.async_remove_subentry(
+        entry, subentry_id_for_slot(entry, slot)
+    ):
+        pytest.fail(f"slot {slot}'s user could not be removed")
+    await hass.async_block_till_done()
+    await async_advance_sync_ticks(hass, freezer, 3)
+
+
+def _released_warnings(caplog: pytest.LogCaptureFixture, slot: int) -> list[str]:
+    """Return the warnings that a release of ``slot`` found no LCM-tagged user."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING
+        and f"released slot {slot}, but no user" in record.getMessage()
+    ]
+
+
+class TestReleaseKeepsWhatLCMDidNotWrite:
+    """A deleted user takes only LCM's PIN off the lock: what the vendor's app added stays."""
+
+    async def test_a_user_holding_only_lcm_s_pin_is_deleted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """One ClearUser, whose cascade takes the PIN; slot 1's user is untouched."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        other = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
+        )
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        assert user_index not in fake_matter_lock.users
+        assert pin not in fake_matter_lock.codes.values()
+        assert other in fake_matter_lock.users
+        written = [
+            (exchange.command, exchange.index)
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+        ]
+        assert written == [("ClearUser", user_index)]
+
+    @pytest.mark.parametrize(
+        "kind",
+        [
+            DoorLock.Enums.CredentialTypeEnum.kRfid,
+            DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+        ],
+        ids=["rfid", "fingerprint"],
+    )
+    async def test_a_credential_added_in_the_vendor_app_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        kind: int,
+    ) -> None:
+        """
+        Only LCM's PIN goes; the user keeps its card, without LCM's tag.
+
+        ClearUser would cascade to the card. Left tagged, the user would be
+        taken for slot 2's again the next time slot 2 is used, card and all.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index, kind)
+        await async_advance_sync_ticks(hass, freezer)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        user = fake_matter_lock.users[user_index]
+        assert user.credentials == [(kind, 1)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert user.name
+        assert parse_tag(user.name)[0] is None
+        assert len(user.name.encode()) <= 9
+        assert fake_matter_lock.sent("ClearUser") == []
+        assert lcm_issue_ids(hass, "slot_suspended") == []
+
+    @pytest.mark.parametrize(
+        ("display", "kept"),
+        [("Ann", "Ann"), ("123", None)],
+        ids=["its_display_name", "a_number_would_read_as_a_tag"],
+    )
+    async def test_a_kept_user_goes_by_a_name_that_is_no_tag(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        display: str,
+        kept: str | None,
+    ) -> None:
+        """Its display name, unless that would read as a slot: then ``User<index>``."""
+        slots = {3: {CONF_NAME: display, CONF_PIN: "333333", CONF_ENABLED: True}}
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_kept_name"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, "333333"))
+            assert user_index is not None
+            assert fake_matter_lock.users[user_index].name == f"lcm:3:{display}"
+            fake_matter_lock.enroll(user_index)
+            await async_advance_sync_ticks(hass, freezer)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert fake_matter_lock.users[user_index].name == (
+                kept or f"User{user_index}"
+            )
+
+    async def test_lcm_s_pin_is_cleared_where_the_lock_filed_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The PIN cleared is the one at the lock's credential index, not the slot's number.
+
+        The lock allocates the index itself: slot 3's PIN, the only one, is
+        filed at index 1.
+        """
+        slots = {3: {CONF_NAME: "Ann", CONF_PIN: "333333", CONF_ENABLED: True}}
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_pin_index"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            index = _index_of(fake_matter_lock, "333333")
+            assert index != 3
+            user_index = fake_matter_lock.owner(index)
+            assert user_index is not None
+            fake_matter_lock.enroll(user_index)
+            await async_advance_sync_ticks(hass, freezer)
+            sent = len(fake_matter_lock.commands)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert "333333" not in fake_matter_lock.codes.values()
+            assert fake_matter_lock.users[user_index].credentials == [
+                (DoorLock.Enums.CredentialTypeEnum.kRfid, 1)
+            ]
+            assert [
+                (exchange.command, exchange.index)
+                for exchange in fake_matter_lock.commands[sent:]
+                if exchange.command == "ClearCredential"
+            ] == [("ClearCredential", index)]
+
+    async def test_a_second_pin_added_in_the_vendor_app_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Another PIN on LCM's user is not LCM's: only LCM's own is cleared."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.enroll(
+            user_index, DoorLock.Enums.CredentialTypeEnum.kPin, index=5
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        user = fake_matter_lock.users[user_index]
+        assert user.credentials == [(DoorLock.Enums.CredentialTypeEnum.kPin, 5)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert parse_tag(user.name)[0] is None
+        assert fake_matter_lock.sent("ClearUser") == []
+
+    async def test_a_user_the_lock_will_not_rename_still_loses_lcm_s_pin(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """The PIN is gone, so the release is done; the tag left behind is warned about."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index)
+        await async_advance_sync_ticks(hass, freezer)
+        name = fake_matter_lock.users[user_index].name
+        fake_matter_lock.refuse("SetUser", user_index)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        user = fake_matter_lock.users[user_index]
+        assert pin not in fake_matter_lock.codes.values()
+        assert user.credentials == [(DoorLock.Enums.CredentialTypeEnum.kRfid, 1)]
+        assert user.name == name
+        assert lcm_issue_ids(hass, "slot_suspended") == []
+        warnings = [
+            record.getMessage()
+            for record in caplog.records
+            if record.levelno == logging.WARNING
+            and "could not be renamed" in record.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert fake_matter_lock_entity.entity_id in warnings[0]
+        assert "released slot 2" in warnings[0]
+
+
+def _lcm_s_user(fake: FakeMatterLock, slot: int = 2) -> tuple[int, int, str]:
+    """Return the user, credential index and PIN LCM wrote for ``slot``."""
+    pin = FAKE_MATTER_SLOTS[slot][CONF_PIN]
+    index = _index_of(fake, pin)
+    user_index = fake.owner(index)
+    assert user_index is not None
+    return user_index, index, pin
+
+
+def _writes(fake: FakeMatterLock, since: int) -> list[tuple[str, int | None]]:
+    """Return the deletions and renames the lock answered since ``since``."""
+    return [
+        (exchange.command, exchange.index)
+        for exchange in fake.commands[since:]
+        if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+    ]
+
+
+class TestReleaseByTheFabricThatMadeThePin:
+    """
+    LCM's PINs are the ones Home Assistant's fabric created, whatever their place.
+
+    The lock names each credential's creating fabric (GetCredentialStatus);
+    the node names Home Assistant's (CurrentFabricIndex).
+    """
+
+    @pytest.mark.parametrize(
+        "added_by", ["vendor_app", "keypad"], ids=["vendor_app", "keypad"]
+    )
+    async def test_a_homeowner_s_pin_listed_first_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        added_by: str,
+    ) -> None:
+        """
+        A PIN another fabric or the keypad made is kept, though it is the user's first.
+
+        Only LCM's own PIN is cleared, and the user keeps the homeowner's.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index, index, pin = _lcm_s_user(fake_matter_lock)
+        if added_by == "vendor_app":
+            fake_matter_lock.enroll(
+                user_index, DoorLock.Enums.CredentialTypeEnum.kPin, index=5
+            )
+        else:
+            fake_matter_lock.program(user_index, "555555", credential_index=5)
+        user = fake_matter_lock.users[user_index]
+        user.credentials.sort(key=lambda credential: credential != (_PIN, 5))
+        await async_advance_sync_ticks(hass, freezer)
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        assert user_index in fake_matter_lock.users
+        assert user.credentials == [(_PIN, 5)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert 5 in fake_matter_lock.codes
+        assert parse_tag(user.name)[0] is None
+        assert _writes(fake_matter_lock, sent) == [
+            ("ClearCredential", index),
+            ("SetUser", user_index),
+        ]
+
+    async def test_a_retried_release_keeps_the_homeowner_s_pin(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        LCM's PIN is cleared but the answer is lost: the retry deletes nothing.
+
+        The retry finds only the homeowner's PIN on the user. It is another
+        fabric's, so the user is not cleared: only LCM's tag goes.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index, index, pin = _lcm_s_user(fake_matter_lock)
+        fake_matter_lock.enroll(
+            user_index, DoorLock.Enums.CredentialTypeEnum.kPin, index=5
+        )
+        await async_advance_sync_ticks(hass, freezer)
+        fake_matter_lock.drop_reply("ClearCredential", index, times=1)
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: ("SetUser", user_index) in _writes(fake_matter_lock, sent),
+            max_ticks=int(RETRY_AFTER[1]),
+            what="the retried release",
+        )
+
+        user = fake_matter_lock.users[user_index]
+        assert user.credentials == [(_PIN, 5)]
+        assert pin not in fake_matter_lock.codes.values()
+        assert parse_tag(user.name)[0] is None
+        assert _writes(fake_matter_lock, sent) == [
+            ("ClearCredential", index),
+            ("SetUser", user_index),
+        ]
+
+    async def test_whose_pin_it_is_unanswered_deletes_nothing_until_answered(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A status read that fails holds the release; answered, the user goes."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index, index, pin = _lcm_s_user(fake_matter_lock)
+        sent = len(fake_matter_lock.commands)
+
+        fake_matter_lock.fail("GetCredentialStatus", times=1)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: user_index not in fake_matter_lock.users,
+            max_ticks=int(RETRY_AFTER[1]),
+            what="the retried release",
+        )
+        assert pin not in fake_matter_lock.codes.values()
+        assert [
+            (exchange.command, exchange.index)
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command
+            in ("GetCredentialStatus", "ClearUser", "ClearCredential", "SetUser")
+        ] == [
+            ("GetCredentialStatus", index),
+            ("GetCredentialStatus", index),
+            ("ClearUser", user_index),
+        ]
+
+
+class TestReleaseOfARenamedUser:
+    """No user carries LCM's tag for the slot: nothing is removed, and LCM says so if it wrote there."""
+
+    async def test_a_slot_lcm_wrote_is_warned_about(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """LCM's user, renamed in the vendor's app, keeps its PIN: a code may remain."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        pin = FAKE_MATTER_SLOTS[2][CONF_PIN]
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.users[user_index].name = "Alice"
+        sent = len(fake_matter_lock.commands)
+
+        await _async_remove_user(hass, freezer, fake_matter_lock_entry, 2)
+
+        assert fake_matter_lock.users[user_index].name == "Alice"
+        assert pin in fake_matter_lock.codes.values()
+        assert [
+            exchange.command
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+        ] == []
+        warnings = _released_warnings(caplog, 2)
+        assert len(warnings) == 1
+        assert fake_matter_lock_entity.entity_id in warnings[0]
+
+    async def test_a_slot_lcm_never_wrote_a_pin_to_is_not(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """A slot that was only ever off held no code of LCM's: nothing to warn about."""
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "slot3", CONF_PIN: "333333", CONF_ENABLED: False},
+        }
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "batch5_never_written"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert _released_warnings(caplog, 3) == []
+            assert "no LCM-owned user to release for slot 3" in caplog.text
+
+
+class TestOpenBugs:
+    """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
 
     @pytest.mark.xfail(
         strict=True,
@@ -914,14 +1605,6 @@ class TestOpenBugs:
             STATE_ON
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open: an event's follow-up read is not cancelled when the entry "
-            "unloads, so it still reaches the lock afterwards"
-        ),
-    )
     async def test_nothing_reaches_the_lock_after_the_entry_unloads(
         self,
         hass: HomeAssistant,
@@ -934,6 +1617,8 @@ class TestOpenBugs:
         await _async_settle(
             hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
         )
+        # The worker gives the exchange it is in no time to finish once it stops.
+        lock_registry(hass)._grace = 0
         held = fake_matter_lock.hang("GetUser")
         fake_matter_lock.program(9, "999999", name="Mom", credential_index=9)
         await held.async_wait_held()

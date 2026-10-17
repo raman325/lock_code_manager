@@ -1,7 +1,5 @@
 """Self-tests for the stateful Schlage cloud (``fake_service.py``), against core's code services."""
 
-from __future__ import annotations
-
 from freezegun.api import FrozenDateTimeFactory
 import pytest
 from requests.exceptions import ReadTimeout

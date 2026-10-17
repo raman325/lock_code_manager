@@ -5,8 +5,6 @@ Each check stands for a release that went out wrong once; the regression
 each guards is named in its docstring.
 """
 
-from __future__ import annotations
-
 import inspect
 import json
 from pathlib import Path

@@ -1,12 +1,12 @@
 """Tests for zwave-js-ui gateway discovery and the correlated api client."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import fields
 import json
+import time
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, Mock, patch
 
@@ -19,7 +19,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
@@ -330,6 +330,33 @@ async def test_a_sole_candidate_is_asked_which_network_it_runs(
 
     assert await task == ZUI_API_BASE
     assert [base for base, _, _ in zui_api_responder.requests] == [ZUI_API_BASE]
+
+
+async def test_a_status_heard_in_the_window_is_counted_however_slow(
+    hass: HomeAssistant,
+    zui_scan_lock_provider: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    A status is taken on the event loop as it arrives, inside the window.
+
+    Taken in the executor instead, one slow to read -- as on a busy
+    executor -- would still be being read when the window closed, and the
+    gateway would go unseen.
+    """
+    zui_api_responder.set_result("getInfo", {"homeid": ZUI_HOME_ID})
+    unwrap = zwave_js_ui._unwrap_mqtt_value
+
+    def slow_unwrap(raw: bytes | str) -> Any:
+        time.sleep(0.2)
+        return unwrap(raw)
+
+    task = await async_start_gateway_resolution(hass, zui_scan_lock_provider)
+    with patch.object(zwave_js_ui, "_unwrap_mqtt_value", slow_unwrap):
+        fire_zui_gateway_status(hass)
+        api_base = await task
+
+    assert api_base == ZUI_API_BASE
 
 
 async def test_a_sole_candidate_running_another_network_is_refused(
@@ -775,6 +802,44 @@ async def test_api_call_round_trip(
     assert json.loads(payload)["lcmRequestId"]
 
 
+async def test_an_answer_is_taken_as_it_arrives(
+    hass: HomeAssistant,
+    zui_gateway_resolved: ZWaveJSUILock,
+    zui_api_responder: ZWaveJSUIApiResponder,
+) -> None:
+    """
+    The answer resolves its call on the event loop, as it arrives.
+
+    Taken in the executor instead, the call's future would be resolved from
+    another thread, racing the loop that awaits it -- and nothing wakes the
+    loop to see it. The answer here is slow to parse, as a large one is, so
+    one parsed off the loop is still being parsed when the gateway's publish
+    returns, and the call is checked there.
+    """
+    topic = f"{ZUI_API_BASE}/api/getInfo"
+
+    def slow_loads(raw: bytes | str) -> Any:
+        time.sleep(0.05)
+        return json.loads(raw)
+
+    def _handler(_api_base: str, request: dict[str, Any]) -> None:
+        answer = {"success": True, "result": "ours", "origin": request}
+        async_fire_mqtt_message(hass, topic, json.dumps(answer))
+        calls = zui_gateway_resolved._pending_api_calls.values()
+        assert [call.done() for call in calls] == [True]
+
+    zui_api_responder.set_handler("getInfo", _handler)
+
+    with patch.object(
+        zwave_js_ui, "json", SimpleNamespace(loads=slow_loads, dumps=json.dumps)
+    ):
+        response = await zui_gateway_resolved._async_api_call_at(
+            ZUI_API_BASE, "getInfo", []
+        )
+
+    assert response["result"] == "ours"
+
+
 async def test_responses_for_other_callers_are_ignored(
     hass: HomeAssistant,
     zui_gateway_resolved: ZWaveJSUILock,
@@ -890,37 +955,6 @@ async def test_publish_failures_are_routed_by_kind(
         await zui_gateway_resolved._async_api_call_at(ZUI_API_BASE, "getInfo", [])
 
 
-async def test_user_code_command_shapes_the_send_command_envelope(
-    zui_gateway_resolved: ZWaveJSUILock, zui_api_responder: ZWaveJSUIApiResponder
-) -> None:
-    """
-    User Code CC calls address this node's endpoint 0 and pass the result through.
-
-    The envelope is what zwave-js-ui's sendCommand api expects: a value-id-ish
-    header, the driver method name, and that method's own argument list.
-    """
-    zui_api_responder.set_result("sendCommand", {"userIdStatus": 1, "userCode": "1234"})
-
-    result = await zui_gateway_resolved._async_user_code_command("get", [5])
-
-    assert result == {"userIdStatus": 1, "userCode": "1234"}
-    assert zui_api_responder.requests == [
-        (
-            ZUI_API_BASE,
-            "sendCommand",
-            [
-                {
-                    "nodeId": ZUI_NODE_ID,
-                    "commandClass": CC_USER_CODE_ID,
-                    "endpoint": 0,
-                },
-                "get",
-                [5],
-            ],
-        )
-    ]
-
-
 async def test_non_api_publishes_pass_through_the_responder(
     hass: HomeAssistant, zui_api_responder: ZWaveJSUIApiResponder
 ) -> None:
@@ -966,7 +1000,7 @@ async def test_gateway_that_never_answers_is_skipped(
 @contextmanager
 def record_wait_budgets() -> Iterator[list[float | None]]:
     """
-    Record every ``asyncio.wait_for`` budget spent inside the block.
+    Record every ``asyncio.timeout`` budget spent inside the block.
 
     Which constant bounds an api call is only observable at the wait itself;
     asserting on the argument the provider hands its own helper would pin the
@@ -976,13 +1010,13 @@ def record_wait_budgets() -> Iterator[list[float | None]]:
     than for the list's exact contents.
     """
     seen: list[float | None] = []
-    real_wait_for = asyncio.wait_for
+    real_timeout = asyncio.timeout
 
-    async def _spy(awaitable: Any, timeout: float | None = None) -> Any:
-        seen.append(timeout)
-        return await real_wait_for(awaitable, timeout)
+    def _spy(delay: float | None) -> asyncio.Timeout:
+        seen.append(delay)
+        return real_timeout(delay)
 
-    with patch.object(asyncio, "wait_for", _spy):
+    with patch.object(asyncio, "timeout", _spy):
         yield seen
 
 

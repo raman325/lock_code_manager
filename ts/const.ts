@@ -1,3 +1,5 @@
+import { CodeDisplayMode } from './types';
+
 export const CODE_SENSOR_KEY = 'code';
 export const CODE_EVENT_KEY = 'credential_used';
 export const ACTIVE_KEY = 'active';
@@ -46,7 +48,7 @@ export const KEY_ORDER = [
 export const DOMAIN = 'lock_code_manager';
 
 // Strategy defaults (new option names)
-export const DEFAULT_CODE_DISPLAY = 'masked_with_reveal';
+export const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 export const DEFAULT_SHOW_CODE_SENSORS = true;
 export const DEFAULT_SHOW_CONDITIONS = true;
 export const DEFAULT_SHOW_LOCK_COUNT = true;

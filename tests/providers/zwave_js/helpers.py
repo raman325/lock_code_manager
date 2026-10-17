@@ -1,7 +1,5 @@
 """Shared Z-Wave JS provider test helpers: patch paths, event factories, entity lookups."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from zwave_js_server.const import CommandClass

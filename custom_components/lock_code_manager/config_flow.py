@@ -1,11 +1,9 @@
 """Adds config flow for lock_code_manager."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Collection, Container, Iterable, Mapping, Sequence
 import logging
-from typing import Any
+from typing import Any, override
 
 import probatio as vol
 
@@ -42,20 +40,22 @@ from .const import (
     EXCLUDED_CONDITION_PLATFORMS,
     SUBENTRY_TYPE_USER,
 )
-from .domain.allocation import (
+from .ha.allocation import (
     SlotAllocationError,
     async_allocate_for,
     async_check_slot_capacity,
+    async_read_occupancy,
 )
-from .domain.config import EntryConfig, async_write_entry_config
-from .domain.names import (
+from .ha.runtime import locks_that_cannot_report
+from .model.config import EntryConfig, async_write_entry_config
+from .model.names import (
     identity,
     name_error,
     normalize_name,
     validate_user_names,
 )
-from .domain.queries import entries_configuring, get_entry_config
-from .domain.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
+from .model.queries import entries_configuring, get_entry_config
+from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
 _LOGGER = logging.getLogger(__name__)
@@ -193,9 +193,35 @@ def _check_common_slots(
     else:
         return {"base": "slots_already_configured"}, {
             "common_slots": ", ".join(str(slot) for slot in common_slots),
-            "lock": lock,
+            "error_lock": lock,
             "entry_title": entry_title,
         }
+
+
+async def _async_check_existing_codes(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    locks: Sequence[str],
+    slots: Collection[int],
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """
+    Refuse a lock that already holds codes in the entry's slots.
+
+    The entry's numbers were issued before the lock joined it, so nothing
+    checked them against what the lock holds, and the first sync would write
+    over a code someone set at the keypad. Read as allocation reads, so a lock
+    that cannot answer is refused the way setup refuses it.
+    """
+    occupancy = await async_read_occupancy(hass, config_entry, locks, slots)
+    if not occupancy.is_known:
+        return {"base": "occupancy_unknown"}, {"locks": ", ".join(occupancy.unreadable)}
+    for lock in occupancy.locks:
+        if lock.managed and lock.occupied:
+            return {"base": "existing_codes"}, {
+                "error_lock": lock.lock_entity_id,
+                "slots": ", ".join(str(slot) for slot in sorted(lock.occupied)),
+            }
+    return {}, {}
 
 
 async def _async_save_locks_and_reload(
@@ -320,6 +346,24 @@ async def _async_validate_users_yaml(
     return parsed_users, {}, {}
 
 
+def _cannot_report(
+    hass: HomeAssistant, locks: Iterable[str], slots: Iterable[int]
+) -> dict[str, str] | None:
+    """
+    Name those of ``locks`` that cannot report their codes, and the slots at risk.
+
+    None when every one of them can: nothing to warn of. Said, not asked:
+    any lock would get these slots, and nothing seen in them may still be a
+    keypad code.
+    """
+    if not (silent := locks_that_cannot_report(hass, locks)):
+        return None
+    return {
+        "lock": ", ".join(silent),
+        "slots": ", ".join(str(slot) for slot in sorted(slots)),
+    }
+
+
 _AllocationOutcome = tuple[frozenset[int] | None, dict[str, str], dict[str, Any]]
 
 
@@ -335,7 +379,7 @@ async def _allocate_for(
     """
     Find numbers for ``num_users``, or say why it could not.
 
-    Allocation itself lives in ``domain.allocation``, which the services call
+    Allocation itself lives in ``ha.allocation``, which the services call
     too; this only turns its refusals into the form errors a flow renders.
 
     ``config_entry`` is the entry being allocated for, whose own numbers do
@@ -506,6 +550,8 @@ class LockCodeManagerFlowHandler(
         """Initialize config flow."""
         self.data: dict[str, Any] = {}
         self.title: str = ""
+        # Reauth: the locks submitted, held while the user reads ``cannot_report``.
+        self._locks: list[str] = []
         self.ent_reg: er.EntityRegistry = None
         self.dev_reg: dr.DeviceRegistry = None
         self._users_to_configure = 0
@@ -513,6 +559,7 @@ class LockCodeManagerFlowHandler(
         # many users they wanted.
         self._unavailable: frozenset[int] = frozenset()
 
+    @override
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -673,10 +720,15 @@ class LockCodeManagerFlowHandler(
         config = EntryConfig.from_mapping(
             {**self.data, CONF_SLOT_ASSIGNMENT: dict(assignment.slots)}
         )
+        warning = _cannot_report(
+            self.hass, self.data[CONF_LOCKS], assignment.slots.values()
+        )
         return self.async_create_entry(
             title=self.title,
             data=config.to_dict(),
             subentries=config.subentries(),
+            description="cannot_report" if warning else None,
+            description_placeholders=warning,
         )
 
     async def async_step_yaml(self, user_input: dict[str, Any] | None = None):
@@ -795,13 +847,34 @@ class LockCodeManagerFlowHandler(
                 except SlotAllocationError as err:
                     additional_errors = {"base": err.translation_key}
                     additional_placeholders = err.placeholders
+            # A lock swapped in gets the entry's numbers as the options flow
+            # adds one: checked for keypad codes in them, and said of when it
+            # cannot report any.
+            added = [
+                lock_entity_id
+                for lock_entity_id in user_input[CONF_LOCKS]
+                if lock_entity_id not in entry_config.locks
+            ]
+            if not additional_errors and added and existing_slots:
+                (
+                    additional_errors,
+                    additional_placeholders,
+                ) = await _async_check_existing_codes(
+                    self.hass, config_entry, added, existing_slots
+                )
+                if not additional_errors and (
+                    warning := _cannot_report(self.hass, added, existing_slots)
+                ):
+                    self._locks = user_input[CONF_LOCKS]
+                    return self.async_show_form(
+                        step_id="cannot_report",
+                        description_placeholders=warning,
+                        last_step=True,
+                    )
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
-                await _async_save_locks_and_reload(
-                    self.hass, config_entry, user_input[CONF_LOCKS]
-                )
-                return self.async_abort(reason="locks_updated")
+                return await self._async_reauth_save(user_input[CONF_LOCKS])
 
         return self.async_show_form(
             step_id="reauth_confirm",
@@ -817,14 +890,31 @@ class LockCodeManagerFlowHandler(
             last_step=True,
         )
 
+    async def async_step_cannot_report(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Save the swapped-in locks once the user has been told one cannot report."""
+        return await self._async_reauth_save(self._locks)
+
+    async def _async_reauth_save(self, locks: list[str]) -> dict[str, Any]:
+        """Save the entry's new locks and reload it."""
+        config_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        assert config_entry
+        await _async_save_locks_and_reload(self.hass, config_entry, locks)
+        return self.async_abort(reason="locks_updated")
+
     @staticmethod
     @callback
+    @override
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
         """Get options flow."""
         return LockCodeManagerOptionsFlow()
 
     @classmethod
     @callback
+    @override
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
@@ -834,6 +924,9 @@ class LockCodeManagerFlowHandler(
 
 class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Lock Code Manager."""
+
+    # The locks submitted, held while the user reads ``cannot_report``.
+    _locks: list[str]
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -854,19 +947,18 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             errors, description_placeholders = _check_unclaimed_mqtt_locks(
                 self.hass, user_input[CONF_LOCKS], config.locks
             )
+            # A lock added here arrives with numbers issued without looking
+            # at it. Only added locks: an overlap the entry already carries on
+            # a lock it holds must not refuse every later edit of its locks.
+            added = [
+                lock_entity_id
+                for lock_entity_id in user_input[CONF_LOCKS]
+                if lock_entity_id not in config.locks
+            ]
             if not errors:
-                # A lock added here arrives with numbers issued without looking
-                # at it, so another entry may already manage some of them on it.
-                # Only added locks: an overlap the entry already carries on a
-                # lock it holds must not refuse every later edit of its locks.
+                # Another entry may already manage some of them on it.
                 errors, description_placeholders = _check_common_slots(
-                    self.hass,
-                    [
-                        lock_entity_id
-                        for lock_entity_id in user_input[CONF_LOCKS]
-                        if lock_entity_id not in config.locks
-                    ],
-                    config.slot_numbers,
+                    self.hass, added, config.slot_numbers
                 )
             if not errors and config.slot_numbers:
                 # The users are not on this form, but the numbers they hold
@@ -883,33 +975,24 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 except SlotAllocationError as err:
                     errors = {"base": err.translation_key}
                     description_placeholders = err.placeholders
-            if not errors:
-                if self.config_entry.state in (
-                    ConfigEntryState.SETUP_ERROR,
-                    ConfigEntryState.SETUP_RETRY,
-                ):
-                    # Saved as reauth saves: with no update listener to apply
-                    # it, a save left in `options` reports success while the
-                    # entry stays failed. Written before the reload rather
-                    # than left to Home Assistant, which writes the options
-                    # only after this step returns -- after a reload started
-                    # here has already read the entry.
-                    # Only these two states. Both are reached after migration,
-                    # so the entry's data no longer holds its users, and both
-                    # are ones Home Assistant will reload. Any other state that
-                    # is not loaded may be an entry that never migrated, whose
-                    # users this rewrite of its data would delete.
-                    await _async_save_locks_and_reload(
-                        self.hass, self.config_entry, user_input[CONF_LOCKS]
-                    )
-                    return self.async_abort(reason="locks_updated")
-                # Only the entry's own half. The users are untouched in their
-                # subentries, and `extra` carries whatever else the entry
-                # holds so a form with one field does not erase the rest.
-                return self.async_create_entry(
-                    title="",
-                    data={**dict(config.extra), CONF_LOCKS: user_input[CONF_LOCKS]},
+            if not errors and added and config.slot_numbers:
+                # Or someone may have set codes in them at the keypad.
+                errors, description_placeholders = await _async_check_existing_codes(
+                    self.hass, self.config_entry, added, config.slot_numbers
                 )
+                if not errors and (
+                    warning := _cannot_report(self.hass, added, config.slot_numbers)
+                ):
+                    # Home Assistant shows no description on an options
+                    # flow's result: a step of its own instead.
+                    self._locks = user_input[CONF_LOCKS]
+                    return self.async_show_form(
+                        step_id="cannot_report",
+                        description_placeholders=warning,
+                        last_step=True,
+                    )
+            if not errors:
+                return await self._async_save(user_input[CONF_LOCKS])
 
         return self.async_show_form(
             step_id="init",
@@ -924,6 +1007,39 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders=description_placeholders,
             last_step=True,
+        )
+
+    async def async_step_cannot_report(
+        self, user_input: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        """Save the locks once the user has been told one cannot report its codes."""
+        return await self._async_save(self._locks)
+
+    async def _async_save(self, locks: list[str]) -> dict[str, Any]:
+        """Save the entry's locks."""
+        if self.config_entry.state in (
+            ConfigEntryState.SETUP_ERROR,
+            ConfigEntryState.SETUP_RETRY,
+        ):
+            # Saved as reauth saves: with no update listener to apply
+            # it, a save left in `options` reports success while the
+            # entry stays failed. Written before the reload rather
+            # than left to Home Assistant, which writes the options
+            # only after this step returns -- after a reload started
+            # here has already read the entry.
+            # Only these two states. Both are reached after migration,
+            # so the entry's data no longer holds its users, and both
+            # are ones Home Assistant will reload. Any other state that
+            # is not loaded may be an entry that never migrated, whose
+            # users this rewrite of its data would delete.
+            await _async_save_locks_and_reload(self.hass, self.config_entry, locks)
+            return self.async_abort(reason="locks_updated")
+        # Only the entry's own half. The users are untouched in their
+        # subentries, and `extra` carries whatever else the entry
+        # holds so a form with one field does not erase the rest.
+        config = get_entry_config(self.config_entry)
+        return self.async_create_entry(
+            title="", data={**dict(config.extra), CONF_LOCKS: locks}
         )
 
 
@@ -976,14 +1092,17 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                     # Reconciled against what the entry already holds, so
                     # everybody already here keeps their number and only the
                     # newcomer is issued one.
-                    assignment = config.assignment.reconcile(
+                    slot = config.assignment.reconcile(
                         {**config.users, name: fields},
                         start=1,
                         unavailable=unavailable,
-                    )
+                    ).slots[identity(name)]
+                    warning = _cannot_report(self.hass, config.locks, [slot])
                     return self.async_create_entry(
                         title=name,
-                        data={**fields, CONF_SLOT: assignment.slot(name)},
+                        data={**fields, CONF_SLOT: slot},
+                        description="cannot_report" if warning else None,
+                        description_placeholders=warning,
                     )
 
         return self.async_show_form(
@@ -1055,6 +1174,9 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                     description_placeholders.update(allocation_placeholders)
                 else:
                     arrived = {**config.users, **users}
+                    assignment = config.assignment.reconcile(
+                        arrived, start=1, unavailable=unavailable
+                    )
                     # Written through the one write path rather than by
                     # completing the flow: a finished subentry flow creates
                     # exactly one subentry, and this creates as many as were
@@ -1065,15 +1187,23 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                         EntryConfig(
                             locks=config.locks,
                             users=arrived,
-                            assignment=config.assignment.reconcile(
-                                arrived, start=1, unavailable=unavailable
-                            ),
+                            assignment=assignment,
                             extra=config.extra,
                         ),
                     )
+                    warning = _cannot_report(
+                        self.hass,
+                        config.locks,
+                        (assignment.slots[identity(name)] for name in users),
+                    )
                     return self.async_abort(
-                        reason="users_added",
-                        description_placeholders={"num_users": str(len(users))},
+                        reason="users_added_cannot_report"
+                        if warning
+                        else "users_added",
+                        description_placeholders={
+                            "num_users": str(len(users)),
+                            **(warning or {}),
+                        },
                     )
 
         return self.async_show_form(

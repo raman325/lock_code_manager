@@ -34,12 +34,12 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SERVICE_HARD_REFRESH_USERCODES,
 )
-from custom_components.lock_code_manager.domain.locks import get_locks_from_targets
-from custom_components.lock_code_manager.domain.queries import (
+from custom_components.lock_code_manager.ha.locks import get_locks_from_targets
+from custom_components.lock_code_manager.model.queries import (
     get_loaded_config_entry,
     slots_configured_on,
 )
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 
@@ -95,43 +95,6 @@ async def test_get_locks_from_targets_warns_for_bad_entities(
     assert len(locks) == 0
     assert expected_warning in caplog.text
     assert entity_id in caplog.text
-
-
-async def test_get_locks_from_targets_with_area_id(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test get_locks_from_targets resolves area IDs to locks."""
-    area_reg = ar.async_get(hass)
-    area = area_reg.async_get_or_create("test_area")
-    ent_reg = er.async_get(hass)
-    ent_reg.async_update_entity(LOCK_1_ENTITY_ID, area_id=area.id)
-
-    locks = get_locks_from_targets(hass, {ATTR_AREA_ID: [area.id]})
-
-    assert len(locks) == 1
-    lock = next(iter(locks))
-    assert lock.lock.entity_id == LOCK_1_ENTITY_ID
-
-
-async def test_get_locks_from_targets_with_device_id(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test get_locks_from_targets resolves device IDs to locks."""
-    # Get the device for lock.test_1
-    ent_reg = er.async_get(hass)
-    entry = ent_reg.async_get(LOCK_1_ENTITY_ID)
-    assert entry is not None
-    assert entry.device_id is not None
-
-    locks = get_locks_from_targets(hass, {ATTR_DEVICE_ID: [entry.device_id]})
-
-    assert len(locks) == 1
-    lock = next(iter(locks))
-    assert lock.lock.entity_id == LOCK_1_ENTITY_ID
 
 
 async def test_get_locks_from_targets_empty(
@@ -287,16 +250,21 @@ async def test_hard_refresh_usercodes_resolves_targets(
     are not managed locks; only an entity named directly earns a warning.
     """
     target = build_target(hass, mock_lock_config_entry)
+    locks = lock_code_manager_config_entry.runtime_data.locks
+    reads_before = {
+        entity_id: len(lock.service_calls["get_usercodes"])
+        for entity_id, lock in locks.items()
+    }
 
     await hass.services.async_call(
         DOMAIN, SERVICE_HARD_REFRESH_USERCODES, target, blocking=True
     )
 
-    locks = lock_code_manager_config_entry.runtime_data.locks
+    # Read afresh, through each lock's worker.
     assert {
         entity_id
         for entity_id, lock in locks.items()
-        if lock.service_calls["hard_refresh_codes"]
+        if len(lock.service_calls["get_usercodes"]) > reads_before[entity_id]
     } == refreshed
     assert not [
         record

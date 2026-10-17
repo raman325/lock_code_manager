@@ -1,7 +1,5 @@
 """Test services."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -73,17 +71,21 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_CREDENTIAL,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain import services
-from custom_components.lock_code_manager.domain.allocation import SlotAllocationError
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.ha import services
+from custom_components.lock_code_manager.ha.allocation import SlotAllocationError
+from custom_components.lock_code_manager.ha.runtime import (
+    lock_registry,
+)
+from custom_components.lock_code_manager.ha.services import async_set_usercode
+from custom_components.lock_code_manager.model.config import (
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.credentials import CredentialType
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.pin_generator import is_unsafe_pin
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.services import async_set_usercode
-from custom_components.lock_code_manager.domain.util import mask_pin
+from custom_components.lock_code_manager.model.credentials import CredentialType
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
+from custom_components.lock_code_manager.model.pin_generator import is_unsafe_pin
+from custom_components.lock_code_manager.model.pin_masking import mask_pin
+from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.providers.schlage import (
     SCHLAGE_DOMAIN,
     SchlageLock,
@@ -92,8 +94,10 @@ from tests.providers.helpers import register_mock_service
 
 from .common import (
     LOCK_1_ENTITY_ID,
+    async_advance_clock,
     async_advance_sync_ticks,
     async_set_slot_pin,
+    async_setup_lcm_entry,
     async_tick_until,
     mock_lock,
     reading_for,
@@ -284,13 +288,14 @@ async def test_the_actions_still_answer_once_every_entry_has_unloaded(
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
-    # Nothing manages the lock now, so there is nothing to refresh.
-    await hass.services.async_call(
-        DOMAIN,
-        SERVICE_HARD_REFRESH_USERCODES,
-        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
-        blocking=True,
-    )
+    # Nothing manages the lock now, so there is nothing to refresh: it says so.
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_HARD_REFRESH_USERCODES,
+            {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+            blocking=True,
+        )
     with pytest.raises(ServiceValidationError):
         await hass.services.async_call(
             DOMAIN,
@@ -321,13 +326,15 @@ async def test_the_actions_still_answer_once_every_entry_has_unloaded(
     assert response is not None
     assert response["summary"]["matched"] == 1
     assert "pin=4321" in response["deobfuscated_text"]
+    reads = len(mock_lock(entry).service_calls["get_usercodes"])
     await hass.services.async_call(
         DOMAIN,
         SERVICE_HARD_REFRESH_USERCODES,
         {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
         blocking=True,
     )
-    assert mock_lock(entry).service_calls["hard_refresh_codes"] == [(None,)]
+    # Read afresh, through the lock's worker.
+    assert len(mock_lock(entry).service_calls["get_usercodes"]) > reads
 
 
 async def test_add_user_service(
@@ -651,7 +658,9 @@ async def test_delete_user_service(
     entry = lock_code_manager_config_entry
     released: list[int] = []
     for lock in entry.runtime_data.locks.values():
-        lock.async_release_managed_slot = AsyncMock(side_effect=released.append)
+        lock.async_release_managed_slot = AsyncMock(
+            side_effect=lambda slot, **_: released.append(slot)
+        )
 
     await hass.services.async_call(
         DOMAIN,
@@ -851,7 +860,7 @@ async def test_add_user_service_reports_an_allocation_refusal(
 ) -> None:
     """Allocation's refusal reaches the caller as a translated action error."""
     with patch(
-        "custom_components.lock_code_manager.domain.services.async_allocate_for",
+        "custom_components.lock_code_manager.ha.services.async_allocate_for",
         side_effect=SlotAllocationError(
             "occupancy_unknown", {"locks": LOCK_1_ENTITY_ID}
         ),
@@ -1148,34 +1157,6 @@ async def test_use_credential_valid_by_title(
         {"config_entry_title": validate_entry.title, ATTR_CODE: "1234"},
     )
     assert response == {ATTR_VALID: True, ATTR_USER: "alice", ATTR_REASON: None}
-
-
-async def test_use_credential_unknown(hass: HomeAssistant, validate_entry) -> None:
-    """A code no slot holds is rejected as unknown."""
-    response = await _call_use_credential(
-        hass,
-        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: "0000"},
-    )
-    assert response == {
-        ATTR_VALID: False,
-        ATTR_USER: None,
-        ATTR_REASON: REASON_UNKNOWN_CODE,
-    }
-
-
-@pytest.mark.parametrize(
-    ("code", "reason"),
-    [("5678", REASON_USER_DISABLED), ("9999", REASON_CONDITION_NOT_MET)],
-)
-async def test_use_credential_failure_reasons(
-    hass: HomeAssistant, validate_entry, code: str, reason: str
-) -> None:
-    """A matched-but-inactive code reports why it did not validate."""
-    response = await _call_use_credential(
-        hass,
-        {"config_entry_id": validate_entry.entry_id, ATTR_CODE: code},
-    )
-    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
 
 
 @pytest.mark.parametrize(
@@ -1538,10 +1519,16 @@ async def test_use_credential_with_a_target_outside_the_entry(
 
 
 @pytest.mark.parametrize(
-    "code", ["0000", "5678", "9999"], ids=["unknown", "disabled", "condition"]
+    ("code", "reason"),
+    [
+        ("0000", REASON_UNKNOWN_CODE),
+        ("5678", REASON_USER_DISABLED),
+        ("9999", REASON_CONDITION_NOT_MET),
+    ],
+    ids=["unknown", "disabled", "condition"],
 )
 async def test_use_credential_announces_nothing_when_invalid(
-    hass: HomeAssistant, validate_entry, code: str
+    hass: HomeAssistant, validate_entry, code: str, reason: str
 ) -> None:
     """
     A code that does not validate is not a use, however it failed.
@@ -1556,7 +1543,7 @@ async def test_use_credential_announces_nothing_when_invalid(
     )
     await hass.async_block_till_done()
 
-    assert response[ATTR_VALID] is False
+    assert response == {ATTR_VALID: False, ATTR_USER: None, ATTR_REASON: reason}
     assert [
         event.event_type for event in fired if event.event_type.startswith(DOMAIN)
     ] == []
@@ -2163,7 +2150,7 @@ async def test_add_user_refuses_two_names_meaning_one_person_in_one_call(
 @pytest.mark.parametrize(
     "payload",
     [
-        pytest.param({CONF_NAME: "Newcomer", CONF_PIN: "9876"}, id="released-flat"),
+        # The released flat shape is test_add_user_service's own payload.
         pytest.param(
             {CONF_USERS: {CONF_NAME: "Newcomer", CONF_PIN: "9876"}}, id="single-mapping"
         ),
@@ -2293,7 +2280,7 @@ async def test_the_batch_is_allocated_for_everyone_it_will_add(
         return frozenset()
 
     with patch(
-        "custom_components.lock_code_manager.domain.services.async_allocate_for",
+        "custom_components.lock_code_manager.ha.services.async_allocate_for",
         _spy,
     ):
         await hass.services.async_call(
@@ -2330,3 +2317,62 @@ async def test_add_user_with_nobody_named_reports_the_missing_field(
             {"config_entry_id": lock_code_manager_config_entry.entry_id},
             blocking=True,
         )
+
+
+async def test_a_hard_refresh_asks_a_lock_that_is_backing_off(
+    hass: HomeAssistant, mock_lock_config_entry, freezer
+) -> None:
+    """
+    The lock is back; the user asks Lock Code Manager to look again.
+
+    The old service read the lock whatever had happened before. Through a
+    worker backing off, the read fails at once, unsent, and the slot waits
+    out the backoff (up to 30 minutes).
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    outage = lock.fail(None, error=LockDisconnected)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await async_advance_clock(hass, freezer, 10 * 60)
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+    assert not worker.reachable
+    outage.clear()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert worker.reachable
+    assert lock.codes[1] == "4321"
+
+
+async def test_the_hard_refresh_service_walks_the_whole_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    "Query the lock for all usercodes": the service asks the provider for a hard refresh.
+
+    The old service called the provider's unscoped ``async_hard_refresh_codes``
+    -- for a cloud or Zigbee lock the only call that bypasses its cache, for
+    Z-Wave the only one that re-reads slots nobody manages. Now it is a read
+    of the managed slots through ``async_get_usercodes``, so a code added at
+    the keypad of a caching provider is never fetched.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.service_calls["hard_refresh_codes"].clear()
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    assert (None,) in lock.service_calls["hard_refresh_codes"]

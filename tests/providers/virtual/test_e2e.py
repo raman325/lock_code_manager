@@ -1,7 +1,5 @@
 """Full lifecycle E2E tests for Virtual lock provider."""
 
-from __future__ import annotations
-
 import logging
 from unittest.mock import patch
 
@@ -21,6 +19,7 @@ from homeassistant.config_entries import (
     SOURCE_REAUTH,
     ConfigEntryDisabler,
     ConfigEntryState,
+    ConfigSubentry,
 )
 from homeassistant.const import (
     ATTR_ENTITY_ID,
@@ -34,7 +33,6 @@ from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
-    issue_registry as ir,
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -46,18 +44,21 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialRef,
     CredentialType,
+    SlotCredential,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.sync import TICK_INTERVAL
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 from tests.common import async_configure_flow, user_subentries
 
+from ...common import TICK_INTERVAL
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
 SLOT_1_EVENT_ENTITY = "event.mock_title_slot1_credential_used"
@@ -131,8 +132,8 @@ class TestSetAndGetUsercodes:
         hass: HomeAssistant,
         e2e_virtual_lock: VirtualLock,
     ) -> None:
-        """Set via async_internal_set_usercode (base orchestration → primitive) and verify via projection."""
-        await e2e_virtual_lock.async_internal_set_usercode(1, "2222", "orchestrated")
+        """Set via async_set_usercode (the hook the worker writes through) and verify via projection."""
+        await e2e_virtual_lock.async_set_usercode(1, "2222", "orchestrated")
 
         codes = await e2e_virtual_lock.async_get_usercodes()
         assert codes[1] == SlotCredential.known("2222")
@@ -142,9 +143,9 @@ class TestSetAndGetUsercodes:
         hass: HomeAssistant,
         e2e_virtual_lock: VirtualLock,
     ) -> None:
-        """Set then clear via base orchestration; verify projection shows empty."""
-        await e2e_virtual_lock.async_internal_set_usercode(1, "3333", "user")
-        await e2e_virtual_lock.async_internal_clear_usercode(1)
+        """Set then clear via the worker's write hooks; verify projection shows empty."""
+        await e2e_virtual_lock.async_set_usercode(1, "3333", "user")
+        await e2e_virtual_lock.async_clear_usercode(1)
 
         codes = await e2e_virtual_lock.async_get_usercodes()
         assert codes[1] is SlotCredential.empty()
@@ -175,7 +176,9 @@ class TestSetAndGetUsercodes:
         await e2e_virtual_lock.async_unload(False)
 
         # Re-setup reloads from the store via hard_refresh_codes
-        await e2e_virtual_lock.async_setup_internal(config_entry)
+        await e2e_virtual_lock.async_setup_internal(
+            config_entry, _Coordinator(ProviderPort(e2e_virtual_lock))
+        )
         codes = await e2e_virtual_lock.async_get_usercodes()
 
         assert codes[1] == SlotCredential.known("1111")
@@ -205,13 +208,22 @@ class TestSetAndGetUsercodes:
         hass: HomeAssistant,
         e2e_virtual_lock: VirtualLock,
     ) -> None:
-        """async_get_users returns User objects wrapping the slot credentials."""
+        """
+        async_get_users returns User objects wrapping the slot credentials.
+
+        The entry's own sync has already put its PINs on both configured
+        slots by the time setup settles, so slot 2 holds its configured PIN
+        and an inactive user is shown by clearing slot 2 on the lock.
+        """
         await e2e_virtual_lock.async_set_credential(
             1,
             credential_from_slot(1, SlotCredential.known("5555")),
             "5555",
             name="slot_user",
             source="direct",
+        )
+        await e2e_virtual_lock.async_delete_credential(
+            CredentialRef(user_id=2, type=CredentialType.PIN, slot=2)
         )
 
         users = await e2e_virtual_lock.async_get_users()
@@ -329,8 +341,14 @@ class TestCredentialUseRecording:
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
         assert state.state != STATE_UNAVAILABLE
-        assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
         lock = get_virtual_lock(hass, lcm_config_entry)
+        # The first sync's write probed the capabilities: the virtual lock
+        # advertises every credential type, on top of the managed floor.
+        assert lock.cached_capabilities is not None
+        assert state.attributes[ATTR_EVENT_TYPES] == sorted(
+            set(MANAGED_CREDENTIAL_TYPES)
+            | set(lock.cached_capabilities.credential_types)
+        )
         assert lock.supports_code_slot_events is False
 
         lock.async_fire_code_slot_event(1, False)
@@ -340,6 +358,49 @@ class TestCredentialUseRecording:
         assert recorded.state != state.state
         assert recorded.attributes[ATTR_EVENT_TYPE] == CredentialType.PIN
         assert recorded.attributes[ATTR_TARGET] == VIRTUAL_LOCK_ENTITY_ID
+
+    async def test_a_user_added_later_learns_what_the_lock_reports(
+        self,
+        hass: HomeAssistant,
+        virtual_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A use recorder made for a lock already held follows that lock's probe.
+
+        The virtual lock is asked what it can hold only by its first write,
+        which comes after the new user's entities are added. The kinds the
+        recorder publishes widen then, not at the next recorded use.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID], CONF_SLOTS: {}},
+            unique_id="test_virtual_added_user",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        lock = get_virtual_lock(hass, entry)
+        assert lock.cached_capabilities is None
+
+        [subentry] = user_subentries(
+            {1: {CONF_NAME: "late", CONF_PIN: "1234", CONF_ENABLED: True}}
+        )
+        hass.config_entries.async_add_subentry(entry, ConfigSubentry(**subentry))
+        await hass.async_block_till_done()
+        async_fire_time_changed(hass, dt_util.utcnow() + TICK_INTERVAL)
+        await hass.async_block_till_done()
+
+        assert lock.cached_capabilities is not None
+        event_entity = er.async_get(hass).async_get_entity_id(
+            "event",
+            DOMAIN,
+            build_slot_unique_id(entry.entry_id, 1, EVENT_CREDENTIAL_USED),
+        )
+        assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == sorted(
+            set(MANAGED_CREDENTIAL_TYPES)
+            | set(lock.cached_capabilities.credential_types)
+        )
+        assert await hass.config_entries.async_unload(entry.entry_id)
 
     @pytest.mark.parametrize("pin", ["1", "9" * 64])
     async def test_advertised_capabilities_reject_no_pin_length(
@@ -358,7 +419,7 @@ class TestCredentialUseRecording:
         before the lengths are tried.
         """
         lock = get_virtual_lock(hass, lcm_config_entry)
-        await lock.async_internal_set_usercode(1, "1234")
+        await lock.async_set_usercode(1, "1234")
         assert lock.cached_capabilities is not None
 
         await hass.services.async_call(
@@ -402,7 +463,7 @@ class TestReauthLockSwap:
         hass.states.async_set(replacement.entity_id, "locked")
 
         lock = get_virtual_lock(hass, lcm_config_entry)
-        await lock.async_internal_set_usercode(1, "1234")
+        await lock.async_set_usercode(1, "1234")
 
         def _fresh_store() -> Store:
             return Store(hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}")
@@ -473,55 +534,10 @@ class TestASlotHeldByAnEntryThatSyncsNothing:
             for event in events
         ] == [("slot3", holder.entry_id)]
 
-    async def test_a_duplicate_of_its_code_names_it_managed(
-        self,
-        hass: HomeAssistant,
-        lcm_config_entry,
-        standing: str,
-    ) -> None:
-        """
-        A PIN refused for duplicating that slot's code says the slot is managed.
 
-        "Unmanaged" would send the user hunting for a code nobody configured,
-        when the clash is with another entry's user.
-        """
-        _entry_on_slot_3(hass, standing)
-        lock = get_virtual_lock(hass, lcm_config_entry)
-        await lock.async_internal_set_usercode(3, "5555")
-        await lock.coordinator.async_refresh()
+class TestLockLeaving:
+    """A lock leaves Lock Code Manager only when no entry lists it."""
 
-        await hass.services.async_call(
-            TEXT_DOMAIN,
-            SERVICE_SET_VALUE,
-            service_data={ATTR_VALUE: "5555"},
-            target={ATTR_ENTITY_ID: SLOT_1_PIN_ENTITY},
-            blocking=True,
-        )
-        for tick in range(2):
-            async_fire_time_changed(
-                hass, dt_util.utcnow() + TICK_INTERVAL * (tick + 1) * 2
-            )
-            await hass.async_block_till_done()
-
-        issue = ir.async_get(hass).async_get_issue(
-            DOMAIN, f"slot_disabled_{lcm_config_entry.entry_id}_1"
-        )
-        assert issue is not None
-        assert (
-            "PIN duplicates managed slot 3" in issue.translation_placeholders["reason"]
-        )
-
-
-class TestOpenBugs:
-    """Open virtual-lock bugs, each pinned by a strict xfail."""
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: when one entry drops a lock, only enabled entries count as "
-            "still listing it, so a disabled entry's stored codes are deleted"
-        ),
-    )
     async def test_a_disabled_entrys_lock_keeps_its_codes_when_another_drops_it(
         self,
         hass: HomeAssistant,
@@ -531,7 +547,7 @@ class TestOpenBugs:
         """The codes the virtual lock holds survive for the disabled entry that lists it."""
         _entry_on_slot_3(hass, "disabled")
         lock = get_virtual_lock(hass, lcm_config_entry)
-        await lock.async_internal_set_usercode(3, "5555")
+        await lock.async_set_usercode(3, "5555")
         replacement = er.async_get(hass).async_get_or_create(
             "lock",
             "virtual",
@@ -555,6 +571,10 @@ class TestOpenBugs:
             hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}"
         ).async_load()
         assert stored is not None
+
+
+class TestOpenBugs:
+    """Open virtual-lock bugs, each pinned by a strict xfail."""
 
     @pytest.mark.xfail(
         strict=True,

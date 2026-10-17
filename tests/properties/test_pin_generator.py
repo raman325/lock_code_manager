@@ -1,11 +1,9 @@
 """Property-based tests for random PIN generation."""
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 import pytest
 
-from custom_components.lock_code_manager.domain.pin_generator import (
+from custom_components.lock_code_manager.model.pin_generator import (
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
     generate_pin,

@@ -1,13 +1,12 @@
 """Test base class."""
 
 import asyncio
-from collections.abc import AsyncIterator, Collection
-import contextlib
+from collections.abc import Collection
+from dataclasses import replace
 from datetime import timedelta
-import itertools
 import logging
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
@@ -45,43 +44,42 @@ from custom_components.lock_code_manager.const import (
     ATTR_SOURCE,
     ATTR_SYNC_STATUS,
     ATTR_TARGET,
-    BACKOFF_INITIAL_SECONDS,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
-    TICK_INTERVAL,
 )
-from custom_components.lock_code_manager.domain.config import build_slot_unique_id
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.adapter import (
+    ProviderPort,
+    _Coordinator,
+)
+from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
+from custom_components.lock_code_manager.ha.runtime import lock_registry
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
     User,
-    WriteResult,
-    pin_address,
 )
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.exceptions import (
-    DuplicateCodeError,
-    LockBusy,
-    LockCodeManagerProviderError,
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
     ProviderNotImplementedError,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.model.locks import per_lock_issue_id
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._base import BaseLock
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
 )
+from custom_components.lock_code_manager.sync.slot import LIMIT
+from custom_components.lock_code_manager.sync.worker import BACKOFF_MIN
 from tests.common import (
     BASE_CONFIG,
-    CLOCK_STEP,
     LOCK_1_ENTITY_ID,
     LOCK_DEVICE_DOMAIN,
     NO_PIN_CAPABILITIES,
@@ -91,10 +89,8 @@ from tests.common import (
     async_advance_across_deadline,
     async_advance_clock,
     async_advance_sync_ticks,
-    async_run_paced,
     async_run_until_quiet,
     async_set_slot_pin,
-    async_settle_background,
     async_tick_until,
     code_entity_id,
     current_entry,
@@ -104,64 +100,21 @@ from tests.common import (
     when_mock_lock_built,
 )
 
+from ..common import TICK_INTERVAL
+
 TEST_OPERATION_DELAY = 0.01
 
 
-@pytest.fixture
-async def paced_lock(
-    hass: HomeAssistant,
-    lock_code_manager_config_entry,
-    freezer: FrozenDateTimeFactory,
-) -> AsyncIterator[MockLCMLock]:
+def _stand_in(lock: BaseLock) -> _Coordinator:
     """
-    Return lock 1 with the clock frozen, and leave nothing paced on it after.
+    Return the coordinator stand-in the provider port hands setup.
 
-    Freezing moves the monotonic clock, and with it the event loop's, to the
-    frozen wall time; unfreezing moves it back. An operation still waiting
-    when that happens, or a last-operation time from the frozen clock, would
-    then wait for years on the real one. Torn down before the freezer.
+    Its port is closed, so nothing the provider asks of it arms a poll that
+    would outlive the test: these tests drive the provider alone.
     """
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    yield lock
-    lock._min_operation_delay = 0.0
-    await async_settle_background(hass, freezer)
-    lock._last_operation_time = 0.0
-
-
-def _assert_paced(run_times: list[float], start: float) -> None:
-    """
-    Assert nothing waited before the first operation, and the delay sat between each.
-
-    ``run_times`` holds every operation that reached the lock, the
-    confirmation reads the test's writes set off included, so the gaps are
-    checked across all of them.
-    """
-    assert run_times[0] == start
-    assert all(
-        later - earlier >= TEST_OPERATION_DELAY
-        for earlier, later in itertools.pairwise(run_times)
-    ), run_times
-
-
-async def _arm_rate_limit(hass: HomeAssistant, lock: MockLCMLock) -> None:
-    """
-    Wait out background work, then give ``lock`` a short delay last used long ago.
-
-    The sync tick, the coordinator's refresh, and confirmation reads take the
-    lock's turn from tasks of their own. One still holding or queued for the
-    turn when the test's first operation arrives makes that operation wait
-    for a reason the test is not about. Freezing the clock jumps it past
-    every timer set before, so they all fire on the first loop turn after;
-    this waits until every task Home Assistant tracks has finished, and the
-    next timer is then the two-second sync tick, which the test never steps
-    the clock to. Call it in the test body, after the freezer has started.
-    Clears the lock's run times, so they hold only the test's operations
-    and what those set off.
-    """
-    await hass.async_block_till_done(wait_background_tasks=True)
-    lock._min_operation_delay = TEST_OPERATION_DELAY
-    lock._last_operation_time = 0.0
-    lock.run_times.clear()
+    port = ProviderPort(lock)
+    port._closed = True
+    return _Coordinator(port)
 
 
 class MockLCMLockWithPush(MockLCMLock):
@@ -241,15 +194,9 @@ async def test_base(hass: HomeAssistant):
         config_entry,
         lock_entity,
     )
-    # Mock coordinator refreshes since BaseLock doesn't implement
-    # the abstract methods needed for a real refresh.
-    with (
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_refresh"
-        ),
-    ):
-        assert await lock.async_setup_internal(config_entry) is None
+    # The stand-in the provider port hands setup: nothing is read here, the
+    # worker's first read comes after.
+    assert await lock.async_setup_internal(config_entry, _stand_in(lock)) is None
     assert lock.coordinator is not None
     assert await lock.async_unload(False) is None
     assert lock.usercode_scan_interval == timedelta(minutes=1)
@@ -259,20 +206,16 @@ async def test_base(hass: HomeAssistant):
     # signals — it returns False here because the test config entry isn't in
     # the LOADED state (integration down short-circuits the combined check).
     assert await lock.async_internal_is_reachable() is False
-    # hard_refresh / set / clear / get all check connection first via
-    # _execute_rate_limited; since the default connection check returned
-    # False above, they raise LockDisconnected before reaching the abstract
-    # method that would raise NotImplementedError. Patch the connection
-    # check to True so we actually exercise the abstract methods.
-    with patch.object(BaseLock, "async_is_integration_connected", return_value=True):
-        with pytest.raises(NotImplementedError):
-            await lock.async_internal_hard_refresh_codes()
-        with pytest.raises(NotImplementedError):
-            await lock.async_internal_clear_usercode(1)
-        with pytest.raises(NotImplementedError):
-            await lock.async_internal_set_usercode(1, "1234")
-        with pytest.raises(NotImplementedError):
-            await lock.async_internal_get_usercodes()
+    # The raw hooks the provider port calls have no connection gate of their
+    # own: each reaches the primitive a provider has to supply.
+    with pytest.raises(NotImplementedError):
+        await lock.async_hard_refresh_codes()
+    with pytest.raises(NotImplementedError):
+        await lock.async_clear_usercode(1)
+    with pytest.raises(NotImplementedError):
+        await lock.async_set_usercode(1, "1234")
+    with pytest.raises(NotImplementedError):
+        await lock.async_get_usercodes()
 
 
 async def test_unsubscribe_push_updates_suppresses_not_implemented(
@@ -336,111 +279,56 @@ def _bare_lock(hass: HomeAssistant, unique_id: str) -> MockLCMLock:
     return MockLCMLock(*_lock_args(hass, unique_id))
 
 
-class _ScopedReadLock(MockLCMLock):
-    """A lock that can only answer about the indices it was asked about.
-
-    The shape of ZHA and Zigbee2MQTT, which cost one device round trip per
-    index. For these the scope is not an optimization -- a read that loses it
-    answers a different question entirely.
-    """
-
-    async def async_get_usercodes(
-        self, slots: Collection[int] | None = None
-    ) -> dict[int, SlotCredential]:
-        """Answer about exactly the scope, and nothing else."""
-        scope = self.managed_slots if slots is None else slots
-        return {
-            slot: (
-                SlotCredential.known(self.codes[slot])
-                if slot in self.codes
-                else SlotCredential.empty()
-            )
-            for slot in scope
-        }
-
-
-async def test_occupied_indices_reads_a_real_provider_end_to_end(
-    hass: HomeAssistant,
+async def test_occupancy_counts_everything_the_lock_holds(
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
-    """The derivation runs against a provider read, not a stubbed one.
-
-    Every other test here patches ``async_get_usercodes``, which proves the
-    filtering and nothing about the seam under it. This drives a provider
-    that can only answer about the indices it was given, so a derivation that
-    dropped the scope would ask about the slots this entry manages -- none --
-    and report an empty lock.
-    """
-    lock = _ScopedReadLock(
-        *_lock_args(hass, "test_lock_occupancy_end_to_end"),
-    )
-    lock.codes = {2: "1234", 9: "5678"}
-
-    assert not lock.managed_slots
-    # 9 is real but outside the window, so it is not an answer to this question.
-    assert await lock.async_internal_get_occupied_indices(range(1, 6)) == frozenset({2})
-
-
-async def test_occupied_indices_counts_everything_the_lock_holds(
-    hass: HomeAssistant,
-) -> None:
-    """Occupancy is derived from the read, so every repair the read does counts.
+    """Occupancy is derived from a read in the lock's turn, so every masked code counts.
 
     An index whose value could not be read still holds something. Reserving
     it costs a user a slot number; handing it out costs them the code on
-    their door.
+    their door. What the lock says about indices outside the window asked
+    about is not an answer to this question.
     """
-    lock = _bare_lock(hass, "test_lock_occupancy_derivation")
+    asked: list[list[int]] = []
 
-    codes = {
-        0: SlotCredential.known("0000"),
-        1: SlotCredential.known("1234"),
-        2: SlotCredential.empty(),
-        3: SlotCredential.unreadable(),
-        12: SlotCredential.known("9999"),
-    }
-    with patch.object(lock, "async_get_usercodes", AsyncMock(return_value=codes)):
-        # 0 and 12 are both outside the window the caller asked about. A lock
-        # numbering from zero is not one this allocates into.
-        assert await lock.async_internal_get_occupied_indices(
-            range(1, 11)
-        ) == frozenset({1, 3})
+    async def _read(self, slots=None):
+        asked.append(sorted(slots))
+        return {
+            0: SlotCredential.known("0000"),
+            1: SlotCredential.known("1234"),
+            2: SlotCredential.empty(),
+            3: SlotCredential.unreadable(),
+            12: SlotCredential.known("9999"),
+        }
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _read):
+        occupancy = await async_read_occupancy(
+            hass, None, [LOCK_1_ENTITY_ID], range(1, 11)
+        )
+
+    [lock] = occupancy.locks
+    assert lock.occupied == frozenset({1, 3})
+    # The read is scoped, so a per-index lock is not walked end to end.
+    assert asked == [list(range(1, 11))]
 
 
-async def test_occupied_indices_is_unknown_when_the_lock_cannot_be_read(
-    hass: HomeAssistant,
+async def test_occupancy_asks_nothing_when_there_is_nothing_to_ask(
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
-    """A lock that cannot be read reports unknown, never empty.
+    """An empty range costs no round trip.
 
-    Every failure this integration raises has to land here. One that escapes
-    reaches a caller with no answer at all, where the safe reading -- refuse
-    -- is the one it cannot make.
+    A caller widening its search hands over only the indices it has not
+    covered, and on the pass where that set is empty there is nothing to
+    learn -- reaching the lock would be a round trip for an answer already
+    held.
     """
-    lock = _bare_lock(hass, "test_lock_occupancy_error")
-
-    for error in (
-        LockDisconnected("asleep"),
-        LockCodeManagerProviderError("malformed response"),
-        LockOperationFailed("read rejected"),
-    ):
-        with patch.object(lock, "async_get_usercodes", AsyncMock(side_effect=error)):
-            assert await lock.async_internal_get_occupied_indices(range(1, 11)) is None
-
-
-async def test_occupied_indices_asks_only_about_the_window(
-    hass: HomeAssistant,
-) -> None:
-    """The read is scoped, so a per-index lock is not walked end to end.
-
-    The caller names the indices rather than a ceiling, so one that widens
-    its search can ask only about what it has not asked about yet.
-    """
-    lock = _bare_lock(hass, "test_lock_occupancy_window")
-
     read = AsyncMock(return_value={})
-    with patch.object(lock, "async_get_usercodes", read):
-        await lock.async_internal_get_occupied_indices(range(1, 4))
+    with patch.object(MockLCMLock, "async_get_usercodes", read):
+        occupancy = await async_read_occupancy(hass, None, [LOCK_1_ENTITY_ID], [])
 
-    assert sorted(read.await_args.args[0]) == [1, 2, 3]
+    [lock] = occupancy.locks
+    assert lock.occupied == frozenset()
+    read.assert_not_awaited()
 
 
 class _PushSetupRaisesLock(MockLCMLock):
@@ -550,11 +438,50 @@ async def test_config_entry_state_change_resubscribes(
         lock.coordinator.async_request_refresh = AsyncMock()
 
         await hass.config_entries.async_reload(mock_lock_config_entry.entry_id)
-        await hass.async_block_till_done()
+        # The reconnect runs as a background task of the reloaded entry: one
+        # started only once the entry is loaded again, so the reload's
+        # unload has nothing of it to cancel.
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         assert lock.unsubscribe_calls == 1
         assert lock.subscribe_calls == 1
         lock.coordinator.async_request_refresh.assert_awaited()
+
+        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
+
+
+async def test_lock_integration_unload_cancels_provider_tasks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A provider's background work ends when its lock integration unloads.
+
+    A follow-up refresh or event dispatch still waiting on an integration
+    that has gone would otherwise talk to it after its teardown.
+    """
+    with patch(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockWithPush},
+    ):
+        lcm_config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+        )
+        lcm_config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        lock = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+        assert lock.lock_config_entry is mock_lock_config_entry
+        task = lock._create_background_task(
+            asyncio.Event().wait(), "provider work that never finishes"
+        )
+        await asyncio.sleep(0)
+        assert not task.done()
+
+        await hass.config_entries.async_unload(mock_lock_config_entry.entry_id)
+
+        assert task.cancelled()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
@@ -580,17 +507,17 @@ async def test_connection_transition_resubscribes(
 
         lock.subscribe_calls = 0
         lock.unsubscribe_calls = 0
-        lock._min_operation_delay = 0.0
-        lock._last_operation_time = 0.0
 
-        await lock.coordinator.async_refresh()
+        # The connection check the provider port runs on the provider's
+        # cadence: each one lets the provider see its integration come and go.
+        await lock.async_internal_is_reachable()
 
         lock.set_connected(False)
-        await lock.coordinator.async_refresh()
+        await lock.async_internal_is_reachable()
         assert lock.unsubscribe_calls == 1
 
         lock.set_connected(True)
-        await lock.coordinator.async_refresh()
+        await lock.async_internal_is_reachable()
         assert lock.subscribe_calls == 1
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
@@ -624,20 +551,22 @@ async def test_connection_transition_on_device_availability(
 
         lock.subscribe_calls = 0
         lock.unsubscribe_calls = 0
-        lock._min_operation_delay = 0.0
-        lock._last_operation_time = 0.0
 
-        await lock.coordinator.async_refresh()
+        # The connection check the provider port runs on the provider's
+        # cadence: each one lets the provider see its integration come and go.
+        await lock.async_internal_is_reachable()
 
         # Integration stays connected; only the node drops.
         lock.set_device_available(False)
-        await lock.coordinator.async_refresh()
+        await lock.async_internal_is_reachable()
         assert lock.unsubscribe_calls == 1
 
         lock.set_device_available(True)
         lock.coordinator.async_request_refresh = AsyncMock()
-        await lock.coordinator.async_refresh()
+        await lock.async_internal_is_reachable()
+        await hass.async_block_till_done()
         assert lock.subscribe_calls == 1
+        # The refresh asked for is a read of the lock by its worker.
         lock.coordinator.async_request_refresh.assert_awaited()
 
         await hass.config_entries.async_unload(lcm_config_entry.entry_id)
@@ -670,22 +599,32 @@ async def test_a_lock_back_from_a_device_outage_gets_its_new_pin_promptly(
     await async_advance_sync_ticks(hass, freezer)
     assert hass.states.get(in_sync).state == STATE_ON
 
+    # A connection check sees the lock up before the outage.
+    await async_advance_clock(
+        hass, freezer, lock.connection_check_interval.total_seconds()
+    )
+
+    # The device drops off: the provider's own exchanges go unanswered, and
+    # its availability check says so to the connection check.
     lock.set_device_available(False)
+    outage = lock.fail(None, error=LockDisconnected)
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
     await async_set_slot_pin(hass, entry, 1, "4321")
     await async_tick_until(
         hass,
         freezer,
-        lambda: sync_status(hass, in_sync) == SyncState.SUSPENDED.value,
-        max_ticks=MAX_SYNC_ATTEMPTS + 3,
-        what="slot 1 suspended on the unreachable lock",
+        lambda: not worker.reachable,
+        max_ticks=LIMIT + 3,
+        what="the worker backing off the unreachable lock",
     )
     # Long enough for the probes to fail too, each doubling the backoff: the
     # next one is minutes away when the device comes back.
-    await async_advance_clock(hass, freezer, 3 * BACKOFF_INITIAL_SECONDS)
+    await async_advance_clock(hass, freezer, 3 * BACKOFF_MIN)
     assert lock.codes[1] == "1234"
     assert lock.unsubscribe_calls == 1
     subscribed = lock.subscribe_calls
 
+    outage.clear()
     lock.set_device_available(True)
     await async_tick_until(
         hass,
@@ -698,156 +637,6 @@ async def test_a_lock_back_from_a_device_outage_gets_its_new_pin_promptly(
     assert lock.codes[1] == "4321"
     assert lock.subscribe_calls > subscribed
     assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-@pytest.mark.parametrize(
-    ("operation", "call"),
-    [
-        ("set", lambda p: p.async_internal_set_usercode(2, "9999", "test")),
-        ("clear", lambda p: p.async_internal_clear_usercode(2)),
-    ],
-)
-async def test_operation_when_disconnected(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    operation: str,
-    call,
-):
-    """Test that operations raise LockDisconnected when lock is disconnected."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock_provider.set_connected(False)
-
-    with pytest.raises(LockDisconnected):
-        await call(lock_provider)
-
-
-async def test_rate_limiting_set_usercode(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    freezer: FrozenDateTimeFactory,
-    paced_lock: MockLCMLock,
-):
-    """Test that operations are rate limited with minimum delay between calls."""
-    await _arm_rate_limit(hass, paced_lock)
-    start = time.monotonic()
-
-    await async_run_paced(
-        hass, freezer, paced_lock.async_internal_set_usercode(1, "1111", "Test 1")
-    )
-    # Half the delay passes on its own, so the second waits only the rest.
-    freezer.tick(TEST_OPERATION_DELAY / 2)
-    await async_run_paced(
-        hass, freezer, paced_lock.async_internal_set_usercode(2, "2222", "Test 2")
-    )
-
-    await async_settle_background(hass, freezer)
-
-    _assert_paced(paced_lock.run_times, start)
-    first, second = paced_lock.run_times[:2]
-    assert second - first < TEST_OPERATION_DELAY + CLOCK_STEP
-    assert paced_lock.service_calls["set_usercode"][:2] == [
-        (1, "1111", "Test 1"),
-        (2, "2222", "Test 2"),
-    ]
-    # The confirmation read reached the lock, so its gap was checked too.
-    assert paced_lock.service_calls["get_usercodes"]
-
-
-async def test_rate_limiting_mixed_operations(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    freezer: FrozenDateTimeFactory,
-    paced_lock: MockLCMLock,
-):
-    """Test that rate limiting applies across different operation types."""
-    await _arm_rate_limit(hass, paced_lock)
-    start = time.monotonic()
-
-    await async_run_paced(
-        hass, freezer, paced_lock.async_internal_set_usercode(1, "1111", "Test")
-    )
-    # A clear right after a set waits the whole delay: the pacing is per lock,
-    # not per operation type.
-    await async_run_paced(hass, freezer, paced_lock.async_internal_clear_usercode(2))
-    await async_settle_background(hass, freezer)
-
-    _assert_paced(paced_lock.run_times, start)
-    assert paced_lock.service_calls["clear_usercode"] == [(2,)]
-
-
-async def test_rate_limiting_get_usercodes(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    freezer: FrozenDateTimeFactory,
-    paced_lock: MockLCMLock,
-):
-    """Test that get operations are also rate limited."""
-    await _arm_rate_limit(hass, paced_lock)
-    start = time.monotonic()
-
-    await async_run_paced(hass, freezer, paced_lock.async_internal_get_usercodes())
-    await async_run_paced(hass, freezer, paced_lock.async_internal_get_usercodes())
-
-    assert len(paced_lock.run_times) == 2
-    _assert_paced(paced_lock.run_times, start)
-
-
-async def test_operations_are_serialized(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    freezer: FrozenDateTimeFactory,
-    paced_lock: MockLCMLock,
-):
-    """Test that multiple parallel operations are serialized by the lock."""
-    await _arm_rate_limit(hass, paced_lock)
-    start = time.monotonic()
-
-    # Operations that overlapped would wait out the same delay side by side
-    # and reach the lock together.
-    await async_run_paced(
-        hass,
-        freezer,
-        *(
-            paced_lock.async_internal_set_usercode(slot, str(slot) * 4, f"Test {slot}")
-            for slot in (1, 2, 3)
-        ),
-    )
-
-    await async_settle_background(hass, freezer)
-
-    _assert_paced(paced_lock.run_times, start)
-    assert paced_lock.service_calls["set_usercode"][:3] == [
-        (slot, str(slot) * 4, f"Test {slot}") for slot in (1, 2, 3)
-    ]
-
-
-async def test_connection_failure_does_not_rate_limit_next_operation(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    freezer: FrozenDateTimeFactory,
-    paced_lock: MockLCMLock,
-):
-    """Test that failed connection checks do not advance rate limit timing."""
-    await _arm_rate_limit(hass, paced_lock)
-    start = time.monotonic()
-
-    paced_lock.set_connected(False)
-    with pytest.raises(LockDisconnected):
-        await async_run_paced(
-            hass, freezer, paced_lock.async_internal_set_usercode(1, "1111", "Test 1")
-        )
-
-    # The failed attempt never reached the lock, so it is not an operation to
-    # wait after: the next one runs at once.
-    paced_lock.set_connected(True)
-    await async_run_paced(
-        hass, freezer, paced_lock.async_internal_set_usercode(1, "2222", "Test 2")
-    )
-    await async_settle_background(hass, freezer)
-
-    _assert_paced(paced_lock.run_times, start)
-    assert paced_lock.service_calls["set_usercode"][0] == (1, "2222", "Test 2")
 
 
 async def test_async_call_service_raises_operation_failed_on_error(
@@ -922,70 +711,6 @@ async def test_async_call_service_wraps_os_error_as_lock_disconnected(
         await lock_provider.async_call_service("test_domain", "timeout_service", {})
 
     hass.services.async_remove("test_domain", "timeout_service")
-
-
-async def test_set_usercode_records_a_pending_write_on_change(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """A changed set on a polled lock is pending until the coordinator's read sees it.
-
-    The seam does not ask for a refresh; the coordinator owns the follow-up
-    read. Setting the same value again changes nothing and records nothing.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-
-    with (
-        patch.object(coordinator, "async_request_refresh", AsyncMock()) as refresh,
-        patch.object(
-            coordinator, "record_write", wraps=coordinator.record_write
-        ) as record,
-    ):
-        await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        record.assert_called_once_with(pin_address(3), "3333", believed=False)
-        assert coordinator.has_pending_write(pin_address(3))
-        refresh.assert_not_awaited()
-
-        # The coordinator's own read confirms it; the same value again is no change.
-        await hass.async_block_till_done()
-        assert coordinator.is_verified(pin_address(3))
-        await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-        record.assert_called_once()
-        assert coordinator.is_verified(pin_address(3))
-
-
-async def test_clear_usercode_refreshes_coordinator_on_change(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that async_internal_clear_usercode refreshes coordinator when value changes."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_provider.coordinator
-    assert coordinator is not None
-
-    # First set a usercode so we can clear it
-    await lock_provider.async_internal_set_usercode(4, "4444", "Test 4")
-
-    # Track coordinator refreshes
-    refresh_count = [0]
-    original_refresh = coordinator.async_request_refresh
-
-    async def track_refresh():
-        refresh_count[0] += 1
-        return await original_refresh()
-
-    with patch.object(coordinator, "async_request_refresh", track_refresh):
-        # Clearing an existing usercode should trigger a coordinator refresh
-        await lock_provider.async_internal_clear_usercode(4)
-        assert refresh_count[0] == 1
-
-        # Clearing a non-existent slot should NOT trigger refresh (no change)
-        await lock_provider.async_internal_clear_usercode(999)
-        assert refresh_count[0] == 1  # Still 1, no new refresh
 
 
 async def test_lock_equality_with_non_baselock(hass: HomeAssistant):
@@ -1195,81 +920,12 @@ async def test_setup_defers_push_subscription_when_entry_not_loaded(
     )
     lock.subscribe_calls = 0
 
-    # Mock coordinator refreshes
-    with (
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_refresh"
-        ),
-    ):
-        await lock.async_setup_internal(lcm_config_entry)
+    await lock.async_setup_internal(lcm_config_entry, _stand_in(lock))
 
-        # Push subscription should be deferred (not called) since entry not loaded
-        assert lock.subscribe_calls == 0
+    # Push subscription should be deferred (not called) since entry not loaded
+    assert lock.subscribe_calls == 0
 
     await lock.async_unload(False)
-
-
-async def test_async_setup_internal_creates_coordinator_when_setup_fails(
-    hass: HomeAssistant,
-):
-    """Test that coordinator is created even when async_setup raises."""
-    entity_reg = er.async_get(hass)
-    dev_reg = dr.async_get(hass)
-
-    config_entry = MockConfigEntry(domain=DOMAIN)
-    config_entry.add_to_hass(hass)
-
-    lock_entity = entity_reg.async_get_or_create(
-        "lock",
-        "test",
-        "test_lock_setup_fail",
-        config_entry=config_entry,
-    )
-
-    lock = BaseLock(
-        hass,
-        dev_reg,
-        entity_reg,
-        config_entry,
-        lock_entity,
-    )
-
-    # Make async_setup raise an exception
-    with (
-        patch.object(
-            lock,
-            "async_setup",
-            side_effect=LockDisconnected("provider unavailable"),
-        ),
-        patch(
-            "custom_components.lock_code_manager.domain.coordinator."
-            "LockUsercodeUpdateCoordinator.async_refresh"
-        ),
-    ):
-        # Should not raise even though async_setup failed
-        await lock.async_setup_internal(config_entry)
-
-    # Coordinator should still have been created
-    assert lock.coordinator is not None
-    # Setup complete should be signaled
-    assert lock._setup_complete.is_set()
-    # Setup should be marked as failed
-    assert lock._setup_succeeded is False
-
-    # Simulate reconnect: mock lock_config_entry as LOADED, async_setup succeeds
-    mock_entry = MagicMock()
-    mock_entry.state = ConfigEntryState.LOADED
-    lock.lock_config_entry = mock_entry
-    with patch.object(lock, "async_setup", return_value=None):
-        await lock._async_on_integration_loaded()
-
-    # Coordinator was created via async_setup_internal directly (no full LCM
-    # entry to unload). Shut it down explicitly so HA 2026.5.0's
-    # verify_cleanup does not flag the debouncer timer as lingering.
-    await lock.coordinator.async_shutdown()
-
-    assert lock._setup_succeeded is True
 
 
 async def test_a_lock_whose_setup_raised_comes_up_with_its_integration(
@@ -1320,42 +976,10 @@ async def test_a_lock_whose_setup_raised_comes_up_with_its_integration(
     )
     assert hass.states.get(per_lock[1]).state == "4321"
     assert lock.codes[1] == "4321"
-    assert lock.service_calls["setup"] == [(entry.entry_id,)] * 2
+    # Retried on the connection check while down, and again on the reload.
+    assert len(lock.service_calls["setup"]) >= 2
+    assert set(lock.service_calls["setup"]) == {(entry.entry_id,)}
     assert await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_async_setup_internal_absorbs_a_failed_first_read(
-    hass: HomeAssistant,
-):
-    """
-    A first read that fails during initial setup is absorbed, not propagated.
-
-    The lock is expected to be unreachable during a cold start, so setup still
-    builds the coordinator and the lock stays unavailable until a later read
-    succeeds.
-    """
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(
-        domain=DOMAIN, state=ConfigEntryState.SETUP_IN_PROGRESS
-    )
-    config_entry.add_to_hass(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock", "test", "first_read_fails", config_entry=config_entry
-    )
-    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
-    lock._min_operation_delay = 0
-
-    with patch.object(
-        lock, "async_get_usercodes", side_effect=LockDisconnected("lock still asleep")
-    ):
-        await lock.async_setup_internal(config_entry)
-
-    assert lock.coordinator is not None
-    assert lock.coordinator.last_update_success is False
-    assert lock._setup_complete.is_set()
-
-    await lock.async_unload(False)
-    await lock.coordinator.async_shutdown()
 
 
 async def test_on_integration_loaded_skips_when_no_config_entry(
@@ -1438,8 +1062,7 @@ async def test_on_integration_loaded_logs_debug_on_transient_reconnect_failure(
     lock = BaseLock(hass, dev_reg, entity_reg, config_entry, lock_entity)
     lock._lcm_config_entry = config_entry
 
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
+    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
     lock.lock_config_entry = loaded_entry
 
     with patch.object(
@@ -1478,8 +1101,7 @@ async def test_a_reconnect_whose_probe_times_out_rearms_the_retry(
     lock._lcm_config_entry = config_entry
     lock._min_operation_delay = 0
 
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
+    loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
     lock.lock_config_entry = loaded_entry
 
     async def _never_returns(*_args, **_kwargs):
@@ -1556,7 +1178,7 @@ async def test_setup_internal_defers_provider_io_when_integration_not_connected(
         patch.object(lock, "async_get_capabilities") as mock_caps,
         patch.object(lock, "async_setup") as mock_setup,
     ):
-        await lock.async_setup_internal(lock.lock_config_entry)
+        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
 
     mock_caps.assert_not_called()
     mock_setup.assert_not_called()
@@ -1564,9 +1186,7 @@ async def test_setup_internal_defers_provider_io_when_integration_not_connected(
     # Degraded, not dropped: coordinator and recovery listener exist.
     assert lock.coordinator is not None
     assert lock._config_entry_state_unsub is not None
-    assert lock._setup_complete.is_set()
 
-    await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
 
 
@@ -1613,23 +1233,6 @@ async def test_a_lock_not_connected_at_setup_gets_entities_that_come_up_with_it(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_setup_complete_set_when_setup_raises_unexpectedly(
-    hass: HomeAssistant,
-):
-    """_setup_complete is set even when setup escapes with an unexpected error.
-
-    Waiters in async_wait_for_setup (shared lock instances across config
-    entries) must not hang forever when setup fails structurally.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_setup_complete")
-
-    with patch.object(lock, "async_setup", side_effect=RuntimeError("boom")):
-        with pytest.raises(RuntimeError):
-            await lock.async_setup_internal(lock.lock_config_entry)
-
-    assert lock._setup_complete.is_set()
-
-
 async def test_on_integration_loaded_runs_deferred_capability_validation(
     hass: HomeAssistant,
 ):
@@ -1644,70 +1247,19 @@ async def test_on_integration_loaded_runs_deferred_capability_validation(
 
     caps_mock = AsyncMock(return_value=_pin_capabilities())
     with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry)
+        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
         assert lock._setup_succeeded is False
         caps_mock.assert_not_called()
 
         # Integration comes up; simulate the LOADED transition callback.
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
     caps_mock.assert_awaited_once()
     assert lock._setup_succeeded is True
 
-    await lock.coordinator.async_shutdown()
-    await lock.async_unload(False)
-
-
-async def test_setup_internal_structural_failure_degrades_and_recovers_on_reload(
-    hass: HomeAssistant,
-):
-    """Initial-setup validation failure degrades the lock instead of dropping it.
-
-    A structural failure (no PIN support / zero usable slots) during initial
-    setup used to propagate, making ``_async_setup_new_locks`` pop the lock
-    from runtime data with no retry path and no UI surface — a re-included
-    Z-Wave lock whose interview completed asleep stayed invisible until a
-    full reload. Initial setup now matches the reconnect path: the failure is
-    logged, the coordinator and recovery listener are still created, and the
-    LOADED transition re-runs validation so the lock recovers once the
-    underlying condition is fixed (e.g. after a re-interview).
-    """
-    lock = _make_base_test_lock(
-        hass, "test_lock_structural_degraded", MockNativeUserLock
-    )
-
-    no_pin_caps = LockCapabilities(
-        supports_user_management=True, max_users=10, credential_types={}
-    )
-    caps_mock = AsyncMock(return_value=no_pin_caps)
-    with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry)
-
-        caps_mock.assert_awaited_once()
-        assert lock._setup_succeeded is False
-        # Degraded, not dropped: coordinator and recovery listener exist.
-        assert lock.coordinator is not None
-        assert lock._config_entry_state_unsub is not None
-        assert lock._setup_complete.is_set()
-
-        # The lock's condition is fixed (e.g. re-interview repopulated the
-        # slot count); the next LOADED transition revalidates and recovers.
-        caps_mock.return_value = _pin_capabilities()
-        # Validation failure must invalidate the capability cache; a
-        # degenerate-but-successful read would otherwise be served to every
-        # revalidation, making recovery impossible.
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
-        lock.lock_config_entry = loaded_entry
-        await lock._async_on_integration_loaded()
-
-    assert lock._setup_succeeded is True
-
-    await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
 
 
@@ -1735,10 +1287,15 @@ async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recover
         await hass.async_block_till_done()
     in_sync = in_sync_entity_id(hass, entry, 1)
     await async_advance_sync_ticks(hass, freezer, 5)
-    assert issue_reg.async_get_issue(DOMAIN, setup_issue) is not None
-    assert sync_status(hass, in_sync) == SyncState.SUSPENDED.value
-    # Still read: the code sensor shows what the lock holds.
-    assert hass.states.get(code_entity_id(hass, entry, 1)).state == "1234"
+    issue = issue_reg.async_get_issue(DOMAIN, setup_issue)
+    assert issue is not None
+    # The repair carries the actionable reason into the UI, not just the log.
+    assert issue.translation_placeholders
+    assert "PIN credential" in issue.translation_placeholders["error"]
+    # Its entities are there, unavailable: nothing is read from or written to
+    # a lock its provider has not set up.
+    assert hass.states.get(in_sync).state == STATE_UNAVAILABLE
+    assert hass.states.get(code_entity_id(hass, entry, 1)).state == STATE_UNAVAILABLE
     lock = mock_lock(entry)
     assert "set_usercode" not in lock.service_calls
 
@@ -1762,46 +1319,6 @@ async def test_a_lock_failing_validation_at_setup_stays_in_the_entry_and_recover
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_setup_validation_failure_raises_and_clears_repair_issue(
-    hass: HomeAssistant,
-):
-    """A structural setup failure surfaces a repair issue; recovery clears it.
-
-    The actionable error message (e.g. zwave_js's "re-interview the lock")
-    used to land only in the log, addressed to a user who never sees it.
-    The repair carries it into the UI, and revalidation succeeding on the
-    provider integration's LOADED transition dismisses it automatically.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_repair_issue", MockNativeUserLock)
-    issue_reg = ir.async_get(hass)
-    issue_id = f"lock_setup_failed_{lock.lock.entity_id}"
-
-    no_pin_caps = LockCapabilities(
-        supports_user_management=True, max_users=10, credential_types={}
-    )
-    caps_mock = AsyncMock(return_value=no_pin_caps)
-    with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry)
-
-        issue = issue_reg.async_get_issue(DOMAIN, issue_id)
-        assert issue is not None
-        assert issue.translation_placeholders
-        assert "PIN credential" in issue.translation_placeholders["error"]
-
-        # The lock's condition is fixed; the LOADED transition revalidates
-        # and the repair dismisses itself.
-        caps_mock.return_value = _pin_capabilities()
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
-        lock.lock_config_entry = loaded_entry
-        await lock._async_on_integration_loaded()
-
-    assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
-
-    await lock.coordinator.async_shutdown()
-    await lock.async_unload(False)
-
-
 async def test_reconnect_validation_failure_raises_repair_issue(
     hass: HomeAssistant,
 ):
@@ -1818,19 +1335,21 @@ async def test_reconnect_validation_failure_raises_repair_issue(
     )
     caps_mock = AsyncMock(return_value=no_pin_caps)
     with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry)
+        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
         # Deferred: no probe ran, so no issue yet.
         assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
 
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         await lock._async_on_integration_loaded()
 
+    # Probed once, on the reconnect; the structural failure stays inside the
+    # reconnect task and the provider never reaches the set-up state.
+    caps_mock.assert_awaited_once()
+    assert lock._setup_succeeded is False
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
 
-    await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
 
 
@@ -1852,7 +1371,7 @@ async def test_unload_permanently_clears_setup_failed_repair_issue(
     with patch.object(
         lock, "async_get_capabilities", AsyncMock(return_value=no_pin_caps)
     ):
-        await lock.async_setup_internal(lock.lock_config_entry)
+        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is not None
 
     await lock.async_unload(False)
@@ -1860,113 +1379,6 @@ async def test_unload_permanently_clears_setup_failed_repair_issue(
 
     await lock.async_unload(True)
     assert issue_reg.async_get_issue(DOMAIN, issue_id) is None
-
-    await lock.coordinator.async_shutdown()
-
-
-async def test_on_integration_loaded_rejects_lock_without_pin_support(
-    hass: HomeAssistant,
-):
-    """Deferred validation failing (no PIN support) leaves setup unsuccessful.
-
-    The structural failure must not escape into the reconnect task; the
-    provider simply never reaches the set-up state.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_deferred_no_pin", MockNativeUserLock)
-    lock.set_connected(False)
-
-    no_pin_caps = LockCapabilities(
-        supports_user_management=True, max_users=10, credential_types={}
-    )
-    caps_mock = AsyncMock(return_value=no_pin_caps)
-    with patch.object(lock, "async_get_capabilities", caps_mock):
-        await lock.async_setup_internal(lock.lock_config_entry)
-
-        lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
-        lock.lock_config_entry = loaded_entry
-        await lock._async_on_integration_loaded()
-
-    caps_mock.assert_awaited_once()
-    assert lock._setup_succeeded is False
-
-    await lock.coordinator.async_shutdown()
-    await lock.async_unload(False)
-
-
-async def test_set_usercode_skips_refresh_for_push_provider(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """Test that async_internal_set_usercode does NOT refresh coordinator for push providers."""
-    with patch(
-        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLockWithPush},
-    ):
-        lcm_config_entry = MockConfigEntry(
-            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Push Set"
-        )
-        lcm_config_entry.add_to_hass(hass)
-        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
-        await hass.async_block_till_done()
-
-        lock_provider = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-        assert isinstance(lock_provider, MockLCMLockWithPush)
-        coordinator = lock_provider.coordinator
-        assert coordinator is not None
-
-        # Track coordinator refreshes
-        refresh_count = [0]
-        original_refresh = coordinator.async_request_refresh
-
-        async def track_refresh():
-            refresh_count[0] += 1
-            return await original_refresh()
-
-        with patch.object(coordinator, "async_request_refresh", track_refresh):
-            # Setting a new usercode should NOT trigger refresh for push providers
-            await lock_provider.async_internal_set_usercode(3, "3333", "Test 3")
-            assert refresh_count[0] == 0
-
-        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
-
-
-async def test_clear_usercode_skips_refresh_for_push_provider(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """Test that async_internal_clear_usercode does NOT refresh coordinator for push providers."""
-    with patch(
-        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
-        {"test": MockLCMLockWithPush},
-    ):
-        lcm_config_entry = MockConfigEntry(
-            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Push Clear"
-        )
-        lcm_config_entry.add_to_hass(hass)
-        await hass.config_entries.async_setup(lcm_config_entry.entry_id)
-        await hass.async_block_till_done()
-
-        lock_provider = lcm_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-        assert isinstance(lock_provider, MockLCMLockWithPush)
-        coordinator = lock_provider.coordinator
-        assert coordinator is not None
-
-        # Track coordinator refreshes
-        refresh_count = [0]
-        original_refresh = coordinator.async_request_refresh
-
-        async def track_refresh():
-            refresh_count[0] += 1
-            return await original_refresh()
-
-        with patch.object(coordinator, "async_request_refresh", track_refresh):
-            # Clearing an existing usercode should NOT trigger refresh for push providers
-            await lock_provider.async_internal_clear_usercode(1)
-            assert refresh_count[0] == 0
-
-        await hass.config_entries.async_unload(lcm_config_entry.entry_id)
 
 
 async def test_config_entry_state_listener_ignores_same_state(
@@ -2027,142 +1439,6 @@ async def test_is_device_available_default_returns_true(hass: HomeAssistant):
 
     # Default implementation returns True
     assert await lock.async_is_device_available() is True
-
-
-async def test_execute_rate_limited_raises_when_device_not_available(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test that _execute_rate_limited raises LockDisconnected when device not available."""
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    # Device is not available but integration is connected
-    with patch.object(lock_provider, "async_is_device_available", return_value=False):
-        with pytest.raises(LockDisconnected, match="device not available"):
-            await lock_provider.async_internal_set_usercode(2, "9999", "test")
-
-
-# =============================================================================
-# _check_duplicate_code tests
-# =============================================================================
-
-
-async def test_check_duplicate_code_raises_on_match(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test _check_duplicate_code raises when a duplicate PIN is found."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None
-
-    coordinator.async_set_updated_data(
-        {
-            pin_address(1): SlotCredential.known("1234"),
-            pin_address(2): SlotCredential.known("5678"),
-            pin_address(3): SlotCredential.empty(),
-        }
-    )
-
-    with pytest.raises(DuplicateCodeError) as exc_info:
-        lock._check_duplicate_code(3, "1234")
-
-    assert exc_info.value.code_slot == 3
-    assert exc_info.value.conflicting_slot == 1
-
-
-async def test_check_duplicate_code_skips_masked(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test _check_duplicate_code skips masked codes."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None
-
-    coordinator.async_set_updated_data(
-        {
-            pin_address(1): SlotCredential.unreadable(),
-            pin_address(3): SlotCredential.empty(),
-        }
-    )
-
-    lock._check_duplicate_code(3, "1234")
-
-
-async def test_check_duplicate_code_skips_same_slot(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test _check_duplicate_code skips the target slot itself."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None
-
-    coordinator.async_set_updated_data({pin_address(1): SlotCredential.known("1234")})
-
-    lock._check_duplicate_code(1, "1234")
-
-
-async def test_check_duplicate_code_no_op_on_empty_usercode(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test _check_duplicate_code is a no-op when usercode is empty."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock.coordinator
-    assert coordinator is not None
-
-    coordinator.async_set_updated_data(
-        {pin_address(1): SlotCredential.empty(), pin_address(2): SlotCredential.empty()}
-    )
-
-    lock._check_duplicate_code(3, "")
-
-
-async def test_check_duplicate_code_no_coordinator(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Test _check_duplicate_code is a no-op when coordinator has no data."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.coordinator = None
-
-    lock._check_duplicate_code(1, "1234")
-
-
-async def test_mark_code_rejected_causes_next_set_to_raise_duplicate_then_clears(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """A firmware-rejected slot raises DuplicateCodeError on the next set, then clears.
-
-    mark_code_rejected() records that the lock's own firmware rejected the
-    PIN already written to a slot (e.g. an asynchronous duplicate-code NAK
-    the driver only reports after the write call returned success).
-    async_internal_set_usercode surfaces that as a DuplicateCodeError on the
-    very next set attempt for that slot -- but the flag is single-shot: it
-    is cleared up front, so a retry after the raise proceeds normally
-    instead of wedging the slot as permanently invalid.
-    """
-    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-
-    lock_provider.mark_code_rejected(1)
-    assert 1 in lock_provider._rejected_code_slots
-
-    with pytest.raises(DuplicateCodeError):
-        await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
-
-    # Single-shot: the flag was cleared by the failed attempt above.
-    assert 1 not in lock_provider._rejected_code_slots
-    await lock_provider.async_internal_set_usercode(1, "1111", "Test 1")
 
 
 async def test_async_unload_cancels_in_flight_reconnect_task(
@@ -2460,40 +1736,6 @@ async def test_serialize_sequence_serializes_concurrent_blocks(
     assert sorted(order) == [1, 2, 3]
 
 
-async def test_serialize_sequence_allows_rate_limited_inside(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """A rate-limited leaf call inside _serialize_sequence does not deadlock."""
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock._min_operation_delay = TEST_OPERATION_DELAY
-
-    async with lock._serialize_sequence():
-        result = await lock.async_internal_set_usercode(5, "5555", "Test 5")
-
-    assert result is None
-
-
-async def test_occupied_indices_asks_nothing_when_there_is_nothing_to_ask(
-    hass: HomeAssistant,
-) -> None:
-    """An empty range costs no round trip.
-
-    A caller widening its search hands over only the indices it has not
-    covered, and on the pass where that set is empty there is nothing to
-    learn -- reaching the lock would be a round trip for an answer already
-    held.
-    """
-    lock = _bare_lock(hass, "test_lock_occupancy_empty_range")
-
-    read = AsyncMock(return_value={})
-    with patch.object(lock, "async_get_usercodes", read):
-        assert await lock.async_internal_get_occupied_indices([]) == frozenset()
-
-    read.assert_not_awaited()
-
-
 async def test_max_slot_prefers_what_the_lock_advertises(hass: HomeAssistant) -> None:
     """A lock that says how many slots it has is believed."""
     lock = _bare_lock(hass, "test_lock_max_slot_advertised")
@@ -2568,80 +1810,6 @@ async def test_max_slot_falls_back_when_capabilities_cannot_be_read(
         assert await lock.async_get_max_slot() is None
 
 
-async def test_deferred_setup_is_retried_once_the_lock_becomes_reachable(
-    hass: HomeAssistant,
-):
-    """
-    An integration that was loaded all along sends no LOADED transition.
-
-    Setup defers when the provider integration is not connected, and the
-    only thing that re-ran it was that integration reaching LOADED. A bridge
-    whose entry was loaded before Lock Code Manager, and whose discovery data
-    merely had not been replayed yet, never transitions -- so the lock stayed
-    un-set-up for the rest of the run, and sync, which is gated on that,
-    never wrote a code to it again.
-
-    The connection check is what catches it, and the first reachable
-    observation is enough: there may be no transition to wait for either,
-    since that check can find the lock reachable the very first time it runs.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_late_discovery")
-    lock.set_connected(False)
-    await lock.async_setup_internal(lock.lock_config_entry)
-    assert lock.provider_setup_succeeded is False
-
-    lock.set_connected(True)
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
-    lock.lock_config_entry = loaded_entry
-
-    assert await lock.async_internal_is_reachable() is True
-    await hass.async_block_till_done()
-
-    assert lock.provider_setup_succeeded is True
-
-    await lock.coordinator.async_shutdown()
-    await lock.async_unload(False)
-
-
-async def test_a_deferred_retry_that_hits_a_blip_gets_another_one(
-    hass: HomeAssistant,
-):
-    """
-    One transient failure during the retry must not consume the only retry.
-
-    The deferred flag was cleared before the retried setup ran, so a
-    LockDisconnected on the way through spent it: nothing armed another
-    attempt, and the lock stayed un-set-up -- sync gated off it, no writes --
-    until the whole integration was reloaded by hand. A connectivity failure
-    is precisely the condition this retry exists for, so it re-arms.
-    """
-    lock = _make_base_test_lock(hass, "test_lock_blip_during_retry")
-    lock.set_connected(False)
-    await lock.async_setup_internal(lock.lock_config_entry)
-    assert lock.provider_setup_succeeded is False
-
-    lock.set_connected(True)
-    loaded_entry = MagicMock()
-    loaded_entry.state = ConfigEntryState.LOADED
-    lock.lock_config_entry = loaded_entry
-
-    with patch.object(
-        lock, "async_setup", AsyncMock(side_effect=LockDisconnected("blip"))
-    ):
-        assert await lock.async_internal_is_reachable() is True
-        await hass.async_block_till_done()
-    assert lock.provider_setup_succeeded is False
-
-    assert await lock.async_internal_is_reachable() is True
-    await hass.async_block_till_done()
-
-    assert lock.provider_setup_succeeded is True
-
-    await lock.coordinator.async_shutdown()
-    await lock.async_unload(False)
-
-
 async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
     hass: HomeAssistant,
 ):
@@ -2662,24 +1830,22 @@ async def test_a_lock_that_was_set_up_is_not_set_up_again_on_every_check(
     with patch.object(
         lock, "async_get_capabilities", AsyncMock(return_value=no_pin_caps)
     ):
-        await lock.async_setup_internal(lock.lock_config_entry)
+        await lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock))
 
         lock.set_connected(True)
-        loaded_entry = MagicMock()
-        loaded_entry.state = ConfigEntryState.LOADED
+        loaded_entry = MockConfigEntry(domain="test", state=ConfigEntryState.LOADED)
         lock.lock_config_entry = loaded_entry
         # The first reachable observation spends the one deferred retry.
         assert await lock.async_internal_is_reachable() is True
-        await hass.async_block_till_done()
+        await hass.async_block_till_done(wait_background_tasks=True)
 
         with patch.object(lock, "_async_start_reconnect") as retry:
             assert await lock.async_internal_is_reachable() is True
-            await hass.async_block_till_done()
+            await hass.async_block_till_done(wait_background_tasks=True)
 
     retry.assert_not_called()
     assert lock.provider_setup_succeeded is False
 
-    await lock.coordinator.async_shutdown()
     await lock.async_unload(False)
 
 
@@ -2697,13 +1863,15 @@ class _NativeUserOwnerResolutionLock(MockNativeUserLock):
         """Advertise PIN support so the base's write paths engage."""
         return _pin_capabilities()
 
-    async def async_clear_usercode(
-        self, code_slot: int, *, adopt_untagged: bool = True
-    ) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """Resolve the owner the way a real native-user provider does."""
-        return await BaseLock.async_clear_usercode(
-            self, code_slot, adopt_untagged=adopt_untagged
-        )
+        return await BaseLock.async_clear_usercode(self, code_slot)
+
+    async def async_get_usercodes(
+        self, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """Project the lock's users the way a real native-user provider does."""
+        return await BaseLock.async_get_usercodes(self, slots)
 
 
 def _lock_user(user_id: int, name: str | None, pin_slot: int) -> User:
@@ -2721,11 +1889,9 @@ async def test_releasing_a_slot_does_not_delete_an_untagged_users_credential(
     """
     Releasing never adopts an untagged owner.
 
-    The clear path may: the slot is still LCM's, adoption is how a pre-tag
-    install is taken over, and the write that follows corrects a wrong guess.
-    Releasing has the opposite premise -- the slot is no longer LCM's, and
-    nothing follows -- so an untagged user holding a PIN at that index, which
-    is as likely to be one somebody else made, must be left alone.
+    The slot is no longer LCM's and nothing follows, so an untagged user
+    holding a PIN at that index, which is as likely to be one somebody else
+    made, must be left alone.
     """
     lock = _make_base_test_lock(
         hass, "release_untagged", _NativeUserOwnerResolutionLock
@@ -2772,88 +1938,71 @@ async def test_releasing_a_slot_deletes_the_credential_of_its_tagged_user(
     assert deleted.call_args.args[0].user_id == 99
 
 
-async def test_clearing_a_managed_slot_still_adopts_an_untagged_owner(
+async def test_clearing_a_slot_on_a_lock_without_user_records_adopts_by_slot(
     hass: HomeAssistant,
 ):
-    """The upgrade path this scoping must not break: a clear may still adopt."""
-    lock = _make_base_test_lock(hass, "clear_adopts", _NativeUserOwnerResolutionLock)
+    """
+    A lock that keeps no user records still clears by slot.
+
+    No user there can carry a tag (a Z-Wave User Code lock: the user is the
+    credential), so the slot is the identity.
+    """
+    lock = _make_base_test_lock(
+        hass, "clear_no_records", _NativeUserOwnerResolutionLock
+    )
     deleted = AsyncMock(return_value=True)
     with (
         patch.object(
-            lock,
-            "async_get_users",
-            AsyncMock(
-                return_value=[
-                    _lock_user(99, "Alice", 3),
-                ]
-            ),
+            lock, "async_get_users", AsyncMock(return_value=[_lock_user(3, None, 3)])
         ),
+        patch.object(lock, "_supports_user_records", AsyncMock(return_value=False)),
         patch.object(lock, "async_delete_credential", deleted),
     ):
         await lock.async_clear_usercode(3)
 
     deleted.assert_called_once()
-    assert deleted.call_args.args[0].user_id == 99
+    assert deleted.call_args.args[0].user_id == 3
 
 
-async def test_a_wedged_operation_is_cut_off_and_reported_as_a_disconnect(
+async def test_a_read_marks_codes_only_untagged_users_hold_as_foreign(
     hass: HomeAssistant,
 ):
     """
-    A call that never returns ends as `LockDisconnected`, not silence.
+    A PIN only an untagged user holds is someone else's code at that index (#1695).
 
-    `LockDisconnected` rather than `LockOperationFailed` because only one of
-    them can act. A failure charges the SLOT breaker, which is windowed at
-    three strikes in five minutes -- and any budget longer than that window
-    resets the count on every retry, so it can never trip. A disconnection
-    charges the LOCK breaker, which counts consecutively.
+    It is still reported, as what the lock holds; only the slot does not
+    read it as its own. A tagged user at the same index is the slot's own.
     """
-    lock = _make_base_test_lock(hass, "wedged_op")
-    lock._min_operation_delay = 0
-    entered = asyncio.Event()
+    lock = _make_base_test_lock(hass, "read_foreign", _NativeUserOwnerResolutionLock)
+    # Probed at setup.
+    await lock._get_cached_capabilities()
+    users = [
+        _lock_user(7, "Mom", 3),
+        _lock_user(8, make_tagged_name(1, "Raman"), 1),
+        _lock_user(9, "Dad", 1),
+    ]
+    with patch.object(lock, "async_get_users", AsyncMock(return_value=users)):
+        codes = await lock.async_get_usercodes([1, 2, 3])
 
-    async def _never_returns(*_args, **_kwargs):
-        entered.set()
-        await asyncio.Event().wait()
+    assert {slot for slot, code in codes.items() if code != SlotCredential.empty()} == {
+        1,
+        3,
+    }
+    assert lock.last_foreign_slots == {3}
 
+
+async def test_a_lock_without_user_records_marks_nothing_foreign(
+    hass: HomeAssistant,
+):
+    """No user there can carry a tag (Z-Wave User Code): the slot is the identity."""
+    lock = _make_base_test_lock(hass, "read_no_records", _NativeUserOwnerResolutionLock)
+    lock._capabilities_cache = replace(_pin_capabilities(), max_user_name_length=0)
     with patch.object(
-        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
+        lock, "async_get_users", AsyncMock(return_value=[_lock_user(3, None, 3)])
     ):
-        with pytest.raises(LockDisconnected, match="no answer within"):
-            await asyncio.wait_for(
-                lock._execute_rate_limited("set", _never_returns), timeout=5
-            )
+        await lock.async_get_usercodes([3])
 
-    assert entered.is_set()
-
-
-async def test_a_wedged_availability_check_is_cut_off_too(hass: HomeAssistant):
-    """
-    The deadline covers the checks that run before the operation.
-
-    They are device I/O on some providers -- Schlage's availability check is a
-    `get_codes` cloud round trip -- so a wedge there parks the slot in SYNCING
-    exactly as issue #1523 describes, while a deadline placed around `func`
-    alone is never reached.
-    """
-    lock = _make_base_test_lock(hass, "wedged_availability")
-    lock._min_operation_delay = 0
-    never_ran = AsyncMock(return_value="unreachable")
-
-    async def _never_returns():
-        await asyncio.Event().wait()
-
-    with (
-        patch.object(
-            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-        ),
-        patch.object(lock, "async_is_device_available", _never_returns),
-        pytest.raises(LockDisconnected, match="no answer within"),
-    ):
-        await asyncio.wait_for(lock._execute_rate_limited("set", never_ran), timeout=5)
-
-    never_ran.assert_not_called()
-    assert not lock._aio_lock.locked()
+    assert lock.last_foreign_slots == frozenset()
 
 
 async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssistant):
@@ -2880,47 +2029,13 @@ async def test_a_wedged_provider_setup_does_not_park_the_entry(hass: HomeAssista
         patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
     ):
         await asyncio.wait_for(
-            lock.async_setup_internal(lock.lock_config_entry), timeout=5
+            lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock)),
+            timeout=5,
         )
 
     # Degraded, not parked: setup returned and the retry path is armed.
     assert lock._setup_succeeded is False
-    assert lock._setup_complete.is_set()
     assert lock._setup_deferred is True
-
-
-async def test_a_wedged_operation_stops_blocking_every_other_slot(
-    hass: HomeAssistant,
-):
-    """
-    The mutex comes back, which is the actual defect in issue #1523.
-
-    A call that never returned held `_aio_lock`, so every other slot on that
-    lock queued behind it forever and the reporter's three PIN changes sat
-    unsynced for seven hours. Reporting the stall would have made that
-    visible; only cutting the call off makes the other slots move again.
-    """
-    lock = _make_base_test_lock(hass, "wedged_frees_mutex")
-    lock._min_operation_delay = 0
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    with patch.object(
-        type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-    ):
-        wedged = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
-        with contextlib.suppress(LockDisconnected):
-            await asyncio.wait_for(wedged, timeout=5)
-
-        # The slot behind it now gets its turn.
-        result = await asyncio.wait_for(
-            lock._execute_rate_limited("get", AsyncMock(return_value="through")),
-            timeout=5,
-        )
-
-    assert result == "through"
-    assert not lock._aio_lock.locked()
 
 
 # The codes the mock lock starts with, and more for further slots.
@@ -2987,9 +2102,7 @@ async def test_a_write_that_never_returns_lets_go_of_its_slot_and_the_lock(
     await wedge.async_wait_held()
     wedged_at = time.monotonic()
     await async_advance_sync_ticks(hass, freezer, 5, settle=False)
-    assert sync_status(hass, in_sync_entity_id(hass, entry, 1)) == (
-        SyncState.SYNCING.value
-    )
+    assert sync_status(hass, in_sync_entity_id(hass, entry, 1)) == "syncing"
     assert lock.codes == {1: "1234", 2: "5678"}
 
     await async_advance_across_deadline(
@@ -3013,41 +2126,15 @@ async def test_a_write_that_never_returns_lets_go_of_its_slot_and_the_lock(
         (1, "1111", "test1"),
         (2, "2222", "test2"),
     ]
-    # Nothing reached the lock while the write held its turn.
+    # Nothing reached the lock while the write held its turn. The time limit
+    # is on the whole sync, which began with the read before the write.
+    sync_began = max(at for at in lock.run_times if at < wedged_at)
     assert [
         at
         for at in lock.run_times
-        if wedged_at <= at < wedged_at + base_module.OPERATION_TIMEOUT
+        if wedged_at <= at < sync_began + base_module.OPERATION_TIMEOUT
     ] == []
     await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_the_timeout_uses_the_providers_own_budget(hass: HomeAssistant):
-    """
-    A provider that walks every slot in one call gets to say how long that is.
-
-    ZHA, zigbee2mqtt and zwave-js-ui read the slots in turn, so the honest
-    budget is per-slot; the flat ten minutes would cut off a slow-but-working
-    lock partway through its walk. The constant is deliberately left at its
-    real value -- reading it instead of the property is the mutation this has
-    to catch, and it would surface as a test that hangs for ten minutes.
-    """
-    lock = _make_base_test_lock(hass, "own_budget")
-    lock._min_operation_delay = 0
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    assert base_module.OPERATION_TIMEOUT > 60
-    with (
-        patch.object(
-            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-        ),
-        pytest.raises(LockDisconnected),
-    ):
-        await asyncio.wait_for(
-            lock._execute_rate_limited("get", _never_returns), timeout=5
-        )
 
 
 async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
@@ -3075,61 +2162,17 @@ async def test_setup_does_not_hang_on_a_capability_probe_that_never_answers(
         patch.object(lock, "async_get_usercodes", AsyncMock(return_value={})),
     ):
         await asyncio.wait_for(
-            lock.async_setup_internal(lock.lock_config_entry), timeout=5
+            lock.async_setup_internal(lock.lock_config_entry, _stand_in(lock)),
+            timeout=5,
         )
 
     # Degraded, not dropped: setup finished and the retry path is armed.
     assert lock._setup_succeeded is False
-    assert lock._setup_complete.is_set()
     # The flag IS the retry path. `_handle_connection_transition` checks
     # nothing else, and the LOADED transition the state listener waits for
     # never arrives for an integration that was already loaded and then went
     # quiet -- so without this the lock never gets set up again.
     assert lock._setup_deferred is True
-
-
-async def test_setup_does_not_hang_on_a_lock_that_never_answers(
-    hass: HomeAssistant,
-):
-    """
-    Setup gives up on the initial read instead of parking on it.
-
-    Setup runs while Home Assistant holds the entry's lock, so a read that
-    never returns leaves it in `setup_in_progress` and takes reload and remove
-    with it -- the same trap the bounded teardown fixes at the other end of the
-    lifecycle. Cancelling a read is safe: it mutates nothing.
-    """
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(
-        domain=DOMAIN, state=ConfigEntryState.SETUP_IN_PROGRESS
-    )
-    config_entry.add_to_hass(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock", "test", "setup_hangs", config_entry=config_entry
-    )
-    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
-    lock._min_operation_delay = 0
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    with (
-        patch.object(
-            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-        ),
-        patch.object(lock, "async_get_usercodes", _never_returns),
-    ):
-        # Completes rather than hanging.
-        await asyncio.wait_for(
-            lock.async_setup_internal(lock.lock_config_entry), timeout=5
-        )
-
-    assert lock.coordinator is not None
-    assert lock.coordinator.last_update_success is False
-    # Home Assistant's coordinator records the cancellation on its own, but as
-    # a bare CancelledError that formats as the empty string -- which would
-    # make the log line report the failure without naming it.
-    assert "no answer within" in str(lock.coordinator.last_exception)
 
 
 async def test_a_lock_whose_setup_never_answered_once_is_set_up_and_written_later(
@@ -3192,124 +2235,6 @@ async def test_a_lock_whose_setup_never_answered_once_is_set_up_and_written_late
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_a_write_whose_availability_check_never_answers_is_retried(
-    freezer: FrozenDateTimeFactory,
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-):
-    """
-    Regression for PR #1527: an availability check that never answers ends the write.
-
-    The checks every operation runs first are device input/output on some
-    providers -- Schlage's is a cloud round trip -- and they ran outside the
-    deadline. One that never answered parked the slot in syncing for good.
-    Cut off, the write is tried again, and lands.
-    """
-    entry = await _async_set_up_slots(hass, freezer, 1)
-    lock = mock_lock(entry)
-    in_sync = in_sync_entity_id(hass, entry, 1)
-    wedge = lock.hang("probe", times=1)
-    await async_set_slot_pin(hass, entry, 1, "4321")
-    await async_advance_sync_ticks(hass, freezer, settle=False)
-    await wedge.async_wait_held()
-    assert sync_status(hass, in_sync) == SyncState.SYNCING.value
-
-    await async_advance_across_deadline(
-        hass,
-        freezer,
-        started_at=time.monotonic(),
-        deadline=base_module.OPERATION_TIMEOUT,
-        held=lambda: wedge.held == 1,
-        what="the write waiting on the availability check",
-    )
-    await async_tick_until(
-        hass,
-        freezer,
-        lambda: hass.states.get(in_sync).state == STATE_ON,
-        max_ticks=6,
-        what="slot 1 in sync",
-    )
-    assert lock.codes[1] == "4321"
-    assert lock.service_calls["set_usercode"] == [(1, "4321", "test1")]
-    await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_the_first_refresh_is_sized_to_a_walk_of_every_managed_slot(
-    hass: HomeAssistant,
-):
-    """
-    The initial read is a walk of the managed slots, and its deadline says so.
-
-    Three managed slots at 0.5 s each is a 1.5 s budget over a 0.5 s floor;
-    the recorded timeout names the budget that was actually applied (#1528).
-    """
-    entity_reg = er.async_get(hass)
-    config_entry = MockConfigEntry(domain=DOMAIN, state=ConfigEntryState.LOADED)
-    config_entry.add_to_hass(hass)
-    lock_entity = entity_reg.async_get_or_create(
-        "lock", "test", "first_refresh_walk", config_entry=config_entry
-    )
-    lock = MockLCMLock(hass, dr.async_get(hass), entity_reg, config_entry, lock_entity)
-    lock._min_operation_delay = 0
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    with (
-        patch.object(type(lock), "operation_timeout_seconds", property(lambda _s: 0.5)),
-        patch.object(type(lock), "per_exchange_budget", 0.5),
-        patch.object(
-            type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
-        ),
-        patch.object(lock, "async_get_usercodes", _never_returns),
-    ):
-        await asyncio.wait_for(
-            lock.async_setup_internal(lock.lock_config_entry), timeout=10
-        )
-
-    assert lock.coordinator is not None
-    assert "no answer within 2s" in str(lock.coordinator.last_exception)
-    await lock.coordinator.async_shutdown()
-
-
-async def test_a_waiter_whose_turn_never_comes_is_busy_not_disconnected(
-    hass: HomeAssistant,
-):
-    """
-    Queueing behind a long holder is not the lock failing to answer (issue #1535).
-
-    The waiter never reached the lock, so what it raises must not be the
-    disconnect that charges the lock breaker: three queued slots used to
-    mark a working lock unreachable with no device evidence at all.
-    """
-    lock = _make_base_test_lock(hass, "busy_not_disconnected")
-    lock._min_operation_delay = 0
-    lock._budget = 10.0
-
-    async def _never_returns(*_args, **_kwargs):
-        await asyncio.Event().wait()
-
-    with patch.object(
-        type(lock), "operation_timeout_seconds", property(lambda s: s._budget)
-    ):
-        holder = asyncio.create_task(lock._execute_rate_limited("set", _never_returns))
-        for _ in range(5):
-            await asyncio.sleep(0)
-        assert lock._aio_lock.locked()
-
-        lock._budget = 0.05
-        with pytest.raises(LockBusy) as excinfo:
-            await asyncio.wait_for(
-                lock._execute_rate_limited("get", AsyncMock(return_value="x")),
-                timeout=5,
-            )
-        assert not isinstance(excinfo.value, LockDisconnected)
-        assert not holder.done()  # the holder is still the one being waited for
-        holder.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await holder
-
-
 async def test_slots_queued_behind_long_writes_are_not_a_lock_gone_offline(
     freezer: FrozenDateTimeFactory,
     hass: HomeAssistant,
@@ -3356,7 +2281,7 @@ async def test_slots_queued_behind_long_writes_are_not_a_lock_gone_offline(
     unsub()
 
     assert lock.codes == new_pins
-    assert SyncState.SUSPENDED.value not in statuses
+    assert "suspended" not in statuses
     assert (
         ir.async_get(hass).async_get_issue(
             DOMAIN, per_lock_issue_id("lock_offline", LOCK_1_ENTITY_ID)
@@ -3364,47 +2289,6 @@ async def test_slots_queued_behind_long_writes_are_not_a_lock_gone_offline(
         is None
     )
     await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_the_operation_deadline_starts_when_the_turn_comes(
-    hass: HomeAssistant,
-):
-    """
-    Waiting one's turn does not eat into the budget for the call itself.
-
-    The holder is released by the test after 0.6 s and the waiter's own call
-    takes 0.6 s, against a budget of 1.0 s: one deadline over both legs would
-    cut the waiter off at 1.2 s; a deadline that starts at acquire lets it
-    finish, and each leg sits 0.4 s inside the budget so loop jitter cannot
-    decide the outcome.
-    """
-    lock = _make_base_test_lock(hass, "deadline_at_acquire")
-    lock._min_operation_delay = 0
-    let_go = asyncio.Event()
-
-    async def _holds_until_released(*_args, **_kwargs):
-        await let_go.wait()
-        return "held"
-
-    async def _slow(*_args, **_kwargs):
-        await asyncio.sleep(0.6)
-        return "done"
-
-    with patch.object(
-        type(lock), "operation_timeout_seconds", property(lambda _s: 1.0)
-    ):
-        holder = asyncio.create_task(
-            lock._execute_rate_limited("set", _holds_until_released)
-        )
-        for _ in range(5):
-            await asyncio.sleep(0)
-        waiter = asyncio.create_task(lock._execute_rate_limited("get", _slow))
-        await asyncio.sleep(0.6)
-        let_go.set()
-        assert await asyncio.wait_for(holder, timeout=5) == "held"
-        result = await asyncio.wait_for(waiter, timeout=5)
-
-    assert result == "done"
 
 
 class TestOperationBudget:
@@ -3423,161 +2307,3 @@ class TestOperationBudget:
             assert lock._operation_budget(1) == floor  # one exchange: the floor
             assert lock._operation_budget(10) == 900.0  # ten slow slots
             assert lock._operation_budget(0) == floor
-
-    async def test_read_call_sites_say_how_many_exchanges_they_walk(
-        self, hass: HomeAssistant
-    ):
-        lock = _make_base_test_lock(hass, "budget_call_sites")
-        with (
-            patch.object(
-                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2}))
-            ),
-            patch.object(
-                lock, "_execute_rate_limited", AsyncMock(return_value={})
-            ) as run,
-        ):
-            await lock.async_internal_get_usercodes({1, 2, 3})
-            assert run.await_args.kwargs["exchanges"] == 3
-            await lock.async_internal_get_usercodes()
-            assert run.await_args.kwargs["exchanges"] == 2
-            await lock.async_internal_get_occupied_indices({4, 5, 6, 7})
-            assert run.await_args.kwargs["exchanges"] == 4
-            # A scoped refresh is declared as the managed walk plus the scope: a
-            # provider with no cache has to re-read the managed slots to answer.
-            await lock.async_internal_hard_refresh_codes({7})
-            assert run.await_args.kwargs["exchanges"] == 3
-            await lock.async_internal_hard_refresh_codes()
-            assert run.await_args.kwargs["exchanges"] == 2
-
-    @pytest.mark.parametrize("native_users", [False, True], ids=["slots", "users"])
-    async def test_write_call_sites_say_how_many_exchanges_they_walk(
-        self, hass: HomeAssistant, native_users: bool
-    ):
-        """A native-user provider names the user and reads them back; that is a walk.
-
-        Inert while the providers that model users declare no per-exchange
-        budget, and declared anyway: the moment one does, an under-declared
-        write would be cut off partway through a walk the lock was answering.
-        """
-        lock = _make_base_test_lock(hass, f"budget_writes_{native_users}")
-        with (
-            patch.object(
-                type(lock), "supports_native_users", property(lambda _s: native_users)
-            ),
-            patch.object(
-                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
-            ),
-            patch.object(
-                lock,
-                "_execute_rate_limited",
-                AsyncMock(return_value=WriteResult.NO_CHANGE),
-            ) as run,
-        ):
-            await lock.async_internal_set_usercode(1, "1234")
-            assert run.await_args.kwargs["exchanges"] == (3 if native_users else 1)
-            run.return_value = False
-            await lock.async_internal_clear_usercode(1)
-            assert run.await_args.kwargs["exchanges"] == (4 if native_users else 1)
-
-    async def test_the_operation_deadline_follows_the_walk(self, hass: HomeAssistant):
-        """A three-slot read may take three exchanges; a one-slot write may not."""
-        lock = _make_base_test_lock(hass, "budget_follows_walk")
-        lock._min_operation_delay = 0
-
-        async def _takes_a_while(*_args, **_kwargs):
-            await asyncio.sleep(0.6)
-            return "done"
-
-        # Exchange budget 0.3 s over a 0.05 s floor: the three-exchange read
-        # gets 0.9 s for a 0.6 s call and the one-slot write gets 0.3 s for the
-        # same call, each 0.3 s clear of the line.
-        with (
-            patch.object(
-                type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-            ),
-            patch.object(type(lock), "per_exchange_budget", 0.3),
-        ):
-            assert (
-                await asyncio.wait_for(
-                    lock._execute_rate_limited("get", _takes_a_while, exchanges=3),
-                    timeout=5,
-                )
-                == "done"
-            )
-            with pytest.raises(LockDisconnected):
-                await asyncio.wait_for(
-                    lock._execute_rate_limited("set", _takes_a_while), timeout=5
-                )
-
-    async def test_a_caller_may_wait_out_a_full_walk_ahead_of_it(
-        self, hass: HomeAssistant
-    ):
-        """A one-slot write queued behind a full read is not cut off by its own small budget.
-
-        Round six of #1529 narrowed a write to the floor and cut it off behind a
-        poll that was still within its own budget; the wait is sized to the
-        longest holder there can be, a walk of every managed slot.
-        """
-        lock = _make_base_test_lock(hass, "budget_wait_full_walk")
-        lock._min_operation_delay = 0
-
-        async def _long_read(*_args, **_kwargs):
-            await asyncio.sleep(0.4)
-            return "read"
-
-        # Exchange budget 0.2 s over a 0.05 s floor, three managed slots: the
-        # holder's read and the wait get 0.6 s for a 0.4 s hold, while a
-        # one-slot write's own budget is 0.2 s -- under the hold, so a wait
-        # sized to the floor or to the caller's own budget is LockBusy.
-        with (
-            patch.object(
-                type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-            ),
-            patch.object(type(lock), "per_exchange_budget", 0.2),
-            patch.object(
-                type(lock), "managed_slots", property(lambda _s: frozenset({1, 2, 3}))
-            ),
-        ):
-            holder = asyncio.create_task(
-                lock._execute_rate_limited("get", _long_read, exchanges=3)
-            )
-            for _ in range(5):
-                await asyncio.sleep(0)
-            result = await asyncio.wait_for(
-                lock._execute_rate_limited("set", AsyncMock(return_value="written")),
-                timeout=5,
-            )
-            await holder
-        assert result == "written"
-
-
-async def test_a_probe_that_never_answers_is_cut_off_before_the_queue(
-    hass: HomeAssistant,
-):
-    """The availability probes get their own bound, ahead of the wait for a turn.
-
-    They are device I/O on some providers -- Schlage's is a cloud round trip
-    -- so they are bounded; and they run before the mutex, so a lock that
-    cannot even be probed is reported as unreachable without first queueing
-    behind somebody else's operation. Collapsing the two bounds into one
-    would let a slow probe eat the budget meant for the call, holding the
-    mutex while it did.
-    """
-    lock = _make_base_test_lock(hass, "probe_before_queue")
-    lock._min_operation_delay = 0
-
-    async def _never_answers():
-        await asyncio.Event().wait()
-
-    with (
-        patch.object(
-            type(lock), "operation_timeout_seconds", property(lambda _s: 0.05)
-        ),
-        patch.object(lock, "async_is_integration_connected", _never_answers),
-        pytest.raises(LockDisconnected, match="availability check gave no answer"),
-    ):
-        await asyncio.wait_for(
-            lock._execute_rate_limited("get", AsyncMock(return_value="x")), timeout=5
-        )
-
-    assert not lock._aio_lock.locked()

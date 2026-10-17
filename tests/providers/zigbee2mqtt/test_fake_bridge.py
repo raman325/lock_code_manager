@@ -1,7 +1,5 @@
 """Self-tests: the Zigbee2MQTT bridge fake answers as Zigbee2MQTT does."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 import json
 from typing import Any

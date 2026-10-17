@@ -6,17 +6,18 @@
       "unknown": "An unexpected error occurred during setup."
     },
     "error": {
+      "existing_codes": "Lock {error_lock} already has codes in slots this configuration uses: {slots}. Adding the lock would overwrite them. Clear those slots on the lock, then add it again.",
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
       "missing_pin_if_enabled": "A PIN must be set for any user who is enabled.",
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
       "name_required": "Every user needs a name. The name identifies them on your locks.",
-      "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {error_lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
       "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
-      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
-      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
-      "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+      "slot_out_of_range": "Lock {error_lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
+      "slots_already_configured": "The following slots for lock {error_lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
+      "too_many_users": "Lock {error_lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
       "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}",
       "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true",
       "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again."
@@ -62,6 +63,10 @@
         "description": "The config is expected to be a dictionary where the key is the user's name. Lock Code Manager picks the code slot each user occupies. For more information, check the docs.",
         "title": "Configure users"
       },
+      "cannot_report": {
+        "title": "This lock can't report its codes",
+        "description": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
+      },
       "reauth_confirm": {
         "data": {
           "locks": "Locks"
@@ -72,6 +77,9 @@
     },
     "progress": {
       "allocating": "Reading which slots your locks already hold, so no user is given a number that is taken. A lock that answers one slot at a time can take a minute or more per lock."
+    },
+    "create_entry": {
+      "cannot_report": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
     }
   },
   "entity": {
@@ -148,8 +156,10 @@
       "unknown": "An unexpected error occurred while updating options."
     },
     "error": {
-      "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
-      "slots_already_configured": "The following slots for lock {lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
+      "existing_codes": "Lock {error_lock} already has codes in slots this configuration uses: {slots}. Adding the lock would overwrite them. Clear those slots on the lock, then add it again.",
+      "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not add a lock it could not check, because one of this configuration's slots may already hold a code there. Wake the lock or check it is reachable, then try again.",
+      "slot_out_of_range": "Lock {error_lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
+      "slots_already_configured": "The following slots for lock {error_lock} are already managed by another config entry ({entry_title}) and can't be added to this configuration without being removed from the other one: {common_slots}",
       "unsupported_mqtt_lock": "These MQTT locks are not from a supported bridge (Zigbee2MQTT or Z-Wave JS UI): {locks}"
     },
     "step": {
@@ -159,6 +169,10 @@
         },
         "description": "Update the locks this configuration manages. Users are managed individually, from the entry's page.",
         "title": "Lock Code Manager"
+      },
+      "cannot_report": {
+        "title": "This lock can't report its codes",
+        "description": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
       }
     }
   },
@@ -301,7 +315,13 @@
     },
     "hard_refresh_usercodes": {
       "description": "If Lock Code Manager supports the lock's integration, and the lock's integration supports it, this will query the lock for all usercodes. This is potentially useful for integrations that cache data from the lock and a usercode(s) is configured outside of Home Assistant.",
-      "name": "Hard refresh usercodes"
+      "name": "Hard refresh usercodes",
+      "fields": {
+        "forget_reporting": {
+          "name": "Forget that the lock can report codes",
+          "description": "Only for a lock that can't report which codes it holds but is treated as one that can, so new users can't be placed. Lock Code Manager forgets that it saw the lock report a code, and reads it again. Don't use this on a lock that reports its free slots: until it reports one again, a new user may be placed over a code set at the keypad."
+        }
+      }
     },
     "set_condition": {
       "name": "Set condition",
@@ -422,7 +442,7 @@
         "step": {
           "init": {
             "title": "Sync suspended for slot {slot_num} on {lock_name}",
-            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nSyncing for this slot will resume automatically once the lock accepts the code or you change the PIN for this slot. Click **Submit** to acknowledge this issue."
+            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nLock Code Manager has stopped trying. Click **Submit** to try again, or change the PIN for this slot."
           }
         }
       }
@@ -433,7 +453,7 @@
         "step": {
           "init": {
             "title": "Code not removed from slot {slot_num} on {lock_name}",
-            "description": "Lock Code Manager couldn't remove the code from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nSync for this slot is suspended. It resumes once the lock reports the slot empty, or when this slot's PIN or active state changes. Submit to acknowledge this issue."
+            "description": "Lock Code Manager couldn't remove the code from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nLock Code Manager has stopped trying. Submit to try again."
           }
         }
       }
@@ -450,6 +470,21 @@
       "title": "Lock dropped: {lock_entity_id}",
       "description": "Lock Code Manager could not create a provider for `{lock_entity_id}`, so it has been dropped from this configuration entry: {error}\n\nNo entities were created for that lock and no codes are written to it; every other lock in the entry is unaffected. This usually means the entity belongs to a bridge no Lock Code Manager provider supports, or that its integration has changed what it publishes about the device. Remove it from the entry, or fix the underlying cause and reload Lock Code Manager. This issue will be automatically dismissed once the lock sets up."
     },
+    "lock_re_paired_work_dropped": {
+      "title": "Lock Code Manager: check slots {slots} on re-paired {lock_entity_id}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "Check slots {slots} on re-paired {lock_entity_id}",
+            "description": "`{lock_entity_id}` was re-paired, so Home Assistant now sees it as a different device. Lock Code Manager was still clearing a code from, or writing a one-off PIN to, slots {slots} on the old device. That work was dropped with the old device.\n\nIf this is the same physical lock (for example, moved to another Zigbee integration, or re-joined after Home Assistant removed it), a removed user's code may still be in those slots and may still open the door. Check those slots on the lock, and clear any code that shouldn't be there: from the Lock Code Manager card, the unmanaged-code repairs, or the lock itself.\n\nLock Code Manager does not clear them on its own: on a new device, those slots may hold codes set at its keypad.\n\nClick **Submit** to acknowledge this issue."
+          }
+        }
+      }
+    },
+    "lock_re_paired_reload": {
+      "title": "Reload Lock Code Manager to use re-paired {lock_entity_id}",
+      "description": "`{lock_entity_id}` was re-paired, so Home Assistant now sees it as a different device. A read of the lock was still going when Lock Code Manager switched over, so it is still using the old device, and codes are not synchronized to the new one.\n\nReload Lock Code Manager to use the new device. This issue will be automatically dismissed when it does."
+    },
     "unmanaged_code": {
       "title": "Unmanaged code on {lock} in slot {slot}",
       "fix_flow": {
@@ -465,6 +500,7 @@
         },
         "abort": {
           "unmanaged_code_kept": "The code in slot {slot} on {lock} was left alone. Lock Code Manager will not ask about this slot again, and will not assign a user to it.",
+          "unmanaged_code_clear_pending": "The lock is not answering right now. Lock Code Manager will clear the code in slot {slot} on {lock} when it is back. Choose **Clear** here again afterwards to close this repair.",
           "unmanaged_code_clear_failed": "The code in slot {slot} on {lock} could not be cleared: {error}{link_health}\n\nIt is still on the lock, so this repair stays open."
         }
       }
@@ -478,10 +514,10 @@
       "message": "Code slot {slot_num} needs a name. The name identifies this user on your locks."
     },
     "too_many_users": {
-      "message": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit."
+      "message": "Lock {error_lock} has {num_slots} PIN code slots, so {num_users} users will not fit."
     },
     "numbers_needed_exceed_capacity": {
-      "message": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots."
+      "message": "Placing {num_users} users would need slot numbers up to {needed}, and lock {error_lock} has {num_slots} PIN code slots."
     },
     "occupancy_unknown": {
       "message": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it cannot verify are free."
@@ -490,7 +526,7 @@
       "message": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager searches."
     },
     "slot_out_of_range": {
-      "message": "Lock {lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}."
+      "message": "Lock {error_lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}."
     }
   },
   "selector": {
@@ -555,18 +591,22 @@
         "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
         "name_required": "Every user needs a name. The name identifies them on your locks.",
         "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
-        "slot_out_of_range": "Lock {lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
-        "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+        "slot_out_of_range": "Lock {error_lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
+        "numbers_needed_exceed_capacity": "Placing {num_users} users would need slot numbers up to {needed}, and lock {error_lock} has {num_slots} PIN code slots -- some of them already holding codes. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
         "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not choose slot numbers it could not check, because one of them may already hold a code. Wake the lock or check it is reachable, then try again.",
         "search_limit_reached": "Placing {num_users} users would need slot numbers past {max_slot}, which is as far as Lock Code Manager looks. No lock here reported how many PIN code slots it has, so this limit is Lock Code Manager's own rather than the lock's. Set up fewer users, or re-interview the lock so it reports its capacity.",
-        "too_many_users": "Lock {lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
+        "too_many_users": "Lock {error_lock} has {num_slots} PIN code slots, so {num_users} users will not fit. Set up fewer users here, or manage the rest from a separate configuration. If the lock really does have more slots than that, re-interview it -- a stale or incomplete interview makes it under-report its capacity.",
         "allocation_failed": "Reading the locks failed unexpectedly. Check the Home Assistant logs, then try again.",
         "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
         "users_keyed_by_slot": "This looks like the old slot-numbered format. Users are now listed by name, and Lock Code Manager picks the slot numbers itself:\n\nusers:\n  Raman:\n    pin: \"1234\"\n    enabled: true"
       },
       "abort": {
         "reconfigure_successful": "The user was updated.",
-        "users_added": "Added {num_users} users."
+        "users_added": "Added {num_users} users.",
+        "users_added_cannot_report": "Added {num_users} users. {lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
+      },
+      "create_entry": {
+        "cannot_report": "{lock} can't report which codes it holds. Lock Code Manager will use slots {slots}; any code set at the keypad in those slots will be replaced."
       }
     }
   }

@@ -37,10 +37,14 @@ read for locks whose names were written by older releases.
   integration can identify its own users on locks that haven't been
   rewritten yet. The next write naturally replaces the lock-stored name
   with the canonical format.
+
+Schlage and Akuvox never write the compact or slot-only fallbacks, so on
+their locks a name in either shape is somebody else's code: they read tags
+with ``parse_full_tag``, which recognizes only the canonical and legacy
+formats.
 """
 
-from __future__ import annotations
-
+from collections.abc import Iterable
 import re
 from typing import Any
 
@@ -48,6 +52,7 @@ from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
+from ..model.credentials import User
 from .const import LOGGER
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
@@ -104,6 +109,39 @@ def parse_tag(name: str) -> tuple[int | None, str]:
     return None, name
 
 
+def parse_full_tag(name: str) -> tuple[int | None, str]:
+    """
+    Parse a canonical or legacy slot tag, the formats that carry a name.
+
+    Returns ``(slot_num, friendly_name)``, or ``(None, original_name)`` for
+    anything else -- a compact ``lcm<slot>`` or bare-digit name included,
+    which a provider that never writes those must not take for its own.
+    """
+    if match := _TAG_RE.match(name) or _LEGACY_SLOT_TAG_RE.match(name):
+        return int(match.group(1)), match.group(2)
+    return None, name
+
+
+def foreign_slots(users: Iterable[User]) -> frozenset[int]:
+    """
+    Return the slots only users without a slot tag hold a PIN at.
+
+    On a lock with user records, a PIN is Lock Code Manager's when its user
+    carries a slot tag. One under an untagged user at credential index n is
+    someone else's code at that index: the homeowner's own, made in the
+    vendor's app, or a user Lock Code Manager made before it tagged them.
+    Nothing on the lock tells those apart. A write of slot n adopts the
+    user, tagging it and overwriting their PIN; a slot turned off leaves it
+    alone, as a code nobody here manages (#1695).
+    """
+    tagged: set[int] = set()
+    untagged: set[int] = set()
+    for user in users:
+        holders = untagged if parse_tag(user.name or "")[0] is None else tagged
+        holders.update(credential.slot for credential in user.pin_credentials)
+    return frozenset(untagged - tagged)
+
+
 def parse_slot_num(value: object) -> int | None:
     """
     Convert a slot identifier to an int, or return None if not convertible.
@@ -123,6 +161,21 @@ def parse_slot_num(value: object) -> int | None:
         return None
 
 
+def refuses_write_in_flight(write_slot: int | None, named_slot: int | None) -> bool:
+    """
+    Return whether a lock's duplicate refusal answers the PIN write in flight.
+
+    User Code Command Class has no in-band duplicate result: a lock refusing
+    a PIN another slot holds keeps the slot's old code and says so only with
+    Access Control notification 15, which arrives while the write is still
+    out. Some locks name no slot in it (no parameters, or user 0). Writes to
+    a lock run one at a time, so one arriving during a write is that write's;
+    one naming another slot, or arriving with no write in flight, is not
+    ours to pin on a slot.
+    """
+    return write_slot is not None and named_slot in (None, 0, write_slot)
+
+
 def is_masked_code(code: str) -> bool:
     """
     Return whether a code is a lock's placeholder for a code it will not show.
@@ -130,8 +183,8 @@ def is_masked_code(code: str) -> bool:
     Locks configured to withhold user codes answer reads with an asterisk per
     digit instead of the digits. That is a refusal, not a value: read as one,
     it never equals the configured Personal Identification Number, so sync
-    sees a permanent mismatch and reprograms the slot on every single tick,
-    forever. Withheld has to reach the coordinator as unreadable, which is
+    sees a permanent mismatch and reprograms the slot until it is held.
+    Withheld has to reach the worker as unreadable, which is
     exactly the state that means "occupied, contents unknown".
 
     Only an all-asterisk code counts; asterisks mixed with digits are not a

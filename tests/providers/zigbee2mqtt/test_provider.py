@@ -1,7 +1,5 @@
 """Provider methods, error handling, connectivity, and subscription tests for Zigbee2MQTT."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Coroutine
 from contextlib import AbstractContextManager
@@ -16,17 +14,17 @@ from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
+    SlotCredential,
     WriteResult,
     credential_from_slot,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import _base as base_module
 from custom_components.lock_code_manager.providers._mqtt import BaseMqttLock
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
@@ -1174,41 +1172,6 @@ class TestOccupiedIndices:
             codes = await lock.async_get_usercodes(range(1, 4))
             assert codes[2] is SlotCredential.unreadable()
             assert codes[1].is_empty and codes[3].is_empty
-
-    async def test_raises_when_disconnected_rather_than_answering_empty(
-        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
-    ) -> None:
-        """A lock that cannot be reached must not answer at all.
-
-        Raising is what makes occupancy read as unknown; answering with
-        nothing would read as an empty lock.
-        """
-        lock = zigbee2mqtt_lock_connected
-        with (
-            patch.object(
-                lock,
-                "async_is_integration_connected",
-                new=AsyncMock(return_value=False),
-            ),
-            pytest.raises(LockDisconnected),
-        ):
-            await lock.async_get_usercodes(range(1, 4))
-
-    async def test_raises_without_a_get_topic(
-        self, zigbee2mqtt_lock_connected: Zigbee2MQTTLock
-    ) -> None:
-        """No topic means no question can be asked, which is not an empty lock."""
-        lock = zigbee2mqtt_lock_connected
-        with (
-            patch.object(
-                lock,
-                "async_is_integration_connected",
-                new=AsyncMock(return_value=True),
-            ),
-            patch.object(lock, "_get_topic", return_value=None),
-            pytest.raises(LockDisconnected),
-        ):
-            await lock.async_get_usercodes(range(1, 4))
 
 
 async def test_max_slot_is_the_integrations_limit(

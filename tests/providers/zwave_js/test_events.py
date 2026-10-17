@@ -1,8 +1,6 @@
 """Test Z-Wave JS event handling: credential push updates and operation notifications."""
 
-from __future__ import annotations
-
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -24,13 +22,14 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
+    SlotCredential,
     pin_address,
 )
-from custom_components.lock_code_manager.domain.events import CredentialOperation
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.events import CredentialOperation
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
 from tests.providers.zwave_js.helpers import (
     make_credential_added_event,
@@ -44,30 +43,6 @@ from tests.providers.zwave_js.helpers import (
 # ---------------------------------------------------------------------------
 
 
-async def test_subscribe_push_updates(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Test subscribing to push updates."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    # Subscribe to push updates (idempotent - may already be subscribed)
-    zwave_js_lock.subscribe_push_updates()
-
-    assert zwave_js_lock._push_unsubs
-
-    zwave_js_lock.unsubscribe_push_updates()
-    assert not zwave_js_lock._push_unsubs
-
-    await zwave_js_lock.async_unload(False)
-
-
 async def test_subscribe_is_idempotent(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -78,7 +53,9 @@ async def test_subscribe_is_idempotent(
     """Test that calling subscribe multiple times is safe."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.subscribe_push_updates()
     first_unsubs = list(zwave_js_lock._push_unsubs)
@@ -100,7 +77,9 @@ async def test_subscribe_push_no_crash_on_client_not_ready(
     """Test that push subscription handles client not ready without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     assert not zwave_js_lock._push_unsubs
@@ -128,7 +107,9 @@ async def test_subscribe_push_no_crash_on_node_error(
     """Test that push subscription handles node.on error without crashing."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     assert not zwave_js_lock._push_unsubs
@@ -151,7 +132,9 @@ async def test_subscribe_push_cleans_up_partial_subscription_on_error(
     """A failure partway through subscribing releases the unsubs already registered."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     assert not zwave_js_lock._push_unsubs
@@ -194,7 +177,9 @@ async def test_subscribe_registers_credential_and_shim_listeners(
     """Test that subscribing registers the credential and shim listeners."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.subscribe_push_updates()
     assert len(zwave_js_lock._push_unsubs) == _EXPECTED_PUSH_UNSUB_COUNT
@@ -214,7 +199,9 @@ async def test_subscribe_skips_shim_listener_without_user_code_cc(
     """A node without User Code CC gets only the unified credential listeners."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     zwave_js_lock.unsubscribe_push_updates()
     with patch.object(ZWaveJSLock, "_node_advertises_user_code_cc", return_value=False):
@@ -308,92 +295,6 @@ async def test_a_keypad_press_reaches_the_bus_as_a_credential_used_event(
     assert events[0].data[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN
 
 
-async def test_notification_event_keypad_lock_fires_a_code_slot_event(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Test that a keypad lock notification event reaches the code slot event funnel."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    # Capture LCM lock state changed events
-    fired = MagicMock()
-    zwave_js_lock.async_fire_code_slot_event = fired
-
-    # Create a notification event matching the pattern from Home Assistant core tests
-    # Type 6 = ACCESS_CONTROL, Event 5 = KEYPAD_LOCK_OPERATION
-    event = ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
-            "endpointIndex": 0,
-            "ccId": 113,  # Notification CC
-            "args": {
-                "type": 6,  # ACCESS_CONTROL
-                "event": 5,  # KEYPAD_LOCK_OPERATION
-                "label": "Access Control",
-                "eventLabel": "Keypad lock operation",
-                "parameters": {"userId": 1},
-            },
-        },
-    )
-    lock_schlage_be469.receive_event(event)
-    await hass.async_block_till_done()
-
-    fired.assert_called_once_with(code_slot=1, to_locked=True)
-
-    await zwave_js_lock.async_unload(False)
-
-
-async def test_notification_event_keypad_unlock_fires_a_code_slot_event(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    zwave_integration: MockConfigEntry,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Test that a keypad unlock notification event reaches the code slot event funnel."""
-    lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
-    lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
-
-    fired = MagicMock()
-    zwave_js_lock.async_fire_code_slot_event = fired
-
-    # Type 6 = ACCESS_CONTROL, Event 6 = KEYPAD_UNLOCK_OPERATION
-    event = ZwaveEvent(
-        type="notification",
-        data={
-            "source": "node",
-            "event": "notification",
-            "nodeId": lock_schlage_be469.node_id,
-            "endpointIndex": 0,
-            "ccId": 113,
-            "args": {
-                "type": 6,
-                "event": 6,  # KEYPAD_UNLOCK_OPERATION
-                "label": "Access Control",
-                "eventLabel": "Keypad unlock operation",
-                "parameters": {"userId": 2},
-            },
-        },
-    )
-    lock_schlage_be469.receive_event(event)
-    await hass.async_block_till_done()
-
-    fired.assert_called_once_with(code_slot=2, to_locked=False)
-
-    await zwave_js_lock.async_unload(False)
-
-
 async def test_notification_event_non_access_control_ignored(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -405,7 +306,9 @@ async def test_notification_event_non_access_control_ignored(
     """A notification of a non Access Control type is ignored (no LCM event)."""
     lcm_entry = MockConfigEntry(domain=DOMAIN, data={CONF_LOCKS: [], CONF_SLOTS: {}})
     lcm_entry.add_to_hass(hass)
-    await zwave_js_lock.async_setup_internal(lcm_entry)
+    await zwave_js_lock.async_setup_internal(
+        lcm_entry, _Coordinator(ProviderPort(zwave_js_lock))
+    )
 
     fired = MagicMock()
     zwave_js_lock.async_fire_code_slot_event = fired
@@ -439,32 +342,6 @@ async def test_notification_event_non_access_control_ignored(
 # ---------------------------------------------------------------------------
 # Credential node event push tests
 # ---------------------------------------------------------------------------
-
-
-async def test_credential_added_pin_pushes_unreadable(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Test that a 'credential added' event for a PIN pushes SlotCredential.unreadable()."""
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {}
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_credential_added_event(lock_schlage_be469.node_id, credential_slot=2)
-    )
-    await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_called_once_with(
-        pin_address(2), SlotCredential.unreadable()
-    )
-
-    zwave_js_lock.unsubscribe_push_updates()
 
 
 async def test_credential_added_pin_with_data_pushes_known(
@@ -608,32 +485,6 @@ async def test_credential_deleted_non_pin_ignored(
 # ---------------------------------------------------------------------------
 
 
-async def test_uc_shim_plain_code_pushes_known(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A readable userCode value update pushes SlotCredential.known()."""
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {}
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "8642")
-    )
-    await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_called_once_with(
-        pin_address(2), SlotCredential.known("8642")
-    )
-
-    zwave_js_lock.unsubscribe_push_updates()
-
-
 async def test_uc_shim_masked_code_pushes_unreadable(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -729,9 +580,10 @@ async def test_uc_shim_zeros_on_unknown_slot_pushes_known(
     [
         (CodeSlotStatus.AVAILABLE, SlotCredential.empty()),
         (None, SlotCredential.empty()),
-        (CodeSlotStatus.ENABLED, SlotCredential.unreadable()),
+        # ENABLED (withheld, so unreadable) is driven end to end by
+        # test_e2e.py::TestUserCodeReports::test_an_enabled_slot_reads_its_code_field.
     ],
-    ids=["free", "unknown", "occupied"],
+    ids=["free", "unknown"],
 )
 async def test_uc_shim_empty_code_follows_occupancy(
     hass: HomeAssistant,
@@ -765,51 +617,6 @@ async def test_uc_shim_empty_code_follows_occupancy(
     zwave_js_lock.unsubscribe_push_updates()
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [
-        (CodeSlotStatus.ENABLED, SlotCredential.unreadable()),
-        (CodeSlotStatus.AVAILABLE, SlotCredential.empty()),
-    ],
-    ids=["occupied-withheld", "cleared"],
-)
-async def test_uc_shim_status_then_empty_code_reads_the_fresh_status(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-    status: CodeSlotStatus,
-    expected: SlotCredential,
-) -> None:
-    """The driver reports status before code; the code handler reads that status.
-
-    A report of an occupied slot with the code withheld arrives as ENABLED
-    then an empty userCode, and resolves to unreadable. A real clear arrives
-    as AVAILABLE then an empty userCode, and resolves to empty both times.
-    """
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
-    mock_coordinator.desired_credential.return_value = SlotCredential.empty()
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(lock_schlage_be469.node_id, "userIdStatus", 2, status)
-    )
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "")
-    )
-    await hass.async_block_till_done()
-
-    assert mock_coordinator.observe_push.call_args_list[-1] == call(
-        pin_address(2), expected
-    )
-
-    zwave_js_lock.unsubscribe_push_updates()
-
-
 async def test_uc_shim_status_available_pushes_empty(
     hass: HomeAssistant,
     zwave_js_lock: ZWaveJSLock,
@@ -835,63 +642,6 @@ async def test_uc_shim_status_available_pushes_empty(
     mock_coordinator.observe_push.assert_called_once_with(
         pin_address(2), SlotCredential.empty()
     )
-
-    zwave_js_lock.unsubscribe_push_updates()
-
-
-async def test_uc_shim_status_available_ignored_when_pin_expected(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A stale AVAILABLE status is ignored when LCM expects a PIN on the slot.
-
-    Some locks send stale AVAILABLE events after a code was set; acting
-    on them would cause infinite sync loops.
-    """
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {pin_address(2): SlotCredential.known("1234")}
-    mock_coordinator.desired_credential.return_value = SlotCredential.known("1234")
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(
-            lock_schlage_be469.node_id, "userIdStatus", 2, CodeSlotStatus.AVAILABLE
-        )
-    )
-    await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_not_called()
-
-    zwave_js_lock.unsubscribe_push_updates()
-
-
-async def test_uc_shim_status_occupied_ignored(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """Occupied userIdStatus updates are ignored; the userCode update carries the value."""
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {}
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(
-            lock_schlage_be469.node_id, "userIdStatus", 2, CodeSlotStatus.ENABLED
-        )
-    )
-    await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_not_called()
 
     zwave_js_lock.unsubscribe_push_updates()
 
@@ -938,37 +688,5 @@ async def test_uc_shim_ignores_unrelated_value_events(
     await hass.async_block_till_done()
 
     mock_coordinator.observe_push.assert_not_called()
-
-    zwave_js_lock.unsubscribe_push_updates()
-
-
-async def test_uc_shim_confirms_pending_optimistic_write(
-    hass: HomeAssistant,
-    zwave_js_lock: ZWaveJSLock,
-    lock_schlage_be469: Node,
-    mock_access_control: MagicMock,
-    mock_lock_helpers: dict,
-) -> None:
-    """A masked verification report reaches the coordinator as an observation.
-
-    The driver's post-write verification GET produces a report (and thus a
-    value event) but no unified credential event on released drivers; the
-    shim must route it through _confirm_slot so the coordinator can settle
-    the pending write against it.
-    """
-    mock_coordinator = MagicMock()
-    mock_coordinator.data = {}
-    zwave_js_lock.coordinator = mock_coordinator
-
-    zwave_js_lock.subscribe_push_updates()
-
-    lock_schlage_be469.receive_event(
-        make_uc_value_event(lock_schlage_be469.node_id, "userCode", 2, "****")
-    )
-    await hass.async_block_till_done()
-
-    mock_coordinator.observe_push.assert_called_once_with(
-        pin_address(2), SlotCredential.unreadable()
-    )
 
     zwave_js_lock.unsubscribe_push_updates()

@@ -1,7 +1,5 @@
 """A provider built to answer one question must not outlive the answer."""
 
-from __future__ import annotations
-
 from unittest.mock import patch
 
 import pytest
@@ -16,15 +14,15 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.allocation import (
+from custom_components.lock_code_manager.ha.allocation import (
     async_check_slot_capacity,
     async_max_slot,
     async_read_occupancy,
 )
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.unmanaged import (
+from custom_components.lock_code_manager.ha.unmanaged import (
     async_sweep_unmanaged_codes,
 )
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     ZWaveJSUILock,
 )
@@ -84,7 +82,9 @@ async def test_the_occupancy_read_returns_the_transport_it_borrowed(
     assert occupancy.is_known
     assert transport.opened
     assert transport.live == []
-    assert transport.disposed == [zui_lock_answering]
+    # The flow's own provider and the one the lock's worker reads through
+    # are both handed back.
+    assert set(transport.disposed) == {zui_lock_answering}
 
 
 async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
@@ -103,7 +103,7 @@ async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
     with (
         patch.object(
             ZWaveJSUILock,
-            "async_internal_get_occupied_indices",
+            "async_get_usercodes",
             side_effect=LockDisconnected("no answer"),
         ),
         track_zui_transport() as transport,
@@ -113,7 +113,9 @@ async def test_a_lock_that_cannot_be_read_is_unknown_rather_than_free(
         )
 
     assert not occupancy.is_known
-    assert transport.disposed == [zui_lock_answering]
+    assert transport.disposed
+    assert set(transport.disposed) == {zui_lock_answering}
+    assert transport.live == []
 
 
 async def test_the_capacity_check_returns_the_transport_it_borrowed(

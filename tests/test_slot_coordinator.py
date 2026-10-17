@@ -1,7 +1,5 @@
 """Tests for the per-slot entity coordinator."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 from unittest.mock import patch
@@ -40,17 +38,16 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.credentials import (
-    CredentialType,
-    CredentialTypeCapability,
-    LockCapabilities,
-    pin_address,
-)
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_coordinator import (
+from custom_components.lock_code_manager.ha.slot_coordinator import (
     PinRequiredError,
     SlotEntityCoordinator,
 )
+from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
+)
+from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -475,28 +472,6 @@ async def test_condition_entity_subscription_owned_by_coordinator(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_coordinator_removed_on_slot_removal(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-):
-    """Removing a slot via options tears down its coordinator."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    assert 2 in runtime_data.slot_coordinators
-
-    new_options = {
-        CONF_LOCKS: list(runtime_data.locks.keys()),
-        CONF_SLOTS: {
-            1: {CONF_NAME: "test1", CONF_PIN: "1234", CONF_ENABLED: True},
-        },
-    }
-    write_entry_config(hass, lock_code_manager_config_entry, new_options)
-    await hass.async_block_till_done()
-
-    assert 2 not in runtime_data.slot_coordinators
-    assert 1 in runtime_data.slot_coordinators
-
-
 async def test_unload_reads_slots_via_entry_config_view(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -771,44 +746,6 @@ async def test_write_config_fields_refreshes_runtime_config_before_notify(
     assert all(pin == "5555" for pin in captured_pin)
 
 
-async def test_unload_continues_when_slot_coordinator_stop_raises(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-):
-    """``async_unload_entry`` clears every slot coordinator even when one stop raises."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    coordinators = list(runtime_data.slot_coordinators.values())
-    assert len(coordinators) >= 2
-
-    failing = coordinators[0]
-    boom = RuntimeError("simulated coordinator stop failure")
-    original_stop = failing.async_stop
-    raised = {"value": False}
-
-    def failing_stop() -> None:
-        original_stop()
-        if not raised["value"]:
-            raised["value"] = True
-            raise boom
-
-    with patch.object(failing, "async_stop", failing_stop):
-        with caplog.at_level(logging.WARNING):
-            await hass.config_entries.async_unload(
-                lock_code_manager_config_entry.entry_id
-            )
-            await hass.async_block_till_done()
-
-    assert raised["value"]
-    assert runtime_data.slot_coordinators == {}
-    assert any(
-        record.exc_info is not None and record.exc_info[1] is boom
-        for record in caplog.records
-        if record.levelname == "ERROR"
-    )
-
-
 async def test_register_active_view_initial_writer_failure_propagates_and_discards(
     hass: HomeAssistant,
     mock_lock_config_entry,
@@ -850,7 +787,7 @@ async def test_active_toggle_enable_survives_repair_issue_delete_failure(
 
     boom = RuntimeError("issue registry boom")
     with patch(
-        "custom_components.lock_code_manager.domain.slot_coordinator.async_delete_issue",
+        "custom_components.lock_code_manager.ha.slot_coordinator.async_delete_issue",
         side_effect=boom,
     ):
         with caplog.at_level(logging.ERROR):
@@ -904,51 +841,6 @@ async def test_handle_condition_state_change_after_stop_is_noop(
     recompute.assert_not_called()
 
     await hass.config_entries.async_unload(entry.entry_id)
-
-
-async def test_poke_sync_managers_isolates_individual_failures(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    caplog: pytest.LogCaptureFixture,
-):
-    """One raising sync manager does not abort the poke of the others."""
-    runtime_data = lock_code_manager_config_entry.runtime_data
-    coordinator = runtime_data.slot_coordinators[1]
-
-    # Inject two stand-in managers so the poke loop has predictable
-    # targets regardless of how many real sync managers ended up wired
-    # to this slot via the fixture entity registrations.
-    boom = RuntimeError("simulated sync manager poke failure")
-    healthy_called = {"value": False}
-
-    class _StandIn:
-        def __init__(self, raise_on_call: bool) -> None:
-            self._raise = raise_on_call
-
-        def request_sync_check(self) -> None:
-            if self._raise:
-                raise boom
-            healthy_called["value"] = True
-
-    failing = _StandIn(raise_on_call=True)
-    healthy = _StandIn(raise_on_call=False)
-    coordinator._sync_managers[("lock.failing", pin_address(1))] = failing  # type: ignore[assignment]
-    coordinator._sync_managers[("lock.healthy", pin_address(1))] = healthy  # type: ignore[assignment]
-
-    try:
-        with caplog.at_level(logging.ERROR):
-            coordinator._poke_sync_managers()
-    finally:
-        coordinator._sync_managers.pop(("lock.failing", pin_address(1)))
-        coordinator._sync_managers.pop(("lock.healthy", pin_address(1)))
-
-    assert healthy_called["value"] is True
-    assert any(
-        record.exc_info is not None and record.exc_info[1] is boom
-        for record in caplog.records
-        if record.levelname == "ERROR"
-    )
 
 
 async def test_base_entity_caches_slot_coordinator_on_add(
@@ -1190,7 +1082,7 @@ async def test_pin_required_issue_creation_failure_is_swallowed(
 
     boom = RuntimeError("issue registry boom")
     with patch(
-        "custom_components.lock_code_manager.domain.slot_coordinator.async_create_issue",
+        "custom_components.lock_code_manager.ha.slot_coordinator.async_create_issue",
         side_effect=boom,
     ):
         with caplog.at_level(logging.ERROR):

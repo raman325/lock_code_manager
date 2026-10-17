@@ -5,8 +5,6 @@ action picker -- under its raw key, with no description and unlabelled fields.
 Nothing fails, so nothing catches it: four services shipped that way.
 """
 
-from __future__ import annotations
-
 import json
 import pathlib
 import re

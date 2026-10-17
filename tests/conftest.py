@@ -1,7 +1,6 @@
 """Fixtures for lock_code_manager tests."""
 
-from __future__ import annotations
-
+import asyncio
 from collections.abc import AsyncGenerator, Generator
 from contextlib import ExitStack
 from datetime import timedelta
@@ -30,8 +29,7 @@ from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.domain.models import SyncState
-from custom_components.lock_code_manager.domain.sync import SlotSyncManager
+from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
@@ -42,8 +40,8 @@ from .common import (
     async_setup_mock_lock_entry,
     count_executor_work,
     forget_all_faults,
+    lock_workers_busy,
     release_all_faults,
-    sync_manager_of,
 )
 
 pytest_plugins = ["pytest_homeassistant_custom_component"]
@@ -253,15 +251,50 @@ def pytest_configure(config: pytest.Config) -> None:
     )
 
 
+# Rounds of waiting for Home Assistant and the lock workers to go quiet together.
+_MAX_SETTLE_ROUNDS = 100
+
+
+@pytest.fixture(autouse=True)
+def wait_for_lock_workers(request: pytest.FixtureRequest) -> Generator[None]:
+    """
+    Make ``hass.async_block_till_done`` wait for the lock workers too.
+
+    A lock's worker runs for as long as the lock is held, so Home Assistant
+    does not count it as work to wait for; the jobs it has queued are. A
+    test that settles Home Assistant settles what the locks were asked to do.
+    """
+    if (
+        "hass" not in request.fixturenames
+        # Paced, the workers wait on the frozen clock: the test steps it.
+        or request.node.get_closest_marker("paced") is not None
+    ):
+        yield
+        return
+    hass: HomeAssistant = request.getfixturevalue("hass")
+    original = hass.async_block_till_done
+
+    async def _block_till_done(*args: Any, **kwargs: Any) -> None:
+        for _ in range(_MAX_SETTLE_ROUNDS):
+            await original(*args, **kwargs)
+            if not lock_workers_busy(hass):
+                return
+            await asyncio.sleep(0)
+        pytest.fail("lock workers still busy after settling Home Assistant")
+
+    with patch.object(hass, "async_block_till_done", _block_till_done):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def disable_rate_limiting(request: pytest.FixtureRequest):
     """
-    Disable BaseLock rate limiting for most tests to speed them up.
+    Disable pacing for most tests to speed them up.
 
-    We patch __post_init__ to set _min_operation_delay=0.0 on new instances.
-    A test marked ``paced`` keeps the real delay, so the pacing it checks is
-    the one the providers ship with; it needs the ``freezer`` to get through
-    the waits.
+    We patch __post_init__ to set _min_operation_delay=0.0 on new instances,
+    and a slot that failed tries again at once. A test marked ``paced`` keeps
+    the real delays, so the pacing it checks is the one that ships; it needs
+    the ``freezer`` to get through the waits.
     """
     if request.node.get_closest_marker("paced") is not None:
         yield
@@ -273,9 +306,14 @@ def disable_rate_limiting(request: pytest.FixtureRequest):
             original_post_init(self)
         self._min_operation_delay = 0.0
 
-    with patch(
-        "custom_components.lock_code_manager.providers._base.BaseLock.__post_init__",
-        patched_post_init,
+    with (
+        patch(
+            "custom_components.lock_code_manager.providers._base.BaseLock.__post_init__",
+            patched_post_init,
+        ),
+        patch(
+            "custom_components.lock_code_manager.sync.worker.RETRY_AFTER", (0.0, 0.0)
+        ),
     ):
         yield
 
@@ -362,66 +400,25 @@ def get_in_sync_entity_obj(hass: HomeAssistant, entity_id: str):
     return entity_obj
 
 
-def sync_manager_for(hass: HomeAssistant, entity_id: str) -> SlotSyncManager:
-    """Return the PIN sync manager behind an in-sync entity, by entity ID."""
-    return sync_manager_of(get_in_sync_entity_obj(hass, entity_id))
-
-
 async def async_trigger_sync_tick(
     hass: HomeAssistant, entity_id: str, set_dirty: bool = True
 ) -> None:
     """
-    Manually trigger a sync tick for an in-sync entity.
+    Sync the slot an in-sync entity views on its lock, and settle.
 
-    Encapsulates the pattern of forcing an entity into a tickable state and
-    triggering an immediate tick, useful for testing tick-based sync behavior
-    without waiting for the natural 2-second tick interval.
-
-    Drives the sync manager's internals: it forces ``_state`` and calls
-    ``_async_tick`` directly, so it proves nothing about the scheduled tick
-    and pins the test to the manager's private shape. New tests use
-    ``tests.common.async_advance_sync_ticks``, which only moves time.
+    There is no tick any more: the lock's worker syncs a slot as soon as
+    asked. ``set_dirty`` is kept for the callers; asking always syncs.
     """
-    manager = sync_manager_for(hass, entity_id)
-    if set_dirty and manager._state not in (SyncState.LOADING, SyncState.OUT_OF_SYNC):
-        manager._state = SyncState.OUT_OF_SYNC
-    await manager._async_tick()
+    entity = get_in_sync_entity_obj(hass, entity_id)
+    worker = lock_registry(hass).worker(entity.lock.lock.entity_id)
+    if worker is not None:
+        worker.request_sync((int(entity.slot_num),))
     await hass.async_block_till_done()
 
 
 async def async_initial_tick(hass: HomeAssistant, entity_id: str) -> None:
-    """
-    Trigger initial tick for entity setup.
-
-    During entity setup, the initial tick in async_start may fail if dependent
-    entities (active, code sensor) are not yet registered. This helper triggers
-    a tick to complete initial state loading, but only if the entity hasn't
-    been initialized yet (state is LOADING).
-    """
-    manager = sync_manager_for(hass, entity_id)
-    if manager._state is SyncState.LOADING:
-        await manager._async_tick()
-        await hass.async_block_till_done()
-
-
-async def async_trigger_sync_tick_for_manager(
-    hass: HomeAssistant, sync_manager, set_dirty: bool = True
-) -> None:
-    """
-    Manually trigger a sync tick for a sync manager object.
-
-    Useful when you already have the entity object or need to trigger
-    ticks on multiple managers in a loop. Drives internals the same way
-    ``async_trigger_sync_tick`` does; new tests use
-    ``tests.common.async_advance_sync_ticks``.
-    """
-    if set_dirty and sync_manager._state not in (
-        SyncState.LOADING,
-        SyncState.OUT_OF_SYNC,
-    ):
-        sync_manager._state = SyncState.OUT_OF_SYNC
-    await sync_manager._async_tick()
-    await hass.async_block_till_done()
+    """Settle an in-sync entity's lock after setup: its worker reads first."""
+    await async_trigger_sync_tick(hass, entity_id)
 
 
 async def async_advance_time(hass: HomeAssistant, delta: timedelta) -> None:

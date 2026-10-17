@@ -1,8 +1,6 @@
 """Property-based tests for the provider slot-tag codec."""
 
-from __future__ import annotations
-
-from hypothesis import given, strategies as st
+from hypothesis import example, given, strategies as st
 
 from custom_components.lock_code_manager.providers._util import (
     make_compact_tagged_name,
@@ -72,6 +70,7 @@ def test_parse_tag_is_total(name: str) -> None:
         st.lists(st.integers(), max_size=3),
     )
 )
+@example(value=7)
 def test_parse_slot_num_is_total(value: object) -> None:
     """parse_slot_num never raises; bools are rejected, ints pass through."""
     result = parse_slot_num(value)

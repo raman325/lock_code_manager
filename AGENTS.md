@@ -49,6 +49,33 @@ entities.
 
 ## Architecture
 
+### Layering
+
+The package (`custom_components/lock_code_manager/`) is split into layers.
+`tests/test_architecture.py` enforces the import rules, counting imports under
+`TYPE_CHECKING` too.
+
+- **`sync/`** -- the sync engine: `worker.py` (per-lock worker), `registry.py`
+  (slot registry), `slot.py` (slot model). Imports nothing from Home Assistant
+  and nothing else from this package.
+- **`model/`** -- everything shared by providers and the HA layer: data types,
+  rules, and read-only queries over config entries (`credentials.py`,
+  which also holds `SlotCredential` and the `SlotCode` labels,
+  `names.py`, `pin_generator.py`, `occupancy.py`, `slot_assignment.py`,
+  `config.py`, `user_migration.py`, `exceptions.py`, `events.py`,
+  `queries.py`, `locks.py`, `pin_masking.py`). It may use Home
+  Assistant (hass, the bus, the config entries) but never imports `ha/` or
+  `providers/`.
+- **`ha/`** -- the Home Assistant runtime: `entry.py` (config entry runtime data
+  and the `LockCodeManagerConfigEntry` alias), `runtime.py` (lock runtime),
+  `adapter.py` (provider port for the sync engine), `lock_store.py`, `locks.py`,
+  `slot_coordinator.py`, `callbacks.py`, `references.py`, `unmanaged.py`,
+  `allocation.py`, `services.py`, `validation.py`. It may import everything.
+- **`providers/`** -- one module per lock integration. Imports `model/`, never
+  `ha/`.
+- Top-level modules (platforms, `config_flow.py`, `websocket.py`, `repairs.py`,
+  `diagnostics.py`, `entity.py`, `const.py`, `__init__.py`) may import any layer.
+
 ### Core Components
 
 **Providers System** (`custom_components/lock_code_manager/providers/`)
@@ -69,41 +96,56 @@ entities.
   the recording surface for credentials used where Lock Code Manager observes nothing
   (`use_credential`). Also the way to try Lock Code Manager without a real lock.
 - Each provider implements: `async_get_users()`, `async_set_credential()`, `async_delete_credential()`,
-  `async_is_integration_connected()`, `async_hard_refresh_codes()`
+  `async_is_integration_connected()`, `async_hard_refresh_codes(slots)`
 - Providers listen for lock-specific events and translate them to LCM events via `async_fire_code_slot_event()`
 - `BaseLock` provides `managed_slots` property (aggregates slots across all config entries for the lock,
   disabled ones included; it is `slots_configured_on`)
   and `async_call_service()` helper (wraps HA service calls with `LockDisconnected` error handling)
 - Config questions -- which entry's configuration lists this lock or slot -- go through the named
-  questions in `domain/queries.py` (`entries_configuring`, `slots_configured_on`, `configured_owner`,
-  `syncing_owner`, `another_enabled_entry_configures`). Each counts a different set of entries;
+  questions in `model/queries.py` (`entries_configuring`, `slots_configured_on`, `configured_owner`,
+  `another_entry_configures`, `every_configured_lock`). Each counts a different set of entries;
   ask the one you mean rather than filtering `async_entries` by hand. Live lock-instance ownership
-  is a separate question and filters by load state on purpose: `_find_shared_lock_instance` and
-  `_lock_instance_held_by_another_entry` in `__init__.py`, and `iter_loaded_lcm_entries` /
-  `get_managed_locks` for the locks loaded entries hold
+  is a separate question and filters by load state on purpose: the lock registry
+  (`sync/registry.py`), and `iter_loaded_lcm_entries` / `get_managed_locks` for the locks loaded
+  entries hold
 
-**Coordinator** (`coordinator.py`)
+**Sync engine** (`sync/`, `ha/runtime.py`, `ha/adapter.py`, `ha/lock_store.py`)
 
-- `LockUsercodeUpdateCoordinator`: Home Assistant DataUpdateCoordinator that polls lock providers for usercode state
-- Each lock instance has its own coordinator
-- Default scan interval: 1 minute (configurable via `usercode_scan_interval` property)
-- Supports push-based updates via `coordinator.push_update()` for providers with `supports_push = True`
-- `slot_sync_mgrs_suspended` property / `suspend_slot_sync_mgrs()`: per-lock suspension flag that
-  stops all sync managers for a lock when the circuit breaker trips or an unexpected error occurs.
-  Cleared automatically on recovery via `_reset_backoff` (successful poll or push update).
+- One `LockWorker` per lock (`sync/worker.py`), shared by every entry that holds the lock
+  (`sync/registry.py` `LockRegistry`). A single task takes jobs from a queue -- sync one
+  slot, read, a push, a backoff probe -- one at a time. That queue is the whole of the
+  serialization; the gap between exchanges is the provider's `_min_operation_delay` (2 s).
+- Path of a change: `SlotEntityCoordinator.async_push_want` -> `ha/runtime.async_want` ->
+  the lock's worker -> `ProviderPort` (`ha/adapter.py`) -> the provider's
+  `async_set_usercode(..., source="sync")` / `async_clear_usercode` /
+  `async_release_managed_slot(slot, *, written=...)`.
+- Every write is read back (`async_get_usercodes`, or `async_hard_refresh_codes(slots)` when
+  the provider sets `fresh_read_is_hard_refresh`). The provider's `WriteResult` is ignored.
+- `ProviderPort` also keeps the provider's cadence (scan poll for non-push locks,
+  `hard_refresh_interval` drift read, `connection_check_interval` check), hands pushes to the
+  worker, and refuses a PIN another slot holds or wants, unsent (`_duplicate_of`).
+- What LCM wrote to each slot is persisted as a salted fingerprint (or `cleared`) in the
+  `lock_code_manager.core` store, keyed by the lock's entity registry id
+  (`ha/lock_store.py`). A masked or silent slot whose fingerprint matches counts as in sync,
+  so a restart does not rewrite PINs. Owed release clears persist too.
+- Releasing a slot no entry manages any more removes only what LCM wrote; it is a worker
+  clear, retried like any other.
 
 **Main Module** (`__init__.py`)
 
 - Entry point manages config entry lifecycle
 - `async_update_listener()`: Core function handling dynamic entity creation/removal when config changes
-- Uses dispatcher signals to notify entities of changes (e.g., `{DOMAIN}_{entry_id}_add_lock_slot`)
+- Uses `EntityCallbackRegistry` (`ha/callbacks.py`) to add and remove entities as config changes
 - Registers Lovelace strategy resource for dashboard UI
 
 **Config Flow** (`config_flow.py`)
 
-- Multi-step flow: select locks → configure slots → configure individual slot properties
-- Validates slots aren't already configured across other config entries
-- Supports YAML object mode for advanced slot configuration
+- Main flow: name and locks, then users (UI or YAML). Users are config subentries
+  (`LockCodeManagerUserSubentryFlow`); slot numbers are allocated, never chosen, and only
+  in slots free on every lock
+- Refuses a lock that already holds codes in the entry's slots (`existing_codes`) or
+  whose occupancy cannot be read (`occupancy_unknown`); warns, without asking, about a
+  lock that cannot report its codes (`cannot_report`)
 
 ### Entities
 
@@ -113,7 +155,6 @@ entities.
   credential type (`pin_in_sync` today) views a single credential and is disabled by default
 - `sensor.py`: Per-lock slot PIN sensors showing current codes on each lock
 - `text.py`: Name and PIN configuration entities
-- `number.py`: Number of uses tracking (decrements on PIN use)
 - `switch.py`: Slot enabled/disabled toggle
 - `event.py`: per-user `credential_used` event entity. Its `event_types` are
   credential kinds -- `MANAGED_CREDENTIAL_TYPES` unioned with everything the
@@ -127,12 +168,14 @@ entities.
 ### Data Flow
 
 1. User configures slots and locks via config flow
-2. `async_update_listener()` creates coordinator and provider instances for each lock
+2. `async_update_listener()` holds each lock in the lock registry, which builds its
+   provider, `ProviderPort` and `LockWorker` the first time any entry holds it
 3. Lock provider sets up listeners for lock-specific events (e.g., Z-Wave JS notification events)
-4. Coordinator polls provider's `async_get_usercodes()` to keep state in sync (or receives push updates)
-5. When slot config changes (name, PIN, enabled), sync calls
-   `BaseLock.async_set_usercode()` / `async_clear_usercode()`, which drive the
-   provider's credential primitives
+4. The worker reads the lock (first read, the adapter's polls, pushes from the provider)
+5. When slot config changes (name, PIN, enabled, condition), the slot's
+   `SlotEntityCoordinator` pushes what it wants to each lock's worker, which writes
+   through `BaseLock.async_set_usercode()` / `async_clear_usercode()` and reads the
+   slot back
 6. Provider fires `BUS_EVENT_CREDENTIAL_USED`
    (`lock_code_manager_credential_used`) when a credential is used, carrying
    the user's name, the config entry, and the `source`/`target` entities. This
@@ -144,35 +187,36 @@ entities.
    `credential_used` event entity records from the unified event, which is
    what lets it record a use whose target is not a lock at all.
 
-### Sync State Machine (`sync.py`)
+### Slot sync (`sync/slot.py`, `sync/worker.py`)
 
-`SlotSyncManager` uses a `SyncState` enum with five states:
+A slot's `Status` is `unknown`, `in_sync`, `out_of_sync` or `suspended` (held). The
+`sync_status` attribute adds `syncing` while the worker is on it.
 
-- **LOADING** → initial, waiting for entity states
-- **IN_SYNC** → lock code matches desired state
-- **OUT_OF_SYNC** → mismatch detected, queued for next tick
-- **SYNCING** → sync operation in progress
-- **SUSPENDED** → circuit breaker tripped or unexpected error, retries paused
-
-Transitions: LOADING → IN_SYNC or OUT_OF_SYNC; IN_SYNC ↔ OUT_OF_SYNC; OUT_OF_SYNC �� SYNCING;
-SYNCING → IN_SYNC, OUT_OF_SYNC (retry), or SUSPENDED; SUSPENDED → OUT_OF_SYNC (on recovery).
-
-Error handling taxonomy:
-
-- `CodeRejectedError`/`DuplicateCodeError` → disable slot (profile-wide, code is bad)
-- `LockDisconnected`/`LockOperationFailed` → retry (OUT_OF_SYNC)
-- Generic `Exception` → suspend lock (per-lock, creates `slot_suspended` repair issue)
-- Circuit breaker (3 attempts in 5 minutes) → suspend lock
+- A sync reads the slot if never read, writes it if it differs, then reads it back.
+- A sync that does not end in sync costs the slot one try, charged only once the lock
+  has answered. After 3 tries the slot is held (2 for a release): `slot_suspended`, or
+  `slot_clear_failed` for a clear. Fights -- the lock going from agreeing to disagreeing,
+  e.g. a keypad change -- hold it the same way, aging out over 300 s. Failed tries pause
+  the slot 30 s, then 120 s. A hold is lifted only by a change of target or by
+  acknowledging its repair.
+- The adapter maps provider errors (`ha/adapter.py` `lock_error`): `CodeRejectedError` /
+  `DuplicateCodeError` on a set disables the slot (`slot_disabled`); a refused clear holds it
+  at once (`slot_clear_failed`); `LockOperationError` (`LockDisconnected`,
+  `LockOperationFailed`) and `LockBusy` are no answer. A `LockOperationBlocked` message is
+  shown in the repair. Any other exception is a provider bug and charges a try every time.
+- No answer three times in a row backs the lock off (60 s up to 30 min); twelve marks it
+  offline with a `lock_offline` repair.
 
 ### Key Design Patterns
 
 - **Dual storage**: Config entries use both `data` and `options` fields; active config in
   `data`, options flow updates go to `options`, then merged back to `data`
-- **Internal methods**: Providers expose `async_internal_*` methods that wrap public
-  methods with asyncio locks to prevent race conditions
-- **Rate limiting**: `BaseLock._execute_rate_limited()` enforces 2-second minimum delay
-  between operations and serializes all lock operations via `_aio_lock`
-- **Dispatcher signals**: Heavily used for dynamic entity management without tight coupling
+- **One owner per lock**: every exchange goes through the lock's worker queue. A provider
+  that starts an exchange on its own (an event's follow-up read) runs it through
+  `coordinator.async_in_turn`. `_sequence_lock` remains only for a provider's own
+  multi-step sequences (Schlage, Akuvox)
+- **Callbacks and signals**: `EntityCallbackRegistry` drives dynamic entity management;
+  each lock's worker announces changes with one dispatcher signal (`signal_lock_changed`)
 - **Reauth flow**: Automatically triggered if configured lock entities are removed
 
 ### Lock Codes Card - Slot State Logic
@@ -183,7 +227,7 @@ The `lcm-lock-codes` card displays lock slot states with the following data mode
 
 | Field | Source | Description |
 | ----- | ------ | ----------- |
-| `code` / `code_length` | Lock coordinator | Actual code on the lock (current state) |
+| `code` / `code_length` | Lock's worker | Code on the lock, or a `SlotCode` label (`empty`, `unreadable_code`, `unanswered`, `disabled_on_lock`, `checking`, `not_reported`) |
 | `configured_code` / `configured_code_length` | LCM text entities | Desired code from LCM config |
 | `managed` | LCM config entries | Whether LCM manages this slot (authoritative field) |
 | `name` | LCM text entities | Slot name configured in LCM |
@@ -205,43 +249,6 @@ with gray borders and "Unmanaged" badge.
 **Key Insight:** The `managed` field (from config entries) determines LCM management status.
 The `configured_code` field indicates whether a PIN is configured, but a slot can be managed
 even without a configured code if the PIN text entity is empty.
-
-### Future: Slot Status Enum (TODO)
-
-Currently, the coordinator only stores `{slot: code}` and we infer status from code presence.
-Z-Wave locks provide richer status via `userIdStatus`:
-
-- **Enabled**: Slot has active code
-- **Available**: Slot can be used but is empty
-- **Disabled**: Slot cannot be used (locked out by lock firmware)
-
-**Planned Enhancement:**
-
-1. Define generic `SlotStatus` enum in `const.py`:
-
-   ```python
-   class SlotStatus(StrEnum):
-       ENABLED = "enabled"
-       AVAILABLE = "available"
-       DISABLED = "disabled"
-   ```
-
-2. Providers map their native status to this enum:
-   - Z-Wave JS: `userIdStatus` → `SlotStatus`
-   - Other providers: Infer from their equivalent states
-
-3. Change coordinator data schema from `dict[int, str]` to `dict[int, SlotData]`
-
-**Provider Guidance for Status Inference:**
-
-| Provider State | Maps To |
-| -------------- | ------- |
-| Code exists on lock | `ENABLED` |
-| Slot empty but usable | `AVAILABLE` |
-| Slot programmatically disabled | `DISABLED` |
-| Unknown/unsupported | Default to `AVAILABLE` if no code, `ENABLED` if code |
-
-See `TODO.md` for implementation details.
 
 ## Development Commands
 
@@ -341,10 +348,10 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
     up migrates nothing -- a migration reads the lock through an instance of its
     own, which a test watching what an entry builds or reads would see too
   - Time helpers for the `freezer` fixture: `async_advance_sync_ticks` and `async_tick_until`
-    run the real scheduled sync tick by moving both clocks; `async_advance_clock` moves them
-    any distance, for deadlines and the stop grace; `async_trip_slot_breaker` reaches
-    a breaker through real failures. Prefer these to `async_trigger_sync_tick` (drives sync
-    internals) and `async_advance_time` (fires timers but moves neither clock) in new tests
+    move both clocks in 2 s steps, stopping at each timer on the way (polls, pauses,
+    backoff); `async_advance_clock` moves them any distance, for deadlines and the stop grace.
+    `async_trigger_sync_tick` asks the slot's lock worker to sync it now. Prefer these to
+    `async_advance_time` (fires timers but moves neither clock) in new tests
   - `MockLCMPushLock.subscribe_error`, when set, is raised by every push subscription
     attempt instead of subscribing. The push lock's own attributes are set before
     `when_mock_lock_built` acts run, so an act can set it
@@ -484,7 +491,9 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
   `pylocal-akuvox` `User` field listed; local users marked as A08S/E18C firmware marks them).
   `ignore(service)` acknowledges a write without applying it. Fixture `fake_akuvox_device`.
   Both knobs take `times` and return a `ServiceFault` (`tests/providers/service_fault.py`:
-  `times`, `hits`, `clear()`, context manager), shaped like the other fakes' faults. Neither
+  `times`, `hits`, `clear()`, context manager), shaped like the other fakes' faults.
+  `refuse_pin(pin)` makes Akuvox's `add_user` answer that PIN with the integration's device error,
+  as firmware refusing a PIN another user holds would. Neither
   fixture can be combined with the canned `*_mock_services` one: both answer the same services.
   Both fakes have self-tests in `test_fake_service.py`.
 
@@ -539,7 +548,7 @@ tests/providers/
 
 - **Minimize caplog text assertions** — prefer checking parameters or structured data.
 - Provider `async_setup` must be idempotent — tests verify it can be called multiple times.
-- Don't use `MagicMock()` for coordinators when the real coordinator can be used.
+- Don't use `MagicMock()` for coordinators or workers when the real one can be used.
 
 ## Property-based testing
 
@@ -603,7 +612,7 @@ with a comment citing the contract. Never silence one by rerunning.
        one call may ignore it. **A provider that must ask the lock about one
        index at a time MUST honour it** — a caller widening the question
        otherwise walks the lock's entire advertised capacity, one round trip at
-       a time, holding the operation lock throughout.
+       a time, holding the lock's turn throughout.
      - The result may exceed the scope; callers bound it themselves.
    - `async_set_credential()`: write one credential to the lock
    - `async_delete_credential()`: remove one credential. Returns whether
@@ -632,8 +641,10 @@ with a comment citing the contract. Never silence one by rerunning.
    When in doubt, `unreadable()`. It costs a user one slot number; the other
    two mistakes cost them the code on their door.
 5. Optionally override `async_is_device_available()` to return `False` when the physical
-   device is unresponsive (default returns `True`). Operations are gated on both
-   integration connectivity and device availability.
+   device is unresponsive (default returns `True`). Together with integration connectivity
+   it decides `async_internal_is_reachable()`, which the connection check uses to
+   resubscribe; set `check_available_before_exchange` to also refuse every exchange with
+   an unavailable device.
 6. Override `async_setup()` to register event listeners
 7. Call `async_fire_code_slot_event()` when lock events indicate PIN usage
 8. Add tests in `tests/providers/<provider>/` (`conftest.py`,
@@ -657,54 +668,36 @@ with a comment citing the contract. Never silence one by rerunning.
 If `supports_push` returns `True`, implement:
 
 - `subscribe_push_updates()`: Subscribe to real-time updates and hand each slot
-  observation to `self._confirm_slot(slot, SlotCredential)`. That routes it
-  through `coordinator.observe_push`, which resolves any write still pending on
-  the slot before updating the data. Do not call `coordinator.push_update`
-  from an event handler: it bypasses that resolution.
+  observation to `self._confirm_slot(slot, SlotCredential)` (or
+  `_push_credential_update`). Either reaches the lock's worker as a push. A push may
+  come from a cache, so it never resets a slot's tries, and the worker ignores a
+  provider's echo of the write it is making.
 - `unsubscribe_push_updates()`: Clean up subscriptions
+
+Push `SlotCredential` values, never raw strings — every consumer calls
+`.is_present` / `.matches` on them.
 
 ### Writes, and how they are confirmed
 
-The coordinator owns a write from the moment it is sent until a read or a push
-shows it on the lock (`record_write` / `observe_push` / `take_failed_write` in
-`domain/coordinator.py`). A provider never tracks pending writes itself; it
-only chooses what to return from `async_set_credential`:
+The worker confirms every write by reading the slot back straight after it
+(`sync/worker.py` `_write`). A provider never tracks pending writes, and the core
+ignores the `WriteResult` from `async_set_credential`. What a provider must get
+right is the read:
 
-```python
-async def async_set_credential(self, ref: CredentialRef, value: str, ...) -> WriteResult:
-    # ... perform the set operation ...
-    await self._call_service_to_set_code(ref.slot, value)
-
-    # A push provider pushes the value it wrote before returning CONFIRMED:
-    # its own push is the lock's word, and the seam records nothing pending.
-    self._push_credential_update(ref.slot, SlotCredential.known(value))
-    return WriteResult.CONFIRMED
-```
-
-- `CONFIRMED` from a **push** provider: the lock accepted the write and the
-  provider (or the driver's event) has pushed the value. Nothing is pending.
-- `CONFIRMED` from a **polled** provider: the service accepted the write, but
-  only a later read can vouch for it. The seam records it pending, unbelieved;
-  the coordinator reads the lock back on its own schedule and the slot is in
-  sync once the read shows it.
-- `OPTIMISTIC`: the write most likely landed but the provider cannot say (for
-  example an ambiguous driver result). The seam records it pending with the
-  value believed, so the entity shows it at once, and the coordinator reads it
-  back. A write the lock never shows is given up after `PENDING_WRITE_TTL` and
-  charged to the slot breaker once.
-- `NO_CHANGE`: nothing was written; nothing is recorded.
-
-Push `SlotCredential` values, never raw strings — every consumer calls
-`.is_present` / `.matches` on them. `_push_credential_update` is the helper that
-wraps `coordinator.push_update` correctly.
-
-**Why the push before CONFIRMED matters:** for Z-Wave the command is acknowledged
-by the lock (via Supervision CC) but the JS value cache updates later. Without
-the push, the coordinator would hold the stale pre-write value, the write would
-be judged against it, and the slot would re-sync for nothing.
-
-**Polled providers with synchronous caches** (like Virtual) need nothing special:
-the coordinator's read straight after the write finds the new value.
+- **A read must never come from a cache.** A cached old value counts against a
+  write that worked (#873, #1090). A provider whose `async_get_usercodes` can
+  answer from a cache sets `fresh_read_is_hard_refresh = True`, and the worker
+  reads through `async_hard_refresh_codes(slots)` instead.
+- A cloud that keeps serving the table from before a write sets `read_lag`
+  (seconds): until then a slot just written reads as silent and the write is
+  trusted.
+- A provider that can tell which slots the lock said nothing about reports them in
+  `last_silent_slots`, and the ones it answered it cannot tell (#1581) in
+  `last_cannot_tell_slots`. A slot found only under an untagged user goes in
+  `last_foreign_slots`.
+- `check_available_before_exchange` makes the adapter refuse, unsent, an exchange
+  with a device the provider says is unavailable (Z-Wave queues commands for a dead
+  node). `per_exchange_budget` sizes the time limit of a walk one exchange at a time.
 
 ## Important Constraints
 
@@ -722,8 +715,10 @@ Commands in `websocket.py` for frontend communication:
 | `lock_code_manager/get_config_entry_data` | Fetch config entry, entities, locks, and slots |
 | `lock_code_manager/subscribe_code_slot` | Real-time subscription for slot card updates (includes `sync_status` per lock) |
 | `lock_code_manager/subscribe_lock_codes` | Real-time subscription for lock codes card (includes `sync_status` when suspended) |
-| `lock_code_manager/set_lock_usercode` | Set/clear usercode on unmanaged slots |
-| `lock_code_manager/update_slot_condition` | Add/edit/remove slot condition entity |
+| `lock_code_manager/write_unmanaged_code` | Set a code on a slot LCM does not manage |
+| `lock_code_manager/clear_unmanaged_code` | Clear a code on a slot LCM does not manage |
+| `lock_code_manager/set_condition` | Add or edit a slot's condition entity |
+| `lock_code_manager/clear_condition` | Remove a slot's condition entity |
 
 ## Frontend
 

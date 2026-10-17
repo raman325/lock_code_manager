@@ -7,8 +7,6 @@ end-to-end ones, the provider inside a loaded entry -- and asserts what the
 driver does, cited by file and line (abbreviations in ``fake_node.py``).
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
@@ -36,18 +34,21 @@ from zwave_js_server.util.lock import get_usercode
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import ZWAVE_JS_NOTIFICATION_EVENT
 from homeassistant.const import STATE_OFF, STATE_ON
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
-from custom_components.lock_code_manager.domain.credentials import WriteResult
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    WriteResult,
+)
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockDisconnected,
     LockOperationUnsupported,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
 from tests.common import (
     async_advance_clock,
     async_run_until_quiet,
@@ -474,7 +475,7 @@ class TestSupervisedNode:
         The code is still announced; only a fresh read repairs the cache.
         """
         fake_zwave_lock.supervision = SupervisionStatus.SUCCESS
-        fake_zwave_lock.driver_before_15_25_2 = True
+        fake_zwave_lock.driver_version = "15.25.1"
         seen = record(lock_schlage_be469)
 
         await lock_helpers.async_set_credential(
@@ -490,7 +491,7 @@ class TestSupervisedNode:
     ) -> None:
         """Before zwave-js#8927 (15.25.2) a supervised Fail was Error_Unknown, unread."""
         fake_zwave_lock.supervision = SupervisionStatus.SUCCESS
-        fake_zwave_lock.driver_before_15_25_2 = True
+        fake_zwave_lock.driver_version = "15.25.1"
         fake_zwave_lock.refuse("set", 3)
         fake_zwave_lock.refuse("clear", 2)
 
@@ -1211,21 +1212,30 @@ class TestThroughTheProvider:
         fake_zwave_lock_entry: MockConfigEntry,
         lock_entity: er.RegistryEntry,
     ) -> None:
-        """A report's value events reach the slot through the provider's report shim."""
-        await _async_in_sync(hass, freezer, fake_zwave_lock_entry, lock_entity, 2)
+        """
+        A report's value events reach the slot through the provider's report shim.
 
+        The slot shows the keypad's code and goes out of sync; the worker
+        then puts the configured PIN back at once.
+        """
+        await _async_in_sync(hass, freezer, fake_zwave_lock_entry, lock_entity, 2)
+        entity = lock_entity.entity_id
+        in_sync = in_sync_entity_id(hass, fake_zwave_lock_entry, 2, entity)
+        code = code_entity_id(hass, fake_zwave_lock_entry, 2, entity)
+        seen: list[tuple[str, str]] = []
+
+        @callback
+        def _record(event: Event[EventStateChangedData]) -> None:
+            seen.append((hass.states.get(in_sync).state, hass.states.get(code).state))
+
+        unsub = async_track_state_change_event(hass, [in_sync, code], _record)
         fake_zwave_lock.program(2, "4321")
         await hass.async_block_till_done()
+        unsub()
 
-        entity = lock_entity.entity_id
-        assert (
-            hass.states.get(
-                in_sync_entity_id(hass, fake_zwave_lock_entry, 2, entity)
-            ).state,
-            hass.states.get(
-                code_entity_id(hass, fake_zwave_lock_entry, 2, entity)
-            ).state,
-        ) == (STATE_OFF, "4321")
+        assert (STATE_OFF, "4321") in seen
+        assert seen[-1] == (STATE_ON, "1234")
+        assert fake_zwave_lock.holds(2) == "1234"
 
     async def test_an_unconfirmed_set_is_optimistic(
         self,
@@ -1355,15 +1365,16 @@ class TestUserCredentialThroughTheProvider:
         await _async_in_sync(hass, freezer, fake_zwave_lock_entry, lock_entity, 2)
         lock = get_zwave_lock(hass, fake_zwave_lock_entry, lock_entity)
 
-        with fake_zwave_lock.hang("set", 2) as fault:
-            write = hass.async_create_task(lock.async_set_usercode(2, "4321"))
+        # Slot 3 is not managed: the worker does not put a managed PIN back.
+        with fake_zwave_lock.hang("set", 3) as fault:
+            write = hass.async_create_task(lock.async_set_usercode(3, "4321"))
             await fault.async_wait_held()
             fake_zwave_lock.notify_access_control(
                 AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
             )
 
         assert await write is WriteResult.CONFIRMED
-        assert fake_zwave_lock.holds(2) == "4321"
+        assert fake_zwave_lock.holds(3) == "4321"
 
     async def test_a_new_user_whose_pin_is_refused_is_rolled_back(
         self,
@@ -1409,6 +1420,8 @@ class TestFreshReads:
         right afterwards, in the cache and in what the provider reads.
         """
         fake_zwave_lock.uc_slots[1] = (UserIDStatus.ENABLED, "1111")
+        # Only the walk below: not the worker's startup reads.
+        fake_zwave_lock.exchanges.clear()
 
         codes = await fake_e2e_lock.async_hard_refresh_codes()
 
@@ -1421,6 +1434,7 @@ class TestFreshReads:
         self, fake_zwave_lock: FakeZWaveLock, fake_e2e_lock
     ) -> None:
         """The provider's confirmation read: one Get per slot asked (AC:955-978)."""
+        fake_zwave_lock.exchanges.clear()
         await fake_e2e_lock.async_hard_refresh_codes([2])
 
         assert [(e.operation, e.slot) for e in fake_zwave_lock.exchanges] == [

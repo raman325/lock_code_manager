@@ -1,32 +1,20 @@
 """Test the Virtual lock platform."""
 
-import pytest
-
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    SlotCredential,
     User,
     WriteResult,
     credential_from_slot,
     user_from_slot,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
-from tests.providers.helpers import ProviderNativeTransportContractTests
-
-
-@pytest.mark.skip(
-    reason="The virtual provider has no transport layer -- async_get_users "
-    "reads in-memory state with no SDK/client call -- so there is no native "
-    "transport exception and the issue #1257 contract does not apply."
-)
-class TestNativeTransportContract(ProviderNativeTransportContractTests):
-    """Documents that the native-transport contract does not apply to virtual."""
 
 
 async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
@@ -147,19 +135,6 @@ async def test_async_unload_remove_permanently_removes_store(
     assert await _fresh_store().async_load() is None
 
 
-async def test_virtual_lock_reports_no_code_slot_events(
-    virtual_lock: VirtualLock,
-):
-    """A virtual lock observes nothing, and says so.
-
-    It is the surface somebody adds to record uses Lock Code Manager cannot
-    watch, not a device that reports them. Recording a use against it does
-    not need this to claim otherwise -- see the E2E test that does exactly
-    that with this answering False.
-    """
-    assert virtual_lock.supports_code_slot_events is False
-
-
 async def test_virtual_lock_capabilities_advertise_no_limits(
     virtual_lock: VirtualLock,
 ):
@@ -266,31 +241,6 @@ async def test_get_users_invalid_stored_key_skipped(
     codes = await lock.async_get_usercodes()
     assert 3 in codes
     assert codes[3] == SlotCredential.known("3333")
-
-
-async def test_base_orchestration_set_clear_get(virtual_lock_with_slots: VirtualLock):
-    """Test set/clear/get flow through the base primitives + projection."""
-    lock = virtual_lock_with_slots
-
-    # async_set_credential routes through the primitive and stores the code
-    await lock.async_set_credential(
-        1,
-        credential_from_slot(1, SlotCredential.known("4321")),
-        "4321",
-        name="orchestration_test",
-        source="direct",
-    )
-    # async_get_usercodes uses the base projection over async_get_users
-    codes = await lock.async_get_usercodes()
-    assert codes[1] == SlotCredential.known("4321")
-    assert codes[2] is SlotCredential.empty()
-
-    # async_delete_credential removes the code
-    await lock.async_delete_credential(
-        CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
-    )
-    codes = await lock.async_get_usercodes()
-    assert codes[1] is SlotCredential.empty()
 
 
 async def test_get_users_returns_user_objects(virtual_lock_with_slots: VirtualLock):

@@ -1,7 +1,5 @@
 """End-to-end tests for the ZHA provider through a real Lock Code Manager entry."""
 
-from __future__ import annotations
-
 import re
 from typing import Any
 
@@ -22,6 +20,7 @@ from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CONDITION,
     CONF_ENABLED,
+    CONF_NAME,
     CONF_PIN,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
@@ -33,25 +32,36 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
+    CONF_LOCKS,
+    CONF_NUM_USERS,
     CONF_SLOT,
     CONF_USERS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
     SUBENTRY_TYPE_USER,
-    TICK_INTERVAL,
 )
-from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.ha.runtime import (
+    lock_reachable,
+    lock_registry,
+)
+from custom_components.lock_code_manager.model.credentials import SlotCredential
 from custom_components.lock_code_manager.providers.zha import ZHALock
+from custom_components.lock_code_manager.repairs import async_create_fix_flow
+from custom_components.lock_code_manager.sync.slot import LIMIT, Holds, Seen
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_flow,
+    async_step_clock_until,
     async_tick_until,
     in_sync_entity_id,
+    lock_workers_busy,
     slot_entity_id,
+    unfinished_tasks,
 )
 from tests.conftest import async_advance_time
 
+from ...common import TICK_INTERVAL
 from .conftest import ZHA_LCM_CONFIG_SLOTS, Answer, DoorLockStandIn
 from .helpers import (
     Frame,
@@ -90,6 +100,18 @@ def _zha_lock(lcm_config_entry: MockConfigEntry) -> ZHALock:
     return lock
 
 
+def _worker(hass: HomeAssistant, lcm_config_entry: MockConfigEntry) -> LockWorker:
+    """Return the worker that owns the entry's lock."""
+    worker = lock_registry(hass).worker(_zha_lock(lcm_config_entry).lock.entity_id)
+    assert worker is not None
+    return worker
+
+
+def _seen(hass: HomeAssistant, lcm_config_entry: MockConfigEntry, slot: int) -> Any:
+    """Return what the lock last said about ``slot``, as its worker holds it."""
+    return _worker(hass, lcm_config_entry).slots[slot].seen
+
+
 async def _run_ticks(hass: HomeAssistant) -> None:
     """Run enough sync ticks for every configured slot to be written."""
     for _ in range(len(CONFIGURED_PINS) + 2):
@@ -111,7 +133,7 @@ async def _tick_until_slot_1_is_suspended(
     hass: HomeAssistant, lcm_config_entry: MockConfigEntry
 ) -> None:
     """Run sync ticks until slot 1 is suspended, failing if it never is."""
-    for _ in range(4 * MAX_SYNC_ATTEMPTS):
+    for _ in range(4 * LIMIT):
         if _slot_suspension(hass, lcm_config_entry, 1) is not None:
             return
         await async_advance_time(hass, TICK_INTERVAL)
@@ -316,11 +338,8 @@ class TestSync:
         await _run_ticks(hass)
 
         assert door_lock.codes == CONFIGURED_PINS
-        lock = _zha_lock(lcm_config_entry)
         for slot_num, pin in CONFIGURED_PINS.items():
-            assert lock.coordinator.data.get(pin_address(slot_num)) == (
-                SlotCredential.known(pin)
-            )
+            assert _seen(hass, lcm_config_entry, slot_num) == Holds(pin)
             assert _in_sync_state(hass, lcm_config_entry, slot_num) == STATE_ON
 
     @pytest.mark.parametrize("door_lock_codes", [CONFIGURED_PINS])
@@ -458,12 +477,13 @@ async def test_adding_users_reads_a_slow_lock_for_as_long_as_the_read_walks(
         assert adding.done()
         result = adding.result()
         assert result.get("reason") == "users_added", result.get("errors")
-        # One read of the three numbers, each its own slow exchange.
+        # One read of the three numbers, each its own slow exchange. (The
+        # lock's worker then reads each new slot before it writes it.)
         assert [
             request.user_id
             for request in door_lock.requests
             if request.command.name == "get_pin_code" and request.user_id != 1
-        ] == [2, 3, 4]
+        ][:3] == [2, 3, 4]
         assert {
             subentry.title: subentry.data[CONF_SLOT]
             for subentry in lcm_config_entry.subentries.values()
@@ -512,17 +532,18 @@ class TestReadOfAnotherUser:
         door_lock: DoorLockStandIn,
     ) -> None:
         """
-        A reply naming another user is not slot 1's code, so slot 1 is programmed.
+        A reply naming another user is not slot 1's code: slot 1 is not in sync.
 
         zigpy pairs a reply with its request by sequence number, not by the
         user it names. Read as slot 1's, the other user's code matched slot
         1's configuration and slot 1 read in sync while the lock held nothing
-        there.
+        there. Now that read fails, as no answer about slot 1 at all (and a
+        slot never read is never written).
         """
         await _run_ticks(hass)
 
-        assert door_lock.codes[1] == CONFIGURED_PINS[1]
-        assert 1 in _writes(door_lock, "set_pin_code")
+        assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
+        assert 1 not in door_lock.codes
 
 
 @_CLUSTER_TYPES
@@ -553,22 +574,43 @@ class TestReadOfAnotherCommand:
         door_lock: DoorLockStandIn,
     ) -> None:
         """
-        An operation event filling slot 1's read leaves slot 1 to be programmed.
+        An operation event filling slot 1's read is not slot 1's code.
 
         Every decoded zigpy command is a tuple. Read positionally, the event's
         Lock code (1) passed for the Enabled status and its Personal
         Identification Number for the code, so the empty slot read as holding
-        its configured code.
+        its configured code. Now that read fails: slot 1 is not in sync.
         """
         await _run_ticks(hass)
 
-        assert door_lock.codes[1] == CONFIGURED_PINS[1]
-        assert 1 in _writes(door_lock, "set_pin_code")
+        assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
+        assert 1 not in door_lock.codes
 
 
 @_CLUSTER_TYPES
 class TestWriteStatus:
     """A write's status is taken only from the reply that answers it."""
+
+    @pytest.fixture
+    def door_lock(
+        self, door_lock: DoorLockStandIn, request: pytest.FixtureRequest
+    ) -> DoorLockStandIn:
+        """
+        Answer slot 1's set as each test needs, before the entry is set up.
+
+        The entry's first sync writes the configured codes as it loads, so
+        the answer has to be in place before then.
+        """
+        params = request.node.callspec.params
+        cluster = door_lock.cluster
+        if (own_refusal := params.get("own_refusal")) is not None:
+            answer = _for_slot_1(own_refusal(cluster))
+        elif request.node.originalname.startswith("test_a_refused_set"):
+            answer = _for_slot_1(params["foreign"](cluster))
+        else:
+            answer = _applied_once(door_lock, params["foreign"](cluster))
+        door_lock.answers["set_pin_code"] = answer
+        return door_lock
 
     @pytest.mark.parametrize(
         "own_refusal",
@@ -580,7 +622,9 @@ class TestWriteStatus:
                 id="own_response",
             ),
             pytest.param(
-                lambda _cluster: default_response(_SET_PIN_CODE_ID, Status.FAILURE),
+                lambda _cluster: default_response(
+                    _SET_PIN_CODE_ID, Status.INVALID_VALUE
+                ),
                 id="default_response_naming_the_set",
             ),
         ],
@@ -593,8 +637,6 @@ class TestWriteStatus:
         own_refusal: Any,
     ) -> None:
         """A non-zero status in the set's own reply rejects the code."""
-        door_lock.answers["set_pin_code"] = _for_slot_1(own_refusal(door_lock.cluster))
-
         await _run_ticks(hass)
 
         assert 1 not in door_lock.codes
@@ -619,15 +661,13 @@ class TestWriteStatus:
         the slot breaker until it suspends the slot -- not a connectivity
         failure, which would mark the whole lock unreachable.
         """
-        door_lock.answers["set_pin_code"] = _for_slot_1(foreign(door_lock.cluster))
-
         await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
 
         assert 1 not in door_lock.codes
-        assert _writes(door_lock, "set_pin_code").count(1) == MAX_SYNC_ATTEMPTS
+        assert _writes(door_lock, "set_pin_code").count(1) == LIMIT
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
         assert _slot_enabled_state(hass, lcm_config_entry, 1) == STATE_ON
-        assert not _zha_lock(lcm_config_entry).coordinator.unreachable
+        assert _worker(hass, lcm_config_entry).reachable
         assert door_lock.codes[2] == CONFIGURED_PINS[2]
         assert _in_sync_state(hass, lcm_config_entry, 2) == STATE_ON
 
@@ -639,14 +679,15 @@ class TestWriteStatus:
         door_lock: DoorLockStandIn,
         foreign: Any,
     ) -> None:
-        """A set the lock applied but another frame answered is sent again and syncs."""
-        door_lock.answers["set_pin_code"] = _applied_once(
-            door_lock, foreign(door_lock.cluster)
-        )
+        """
+        A set the lock applied but another frame answered syncs on its read-back.
 
+        The write fails, but every write is read back: the read finds the
+        code in place, so the slot is in sync without sending the set again.
+        """
         await _run_ticks(hass)
 
-        assert _writes(door_lock, "set_pin_code").count(1) == 2
+        assert _writes(door_lock, "set_pin_code").count(1) == 1
         assert door_lock.codes == CONFIGURED_PINS
         for slot_num in CONFIGURED_PINS:
             assert _slot_enabled_state(hass, lcm_config_entry, slot_num) == STATE_ON
@@ -680,11 +721,9 @@ class TestClearStatus:
         await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
 
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
-        assert _writes(door_lock, "clear_pin_code").count(1) == MAX_SYNC_ATTEMPTS
-        assert not _zha_lock(lcm_config_entry).coordinator.unreachable
-        assert _zha_lock(lcm_config_entry).coordinator.data.get(pin_address(1)) == (
-            SlotCredential.known(CONFIGURED_PINS[1])
-        )
+        assert _writes(door_lock, "clear_pin_code").count(1) == LIMIT
+        assert _worker(hass, lcm_config_entry).reachable
+        assert _seen(hass, lcm_config_entry, 1) == Holds(CONFIGURED_PINS[1])
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
         assert door_lock.codes[2] == CONFIGURED_PINS[2]
         assert _in_sync_state(hass, lcm_config_entry, 2) == STATE_ON
@@ -697,7 +736,12 @@ class TestClearStatus:
         door_lock: DoorLockStandIn,
         foreign: Any,
     ) -> None:
-        """A clear the lock applied but another frame answered is sent again and syncs."""
+        """
+        A clear the lock applied but another frame answered syncs on its read-back.
+
+        The clear fails, but every write is read back: the read finds the
+        slot empty, so it is in sync without sending the clear again.
+        """
         await _run_ticks(hass)
         door_lock.answers["clear_pin_code"] = _applied_once(
             door_lock, foreign(door_lock.cluster)
@@ -707,10 +751,8 @@ class TestClearStatus:
         await _run_ticks(hass)
 
         assert 1 not in door_lock.codes
-        assert _writes(door_lock, "clear_pin_code").count(1) == 2
-        assert _zha_lock(lcm_config_entry).coordinator.data.get(pin_address(1)) == (
-            SlotCredential.empty()
-        )
+        assert _writes(door_lock, "clear_pin_code").count(1) == 1
+        assert _seen(hass, lcm_config_entry, 1) is Seen.EMPTY
         assert _in_sync_state(hass, lcm_config_entry, 1) == STATE_ON
 
     @pytest.mark.parametrize(
@@ -725,7 +767,9 @@ class TestClearStatus:
                 id="own_response",
             ),
             pytest.param(
-                lambda _cluster: default_response(_CLEAR_PIN_CODE_ID, Status.FAILURE),
+                lambda _cluster: default_response(
+                    _CLEAR_PIN_CODE_ID, Status.INVALID_VALUE
+                ),
                 id="default_response_naming_the_clear",
             ),
         ],
@@ -737,19 +781,25 @@ class TestClearStatus:
         door_lock: DoorLockStandIn,
         own_refusal: Any,
     ) -> None:
-        """A non-zero status in the clear's own reply leaves the code where it was."""
+        """
+        A non-zero status in the clear's own reply leaves the code where it was.
+
+        It is a refusal, not a failure to retry: the clear goes out once and
+        the slot is suspended, however long the lock is left.
+        """
         await _run_ticks(hass)
         door_lock.answers["clear_pin_code"] = lambda _request: own_refusal(
             door_lock.cluster
         )
 
         await _disable_slot_1(hass, lcm_config_entry)
-        await _run_ticks(hass)
+        for _ in range(4 * LIMIT):
+            await async_advance_time(hass, TICK_INTERVAL)
 
+        assert _writes(door_lock, "clear_pin_code").count(1) == 1
+        assert _slot_suspension(hass, lcm_config_entry, 1) is not None
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
-        assert _zha_lock(lcm_config_entry).coordinator.data.get(pin_address(1)) == (
-            SlotCredential.known(CONFIGURED_PINS[1])
-        )
+        assert _seen(hass, lcm_config_entry, 1) == Holds(CONFIGURED_PINS[1])
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
 
 
@@ -820,7 +870,7 @@ class TestRefusedClear:
             )
         )
         await make_slot_1_clear(hass, lcm_config_entry)
-        for _ in range(4 * MAX_SYNC_ATTEMPTS):
+        for _ in range(4 * LIMIT):
             await async_advance_time(hass, TICK_INTERVAL)
 
     @pytest.mark.parametrize(
@@ -847,7 +897,8 @@ class TestRefusedClear:
         and reset the slot breaker as it did, so the clear went out on every
         tick for as long as the lock kept refusing it. It also switched off
         a slot whose condition, not its user, wanted it empty. The code is
-        still on the lock, so the repair says so.
+        still on the lock, so the repair says so, and that acknowledging it
+        tries again.
         """
         await self._refuse_every_clear_of_slot_1(
             hass, lcm_config_entry, door_lock, make_slot_1_clear
@@ -858,13 +909,11 @@ class TestRefusedClear:
         assert suspension is not None
         text = await _rendered_repair(hass, suspension)
         assert "couldn't remove the code" in text
-        assert "status FAILURE (1)" in text
         assert "may still be on the lock" in text
         assert "delete it at the lock itself" in text
         assert "cannot set code" not in text
         assert "<Status." not in text
-        assert text.count("resume") == 1
-        assert "resumes once the lock reports the slot empty" in text
+        assert "Submit to try again" in text
         assert _slot_1_disabled_repair(hass, lcm_config_entry) is None
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
@@ -933,13 +982,29 @@ class TestRefusedClear:
         door_lock: DoorLockStandIn,
         make_slot_1_clear: Any,
     ) -> None:
-        """The code removed at the lock itself brings the slot back in sync."""
+        """
+        The code removed at the lock itself, then the repair acknowledged, syncs.
+
+        A held slot stays held until its target changes or its repair is
+        acknowledged; the lock reporting the slot empty does not lift it on
+        its own. Acknowledged, the slot is in sync without another clear.
+        """
         await self._refuse_every_clear_of_slot_1(
             hass, lcm_config_entry, door_lock, make_slot_1_clear
         )
-        assert _slot_suspension(hass, lcm_config_entry, 1) is not None
+        suspension = _slot_suspension(hass, lcm_config_entry, 1)
+        assert suspension is not None
 
         _clear_slot_1_at_the_keypad(door_lock)
+        await _run_ticks(hass)
+        assert _slot_suspension(hass, lcm_config_entry, 1) is not None
+
+        flow = await async_create_fix_flow(
+            hass, suspension.issue_id, dict(suspension.data or {})
+        )
+        flow.hass = hass
+        result = await flow.async_step_init({})
+        assert result["type"] is FlowResultType.CREATE_ENTRY
         await _run_ticks(hass)
 
         assert 1 not in door_lock.codes
@@ -951,22 +1016,31 @@ class TestRefusedClear:
 _GET_PIN_CODE_ID = DoorLock.ServerCommandDefs.get_pin_code.id
 
 
-class TestOpenBugs:
-    """Open ZHA bugs, each pinned by a strict xfail."""
+_TRANSIENT_STATUSES = pytest.mark.parametrize(
+    "status",
+    [Status.FAILURE, Status.HARDWARE_FAILURE, Status.SOFTWARE_FAILURE],
+    ids=["failure", "hardware_failure", "software_failure"],
+)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: a transient failure status in the Default Response to a set "
-            "disables the slot as if the lock rejected the code"
-        ),
-    )
-    @pytest.mark.parametrize(
-        "status",
-        [Status.FAILURE, Status.HARDWARE_FAILURE, Status.SOFTWARE_FAILURE],
-        ids=["failure", "hardware_failure", "software_failure"],
-    )
-    async def test_a_transient_failure_is_retried_not_a_rejection(
+
+class TestTransientWriteFailure:
+    """A Default Response's transient failure to a write is no answer, not a refusal."""
+
+    @pytest.fixture
+    def door_lock(
+        self, door_lock: DoorLockStandIn, request: pytest.FixtureRequest
+    ) -> DoorLockStandIn:
+        """Fail slot 1's set before the entry's first sync writes it."""
+        if request.node.originalname.endswith("_set_is_retried_not_a_rejection"):
+            door_lock.answers["set_pin_code"] = _for_slot_1(
+                default_response(
+                    _SET_PIN_CODE_ID, request.node.callspec.params["status"]
+                )
+            )
+        return door_lock
+
+    @_TRANSIENT_STATUSES
+    async def test_a_transient_failure_to_a_set_is_retried_not_a_rejection(
         self,
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
@@ -974,14 +1048,36 @@ class TestOpenBugs:
         status: Status,
     ) -> None:
         """The set is sent again until the slot is suspended; the user stays enabled."""
-        door_lock.answers["set_pin_code"] = _for_slot_1(
-            default_response(_SET_PIN_CODE_ID, status)
-        )
-
         await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
 
         assert _slot_enabled_state(hass, lcm_config_entry, 1) == STATE_ON
-        assert _writes(door_lock, "set_pin_code").count(1) == MAX_SYNC_ATTEMPTS
+        assert _writes(door_lock, "set_pin_code").count(1) == LIMIT
+        assert _worker(hass, lcm_config_entry).reachable
+
+    @_TRANSIENT_STATUSES
+    async def test_a_transient_failure_to_a_clear_is_retried_not_a_rejection(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        status: Status,
+    ) -> None:
+        """The clear is sent again until the slot is suspended, not refused once."""
+        await _run_ticks(hass)
+        door_lock.answers["clear_pin_code"] = _for_slot_1(
+            default_response(_CLEAR_PIN_CODE_ID, status)
+        )
+
+        await _disable_slot_1(hass, lcm_config_entry)
+        await _tick_until_slot_1_is_suspended(hass, lcm_config_entry)
+
+        assert _writes(door_lock, "clear_pin_code").count(1) == LIMIT
+        assert door_lock.codes[1] == CONFIGURED_PINS[1]
+        assert _worker(hass, lcm_config_entry).reachable
+
+
+class TestOpenBugs:
+    """Open ZHA bugs, each pinned by a strict xfail."""
 
     @pytest.mark.xfail(
         strict=True,
@@ -1011,13 +1107,6 @@ class TestOpenBugs:
         assert issue is not None
         assert meaning in (await _rendered_repair(hass, issue)).lower()
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: a clear the lock acknowledged is taken as done when the read "
-            "after it is unreadable, so a revoked code may still work"
-        ),
-    )
     async def test_an_unconfirmed_clear_is_not_in_sync(
         self,
         hass: HomeAssistant,
@@ -1086,3 +1175,141 @@ class TestOpenBugs:
             subentry.title: subentry.data[CONF_SLOT]
             for subentry in lcm_config_entry.subentries.values()
         }["user3"] == 3
+
+
+def _not_supported(door_lock: DoorLockStandIn, *, codes_only: bool = False) -> Answer:
+    """
+    Answer a get with user status Not Supported (0xFF, #1581).
+
+    For every user, a lock that cannot report its users at all; with
+    ``codes_only``, only for a user holding a code, a lock that reports
+    which slots are free and nothing of the rest.
+    """
+
+    def _answer(request: Any) -> Frame | None:
+        if codes_only and request.user_id not in door_lock.codes:
+            return None
+        return lock_frame(
+            door_lock.cluster,
+            "get_pin_code_response",
+            user_id=request.user_id,
+            user_status=DoorLock.UserStatus.Not_Supported,
+            user_type=DoorLock.UserType.Unrestricted,
+            code="",
+        )
+
+    return _answer
+
+
+async def _set_up_two_users(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, lock_id: str
+) -> tuple[Any, MockConfigEntry]:
+    """Run the config flow for two users on the lock; return its result and entry."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    flow_id = result["flow_id"]
+    await async_configure_flow(hass, flow_id, {CONF_NAME: "zha", CONF_LOCKS: [lock_id]})
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+    result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+    assert result["step_id"] == "code_slot", result.get("errors")
+    for user, pin in (("user1", "1234"), ("user2", "5678")):
+        result = await async_configure_flow(
+            hass, flow_id, {CONF_NAME: user, CONF_PIN: pin, CONF_ENABLED: True}
+        )
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    entry = hass.config_entries.async_get_entry(result["result"].entry_id)
+    assert entry is not None
+    return result, entry
+
+
+async def _until_settled(
+    hass: HomeAssistant,
+    freezer: FrozenDateTimeFactory,
+    entry: MockConfigEntry,
+    door_lock: DoorLockStandIn,
+    pins: dict[int, str],
+) -> None:
+    """Step the clock until each PIN is on the lock and in sync, the lock idle."""
+    await async_step_clock_until(
+        hass,
+        freezer,
+        lambda: (
+            all(
+                door_lock.codes.get(slot) == pin
+                and _in_sync_state(hass, entry, slot) == STATE_ON
+                for slot, pin in pins.items()
+            )
+            and not unfinished_tasks(hass)
+            and not lock_workers_busy(hass)
+        ),
+        max_steps=300,
+        what="every PIN on the lock and in sync",
+        step=1.0,
+    )
+
+
+class TestLockThatCannotReport:
+    """
+    #1581 through ZHA: user status Not Supported (0xFF) is read as Zigbee2MQTT reads it.
+
+    From a lock that never described a slot it is silence: free to number,
+    and a write there trusted. From one that has, it is a code the lock will
+    not show, and nothing is numbered there.
+    """
+
+    async def test_a_lock_that_never_reports_numbers_from_one(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        zha_lock_entity,
+        door_lock: DoorLockStandIn,
+    ) -> None:
+        """Two users take 1 and 2, their PINs land, and nothing is held or offline."""
+        door_lock.answers["get_pin_code"] = _not_supported(door_lock)
+        lock_id = zha_lock_entity.entity_id
+
+        result, entry = await _set_up_two_users(hass, freezer, lock_id)
+
+        assert _writes(door_lock, "get_pin_code") == [1, 2]
+        assert result["description"] == "cannot_report"
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 1, "user2": 2}
+        pins = {1: "1234", 2: "5678"}
+        await _until_settled(hass, freezer, entry, door_lock, pins)
+        assert _writes(door_lock, "set_pin_code") == [1, 2]
+        assert [
+            issue.issue_id
+            for issue in ir.async_get(hass).issues.values()
+            if issue.domain == DOMAIN
+        ] == []
+        assert lock_reachable(hass, lock_id) is True
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+    @pytest.mark.parametrize("door_lock_codes", [{1: "1111", 3: "3333"}])
+    async def test_a_lock_that_reports_free_slots_keeps_its_codes(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        zha_lock_entity,
+        door_lock: DoorLockStandIn,
+    ) -> None:
+        """Keypad codes at 1 and 3 push two users to 2 and 4."""
+        door_lock.answers["get_pin_code"] = _not_supported(door_lock, codes_only=True)
+        lock_id = zha_lock_entity.entity_id
+
+        result, entry = await _set_up_two_users(hass, freezer, lock_id)
+
+        assert result["description"] is None
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 2, "user2": 4}
+        await _until_settled(hass, freezer, entry, door_lock, {2: "1234", 4: "5678"})
+        assert _writes(door_lock, "set_pin_code") == [2, 4]
+        assert door_lock.codes[1] == "1111"
+        assert door_lock.codes[3] == "3333"
+        assert lock_reachable(hass, lock_id) is True
+        assert await hass.config_entries.async_unload(entry.entry_id)

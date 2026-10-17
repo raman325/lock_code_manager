@@ -5,8 +5,6 @@ exercised end-to-end: trigger fires from a real LCM event entity, the
 automation runs, and we assert on the side effects via mocked services.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 import contextlib
 import pathlib

@@ -1,0 +1,228 @@
+"""
+Typed callback registry for entity lifecycle management.
+
+Platforms register entity-creation callbacks; entities register
+their own removal callbacks.
+"""
+
+import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+import logging
+from typing import TYPE_CHECKING, Protocol
+
+from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
+
+if TYPE_CHECKING:
+    from ..providers import BaseLock
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class StandardEntityCallback(Protocol):
+    """Protocol for callbacks that create standard slot entities (one per slot)."""
+
+    def __call__(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
+        """Create entities for a slot."""
+        ...
+
+
+class LockSlotEntityCallback(Protocol):
+    """Protocol for callbacks that create lock-slot entities (one per lock+slot)."""
+
+    def __call__(
+        self, lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
+    ) -> None:
+        """Create entities for a lock+slot combination."""
+        ...
+
+
+class LockUpdateCallback(Protocol):
+    """Protocol for callbacks that handle lock additions."""
+
+    def __call__(self, locks: list[BaseLock]) -> None:
+        """Handle lock additions."""
+        ...
+
+
+class LockRemoveCallback(Protocol):
+    """Protocol for callbacks that handle lock removal."""
+
+    def __call__(self, lock_entity_id: str) -> None:
+        """Handle lock removal."""
+        ...
+
+
+# Type alias for entity removal callbacks (async)
+EntityRemoveCallback = Callable[[], Awaitable[None]]
+
+# Type alias for unregister functions
+UnregisterFunc = Callable[[], None]
+
+
+@dataclass
+class EntityCallbackRegistry:
+    """
+    Registry of entity lifecycle callbacks.
+
+    Entity Types:
+        Standard: Entities created once per slot (e.g., enabled switch, name/PIN
+            text fields, event sensor, active binary sensor). These exist for
+            every configured slot.
+
+        Lock-slot: Entities created once per lock+slot combination (e.g., PIN
+            code sensor showing the actual code on the lock, in-sync binary
+            sensor). For 3 locks with 2 slots, this creates 6 entities.
+    """
+
+    # Entity creation callbacks (platforms register these in async_setup_entry)
+    add_standard_entity: list[StandardEntityCallback] = field(default_factory=list)
+    add_lock_slot_entity: list[LockSlotEntityCallback] = field(default_factory=list)
+
+    # Entity removal callbacks (entities register themselves in async_added_to_hass)
+    # Key format: "{slot_num}|{key}" or "{slot_num}|{key}|{lock_entity_id}"
+    remove_entity: dict[str, EntityRemoveCallback] = field(default_factory=dict)
+
+    # Lock lifecycle callbacks (entities register to be notified of lock changes)
+    lock_added: list[LockUpdateCallback] = field(default_factory=list)
+    lock_removed: list[LockRemoveCallback] = field(default_factory=list)
+
+    def register_standard_adder(
+        self, callback: StandardEntityCallback
+    ) -> UnregisterFunc:
+        """
+        Register callback for adding standard slot entities.
+
+        Used by: switch, text, event, binary_sensor (active sensor)
+        """
+        self.add_standard_entity.append(callback)
+        return lambda: (
+            self.add_standard_entity.remove(callback)
+            if callback in self.add_standard_entity
+            else None
+        )
+
+    def register_lock_slot_adder(
+        self, callback: LockSlotEntityCallback
+    ) -> UnregisterFunc:
+        """
+        Register callback for adding lock-slot entities.
+
+        Used by: sensor (PIN code), binary_sensor (in-sync)
+        """
+        self.add_lock_slot_entity.append(callback)
+        return lambda: (
+            self.add_lock_slot_entity.remove(callback)
+            if callback in self.add_lock_slot_entity
+            else None
+        )
+
+    def register_entity_remover(
+        self, uid: str, callback: EntityRemoveCallback
+    ) -> UnregisterFunc:
+        """
+        Register callback for entity removal by unique ID.
+
+        Entities call this in async_added_to_hass to register themselves
+        for removal when their slot/key is removed from config.
+        """
+        self.remove_entity[uid] = callback
+
+        def unregister() -> None:
+            self.remove_entity.pop(uid, None)
+
+        return unregister
+
+    def register_lock_added_handler(
+        self, callback: LockUpdateCallback
+    ) -> UnregisterFunc:
+        """Register callback for lock addition notifications."""
+        self.lock_added.append(callback)
+        return lambda: (
+            self.lock_added.remove(callback) if callback in self.lock_added else None
+        )
+
+    def register_lock_removed_handler(
+        self, callback: LockRemoveCallback
+    ) -> UnregisterFunc:
+        """Register callback for lock removal notifications."""
+        self.lock_removed.append(callback)
+        return lambda: (
+            self.lock_removed.remove(callback)
+            if callback in self.lock_removed
+            else None
+        )
+
+    @callback
+    def invoke_standard_adders(self, slot_num: int, ent_reg: er.EntityRegistry) -> None:
+        """Invoke all standard entity creation callbacks."""
+        for cb in self.add_standard_entity:
+            try:
+                cb(slot_num, ent_reg)
+            except Exception:
+                _LOGGER.exception(
+                    "Error in standard entity callback for slot %s", slot_num
+                )
+
+    @callback
+    def invoke_lock_slot_adders(
+        self, lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
+    ) -> None:
+        """Invoke all lock-slot entity creation callbacks."""
+        for cb in self.add_lock_slot_entity:
+            try:
+                cb(lock, slot_num, ent_reg)
+            except Exception:
+                _LOGGER.exception(
+                    "Error in lock-slot entity callback for lock %s slot %s",
+                    lock.lock.entity_id,
+                    slot_num,
+                )
+
+    async def invoke_entity_removers_for_slot(self, slot_num: int) -> None:
+        """
+        Invoke entity removal callbacks for an entire slot.
+
+        Removers are independent and run concurrently; one that raises is
+        logged and does not keep the rest from running.
+        """
+        prefix = f"{slot_num}|"
+        to_remove = [uid for uid in self.remove_entity if uid.startswith(prefix)]
+        async with asyncio.TaskGroup() as tg:
+            for uid in to_remove:
+                tg.create_task(self._remove_entity(uid))
+
+    async def _remove_entity(self, uid: str) -> None:
+        """Run one entity remover, logging rather than raising."""
+        try:
+            await self.remove_entity[uid]()
+        except Exception:
+            _LOGGER.exception("Error removing entity with uid %s", uid)
+        finally:
+            self.remove_entity.pop(uid, None)
+
+    @callback
+    def invoke_lock_added_handlers(self, locks: list[BaseLock]) -> None:
+        """Invoke lock-added callbacks."""
+        for cb in self.lock_added:
+            try:
+                cb(locks)
+            except Exception:
+                _LOGGER.exception("Error in lock added callback")
+
+    @callback
+    def invoke_lock_removed_handlers(self, lock_entity_id: str) -> None:
+        """
+        Invoke lock-removed callbacks.
+
+        Iterates a snapshot of the handler list because handlers may
+        unregister themselves (or other handlers) during invocation.
+        """
+        for cb in list(self.lock_removed):
+            try:
+                cb(lock_entity_id)
+            except Exception:
+                _LOGGER.exception(
+                    "Error in lock removed callback for %s", lock_entity_id
+                )

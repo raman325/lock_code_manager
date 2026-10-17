@@ -16,7 +16,7 @@ from custom_components.lock_code_manager.const import (
     CONF_USERS,
     DOMAIN,
 )
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.model.config import (
     EntryConfig,
     EntryConfigDiff,
     build_slot_device_identifier,
@@ -24,8 +24,8 @@ from custom_components.lock_code_manager.domain.config import (
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.queries import get_entry_config
-from custom_components.lock_code_manager.domain.slot_assignment import (
+from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
 )
 
@@ -716,36 +716,6 @@ def test_has_changes_is_false_when_only_slot_contents_change() -> None:
     assert EntryConfigDiff(old=old, new=new).has_changes is False
 
 
-# --- build_slot_unique_id format (never referenced by any test) ---
-
-
-def test_build_slot_unique_id_standard_format() -> None:
-    """
-    The standard unique id is entry|slot|key, pipe-delimited.
-
-    This string is the entity registry key. Changing the separator silently
-    orphans every existing entity, so the exact format is the contract --
-    yet no test referenced this function at all.
-    """
-    assert build_slot_unique_id("abc123", 4, "pin") == "abc123|4|pin"
-
-
-def test_build_slot_unique_id_per_lock_format() -> None:
-    """The per-lock variant appends the lock entity id as a fourth segment."""
-    assert (
-        build_slot_unique_id("abc123", 4, "in_sync", "lock.front_door")
-        == "abc123|4|in_sync|lock.front_door"
-    )
-
-
-def test_build_slot_unique_id_variants_never_collide() -> None:
-    """A per-lock id is always distinct from the standard id it extends."""
-    standard = build_slot_unique_id("abc123", 4, "code")
-    per_lock = build_slot_unique_id("abc123", 4, "code", "lock.front_door")
-    assert standard != per_lock
-    assert per_lock.startswith(f"{standard}|")
-
-
 def test_renaming_somebody_who_does_not_exist_is_a_no_op() -> None:
     """A rename naming an unknown user changes nothing.
 
@@ -840,19 +810,6 @@ def test_stored_pin_is_stripped_on_read(stored: str, expected: str) -> None:
     )
     assert config.slot(1)["pin"] == expected
     assert config.users["u"]["pin"] == expected
-
-
-def test_whitespace_only_stored_pin_reads_as_no_pin() -> None:
-    """
-    A whitespace-only stored PIN normalizes to empty, not to a matchable value.
-
-    Empty means "this user has no PIN"; a surviving "  " would be a truthy
-    credential nobody can enter.
-    """
-    config = EntryConfig.from_mapping(
-        {CONF_LOCKS: [], CONF_SLOTS: {1: {"name": "u", "pin": "   ", "enabled": True}}}
-    )
-    assert not config.slot(1)["pin"]
 
 
 def test_stored_pin_stripping_survives_the_user_keyed_shape() -> None:

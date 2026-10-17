@@ -1,7 +1,5 @@
 """The inputs BLUEPRINTS.md documents are the ones the blueprints declare."""
 
-from __future__ import annotations
-
 import pathlib
 import re
 from typing import Any

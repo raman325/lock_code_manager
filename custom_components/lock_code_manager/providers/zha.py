@@ -8,14 +8,12 @@ not support programming event notifications, falls back to drift detection
 polling.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal
+from typing import Any, ClassVar, Literal, override
 
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
@@ -29,19 +27,20 @@ from homeassistant.core import callback
 from homeassistant.util import dt as dt_util
 
 from ..const import MAX_SEARCHED_SLOT
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
+    SlotCredential,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     CodeRejectedError,
+    LockCodeManagerError,
     LockDisconnected,
     LockOperationFailed,
 )
-from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import is_masked_code
 
@@ -85,9 +84,8 @@ def _write_answer(
 
     Any other reply, including the raw bytes of a command zigpy could not
     decode, leaves the write's outcome unknown: the lock may have refused
-    it. That raises ``LockOperationFailed``, so sync sends the write again and
-    the slot breaker counts it, rather than confirming a write that did not
-    land.
+    it. That raises ``LockOperationFailed``, so the worker sends the write
+    again rather than confirming a write that did not land.
     """
     if _is_reply(result, cluster, response) or (
         isinstance(result, _DEFAULT_RESPONSE) and result.command_id == request.id
@@ -98,6 +96,48 @@ def _write_answer(
         f"Lock {lock_entity_id}: {request.name} on slot {code_slot} was "
         f"answered by a reply to something else "
         f"({type(result).__name__}), so whether it landed is unknown"
+    )
+
+
+# A Default Response's status says how the lock fared carrying the command
+# out, and these say it failed to, not that it refused the code: the write's
+# outcome is unknown, so it is sent again. Every other non-zero status, and
+# any non-zero status in the write's own response, is the lock's refusal.
+_TRANSIENT_DEFAULT_STATUSES = frozenset(
+    {
+        foundation.Status.FAILURE,
+        foundation.Status.HARDWARE_FAILURE,
+        foundation.Status.SOFTWARE_FAILURE,
+    }
+)
+
+
+def _raise_for_status(
+    answer: Any,
+    request: foundation.ZCLCommandDef,
+    code_slot: int,
+    lock_entity_id: str,
+) -> None:
+    """
+    Raise if ``answer``, the write's own reply, says the write did not land.
+
+    A quirk's response may name no status field, which leaves the write
+    standing; any status other than 0 rejects it, None included, except a
+    Default Response's transient failure, which fails the write so the worker
+    sends it again.
+    """
+    status = getattr(answer, "status", 0)
+    if status == 0:
+        return
+    if isinstance(answer, _DEFAULT_RESPONSE) and status in _TRANSIENT_DEFAULT_STATUSES:
+        raise LockOperationFailed(
+            f"Lock {lock_entity_id}: {request.name} on slot {code_slot} failed: "
+            f"status {_status_text(status)}"
+        )
+    raise CodeRejectedError(
+        code_slot=code_slot,
+        lock_entity_id=lock_entity_id,
+        reason=f"{request.name} rejected: status {_status_text(status)}",
     )
 
 
@@ -151,7 +191,6 @@ class ZHALock(BaseLock):
     """
 
     _door_lock_cluster: DoorLock | None = field(init=False, default=None)
-    _endpoint_id: int | None = field(init=False, default=None)
     _supports_programming_events: bool | None = field(init=False, default=None)
 
     # One ZCL command per slot, each of them slow; see _WORST_CASE_ZCL_COMMAND.
@@ -160,11 +199,13 @@ class ZHALock(BaseLock):
     # -- Properties ----------------------------------------------------------
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return ZHA_DOMAIN
 
     @property
+    @override
     def supports_push(self) -> bool:
         """
         Return whether this lock supports push-based updates.
@@ -176,6 +217,7 @@ class ZHALock(BaseLock):
         return True
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Return interval for drift detection.
@@ -189,6 +231,7 @@ class ZHALock(BaseLock):
 
     # -- Setup ---------------------------------------------------------------
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Initialize provider state and detect programming event support.
@@ -201,7 +244,6 @@ class ZHALock(BaseLock):
         """
         self.unsubscribe_push_updates()
         self._door_lock_cluster = None
-        self._endpoint_id = None
         await super().async_setup(config_entry)
         self._supports_programming_events = (
             await self._async_check_programming_event_support()
@@ -245,7 +287,6 @@ class ZHALock(BaseLock):
             for cluster in endpoint.in_clusters.values():
                 if cluster.cluster_id == DoorLock.cluster_id:
                     self._door_lock_cluster = cluster
-                    self._endpoint_id = endpoint_id
                     _LOGGER.debug(
                         "Found DoorLock cluster on endpoint %s for %s",
                         endpoint_id,
@@ -256,6 +297,7 @@ class ZHALock(BaseLock):
         _LOGGER.warning("Could not find DoorLock cluster for %s", self.lock.entity_id)
         return None
 
+    @override
     def describe_link_health(self) -> str | None:
         """
         Report what the coordinator last heard from this lock.
@@ -310,21 +352,23 @@ class ZHALock(BaseLock):
     # -- Helpers -------------------------------------------------------------
 
     def _get_gateway(self) -> Any | None:
-        """Return the ZHA gateway proxy, or None if unavailable."""
+        """
+        Return the ZHA gateway proxy, or None if unavailable.
+
+        ``get_zha_gateway_proxy`` raises ``ValueError("No gateway object
+        exists")`` whenever ZHA is not loaded -- setting up, in setup retry,
+        or unloaded. That is the ordinary "not connected" answer, and this is
+        asked on every connection check, so it is not logged: the callers
+        already report a lock whose integration is not ready.
+        """
         try:
             return _get_zha_gateway_proxy(self.hass)
-        except KeyError:
-            return None
-        except ValueError:
-            _LOGGER.warning(
-                "Lock %s: unexpected ValueError getting ZHA gateway",
-                self.lock.entity_id,
-                exc_info=True,
-            )
+        except KeyError, ValueError:
             return None
 
     # -- Connection ----------------------------------------------------------
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Return whether ZHA is loaded and the device is available."""
         gateway = self._get_gateway()
@@ -340,6 +384,7 @@ class ZHALock(BaseLock):
 
     # -- Credential primitives -----------------------------------------------
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -363,7 +408,8 @@ class ZHALock(BaseLock):
         Only the write's own reply can reject it, and a reply that is about
         something else fails the write so sync sends it again
         (``_write_answer``). The write's own reply with no status field
-        leaves it standing.
+        leaves it standing, and a Default Response's transient failure
+        fails it so sync sends it again (``_raise_for_status``).
 
         ``user_id`` is ignored; slot-only providers address the credential
         by ``credential.slot``.
@@ -385,25 +431,20 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
+        request = DoorLock.ServerCommandDefs.set_pin_code
         answer = _write_answer(
             result,
             cluster,
-            DoorLock.ServerCommandDefs.set_pin_code,
+            request,
             DoorLock.ClientCommandDefs.set_pin_code_response,
             code_slot,
             self.lock.entity_id,
         )
-        # A quirk's response may name no status field, which leaves the write
-        # standing; any status other than 0 rejects it, None included.
-        if hasattr(answer, "status") and answer.status != 0:
-            raise CodeRejectedError(
-                code_slot=code_slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"set_pin_code rejected: status {_status_text(answer.status)}",
-            )
+        _raise_for_status(answer, request, code_slot, self.lock.entity_id)
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a slot.
@@ -424,25 +465,20 @@ class ZHALock(BaseLock):
             code_slot,
             result,
         )
+        request = DoorLock.ServerCommandDefs.clear_pin_code
         answer = _write_answer(
             result,
             cluster,
-            DoorLock.ServerCommandDefs.clear_pin_code,
+            request,
             DoorLock.ClientCommandDefs.clear_pin_code_response,
             code_slot,
             self.lock.entity_id,
         )
-        # A quirk's response may name no status field, which leaves the write
-        # standing; any status other than 0 rejects it, None included.
-        if hasattr(answer, "status") and answer.status != 0:
-            raise CodeRejectedError(
-                code_slot=code_slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"clear_pin_code rejected: status {_status_text(answer.status)}",
-            )
+        _raise_for_status(answer, request, code_slot, self.lock.entity_id)
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
@@ -453,9 +489,14 @@ class ZHALock(BaseLock):
 
         ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
         status that says so. ``known`` means the lock is accepting this code,
-        which only ``ENABLED`` says. Every other answer -- another status, a
-        failed read, a response shape this cannot parse -- is ``unreadable``:
-        something is there and its value cannot be trusted.
+        which only ``ENABLED`` says. Every other status is ``unreadable``:
+        something is there and its value cannot be trusted -- except Not
+        Supported, a lock saying it cannot tell, which is silent
+        (``last_silent_slots``, ``last_cannot_tell_slots``). A read that
+        failed -- an error, a reply that is not this slot's answer, zigpy
+        giving up on the slot -- is not a reading at all, and fails the read:
+        reported as unreadable, a clear the lock acknowledged would read as
+        done while the code is still there.
 
         Both directions matter. Reporting a clear that did not happen makes
         sync reprogram a slot that already holds a code and tells allocation
@@ -468,6 +509,7 @@ class ZHALock(BaseLock):
             return []
 
         slot_states: dict[int, SlotCredential] = {}
+        cannot_tell: set[int] = set()
         for slot_num in scope:
             try:
                 # zigpy bounds each attempt and gives up after three, raising
@@ -496,31 +538,21 @@ class ZHALock(BaseLock):
                         f"Lock {self.lock.entity_id}: no answer for slot {slot_num} "
                         f"within {_WORST_CASE_ZCL_COMMAND:.0f}s"
                     ) from None
-                _LOGGER.debug(
-                    "Lock %s: slot %s timed out on the mesh, marking unreadable",
-                    self.lock.entity_id,
-                    slot_num,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                continue
-            except Exception:
-                _LOGGER.debug(
-                    "Lock %s: failed to read slot %s, marking unreadable",
-                    self.lock.entity_id,
-                    slot_num,
-                    exc_info=True,
-                )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                continue
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id}: slot {slot_num} timed out on the mesh"
+                ) from None
+            except LockCodeManagerError:
+                raise
+            except Exception as err:
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id}: failed to read slot {slot_num}: {err}"
+                ) from err
 
             if parsed is None:
-                _LOGGER.debug(
-                    "Lock %s: get_pin_code reply is not slot %s's answer",
-                    self.lock.entity_id,
-                    slot_num,
+                raise LockOperationFailed(
+                    f"Lock {self.lock.entity_id}: get_pin_code reply is not slot "
+                    f"{slot_num}'s answer"
                 )
-                slot_states[slot_num] = SlotCredential.unreadable()
-                continue
 
             user_status, pin_code = parsed
             # Available is the only status leaving this index free to write
@@ -532,9 +564,16 @@ class ZHALock(BaseLock):
             # An Enabled slot whose code comes back masked is untrustworthy
             # in the same way: a lock withholding its codes answers with an
             # asterisk per digit, which can never equal the configured PIN,
-            # so confirming it makes sync reprogram the slot on every tick
-            # forever.
-            if user_status == DoorLock.UserStatus.Available:
+            # so confirming it makes sync reprogram the slot on every pass
+            # until it is held.
+            #
+            # Not Supported (0xFF) is a lock that cannot report its users
+            # (#1581): no code held, nor none. Silent, as Zigbee2MQTT's
+            # ``not_supported_255`` is, and the core takes it from there.
+            if user_status == DoorLock.UserStatus.Not_Supported:
+                cannot_tell.add(slot_num)
+                slot_states[slot_num] = SlotCredential.unreadable()
+            elif user_status == DoorLock.UserStatus.Available:
                 slot_states[slot_num] = SlotCredential.empty()
             elif (
                 user_status == DoorLock.UserStatus.Enabled
@@ -544,8 +583,10 @@ class ZHALock(BaseLock):
                 slot_states[slot_num] = SlotCredential.known(pin_code)
             else:
                 slot_states[slot_num] = SlotCredential.unreadable()
+        self.last_silent_slots = self.last_cannot_tell_slots = frozenset(cannot_tell)
         return [user_from_slot(slot, state) for slot, state in slot_states.items()]
 
+    @override
     async def async_get_max_slot(self) -> int | None:
         """
         Read how many Personal Identification Number users the lock supports.
@@ -582,6 +623,7 @@ class ZHALock(BaseLock):
             return None
         return min(int(supported), MAX_SEARCHED_SLOT)
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -631,6 +673,7 @@ class ZHALock(BaseLock):
     # -- Push updates --------------------------------------------------------
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """Subscribe to DoorLock cluster events."""
         if self._push_unsubs:
@@ -650,6 +693,7 @@ class ZHALock(BaseLock):
         )
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from DoorLock cluster events."""
         if not self._push_unsubs:
@@ -696,7 +740,7 @@ class ZHALock(BaseLock):
             )
             # Refresh anyway — we know something changed on the lock
             if self.coordinator:
-                self.hass.async_create_task(
+                self._create_background_task(
                     self.coordinator.async_request_refresh(),
                     f"Refresh {self.lock.entity_id} after unparseable programming event",
                 )
@@ -709,7 +753,7 @@ class ZHALock(BaseLock):
             user_id,
         )
         if self.coordinator:
-            self.hass.async_create_task(
+            self._create_background_task(
                 self.coordinator.async_request_refresh(),
                 f"Refresh {self.lock.entity_id} after programming event",
             )

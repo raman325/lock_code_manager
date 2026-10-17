@@ -37,8 +37,6 @@ is the status in words and its code, with the cluster code when there is one:
 (MJS_SRE:62-85).
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from contextlib import suppress
@@ -73,12 +71,14 @@ _ENABLED = DoorLock.Enums.UserStatusEnum.kOccupiedEnabled
 # The fabric Home Assistant's controller is on, and another admin's (a vendor
 # app, the lock's own keypad programming): ``creatorFabricIndex`` tells them
 # apart, and only the creating fabric may modify a record (DLS:2047-2061, 793-800).
-HA_FABRIC = 1
-OTHER_FABRIC = 2
+# The node's own CurrentFabricIndex (0/62/5) names Home Assistant's: 2 in the
+# fixture, whose fabric 1 is another vendor's, commissioned first.
+HA_FABRIC = 2
+OTHER_FABRIC = 1
+_CURRENT_FABRIC = clusters.OperationalCredentials.Attributes.CurrentFabricIndex
 # The node id the SDK reports as the source of a remote change (DLS:3364-3380):
 # the server's controller, which matterjs-server always gives this id
-# (packages/ws-controller/src/controller/ControllerNode.ts:78). Home
-# Assistant's fabric index is 1 when it commissioned the lock first.
+# (packages/ws-controller/src/controller/ControllerNode.ts:78).
 _HA_NODE_ID = 112233
 # Door Lock event priorities (matter.js packages/model/src/standard/elements/
 # door-lock-cluster.element.ts:181, 216): LockOperation is critical,
@@ -150,6 +150,7 @@ class FaultKind(StrEnum):
     FAIL = "fail"
     HANG = "hang"
     SLOW = "slow"
+    DROP_REPLY = "drop_reply"
 
 
 # The commands the fake answers, by the name ``send_device_command`` sends.
@@ -163,7 +164,9 @@ MatterCommand = Literal[
 ]
 # Only a command that stores or removes something can be ignored or refused.
 _WRITES = frozenset({"SetUser", "ClearUser", "SetCredential", "ClearCredential"})
-_WRITE_ONLY_FAULTS = frozenset({FaultKind.IGNORE, FaultKind.REFUSE})
+_WRITE_ONLY_FAULTS = frozenset(
+    {FaultKind.IGNORE, FaultKind.REFUSE, FaultKind.DROP_REPLY}
+)
 
 
 @dataclass(eq=False)
@@ -295,7 +298,7 @@ class FakeMatterLock:
     longest name the lock stores: ten characters is the SDK's default, and a
     longer one is refused as InvalidCommand (DLS:454-462).
 
-    Faults (``ignore``, ``refuse``, ``fail``, ``hang``, ``slow``) act on the
+    Faults (``ignore``, ``refuse``, ``fail``, ``drop_reply``, ``hang``, ``slow``) act on the
     Door Lock commands; see ``NodeFault``. ``commands`` records every command
     answered, in order.
     """
@@ -325,6 +328,8 @@ class FakeMatterLock:
             endpoint.get_attribute_value(None, _ATTR_MIN_PIN),
             endpoint.get_attribute_value(None, _ATTR_MAX_PIN),
         )
+        if (fabric := node.get_attribute_value(0, None, _CURRENT_FABRIC)) != HA_FABRIC:
+            raise ValueError(f"the node names fabric {fabric} Home Assistant's")
         self.users: dict[int, LockUser] = {}
         self.credentials: dict[tuple[int, int], LockCredential] = {}
         self.faults: list[NodeFault] = []
@@ -474,6 +479,29 @@ class FakeMatterLock:
         """
         self._clear_user(user_index, announce=False)
 
+    def enroll(
+        self,
+        user_index: int,
+        kind: int = DoorLock.Enums.CredentialTypeEnum.kRfid,
+        index: int = 1,
+    ) -> None:
+        """
+        Add a credential of ``kind`` to a user, as the vendor's app does, and announce it.
+
+        An RFID card by default: the user holds it beside whatever it had.
+        """
+        self.users[user_index].credentials.append((kind, index))
+        self.credentials[(kind, index)] = LockCredential(
+            b"card", created_by=OTHER_FABRIC, modified_by=OTHER_FABRIC
+        )
+        self._log_user_change(
+            DoorLock.Enums.LockDataTypeEnum.kRfid,
+            DoorLock.Enums.DataOperationTypeEnum.kAdd,
+            user_index,
+            index,
+            source=DoorLock.Enums.OperationSourceEnum.kKeypad,
+        )
+
     def keypad_unlock(
         self, credential_index: int, *, user_index: int | None = None
     ) -> None:
@@ -558,6 +586,23 @@ class FakeMatterLock:
         gives it).
         """
         return self._add_fault(FaultKind.FAIL, command, index, error=error, **kw)
+
+    def drop_reply(
+        self,
+        command: MatterCommand,
+        index: int | None = None,
+        *,
+        error: MatterError | None = None,
+        **kw: Any,
+    ) -> NodeFault:
+        """
+        Do the write, then lose its answer: the command raises ``error``.
+
+        The lock's table changes as asked, and the caller hears what it hears
+        from a node it cannot reach (``NodeNotResolving`` by default, as for
+        ``fail``).
+        """
+        return self._add_fault(FaultKind.DROP_REPLY, command, index, error=error, **kw)
 
     def hang(
         self, command: MatterCommand | None = None, index: int | None = None, **kw: Any
@@ -665,7 +710,12 @@ class FakeMatterLock:
                     self._next_free_credential(_cred_index(payload)),
                 )
             return None
-        return await handler(payload)
+        answer = await handler(payload)
+        if fault is not None and fault.kind is FaultKind.DROP_REPLY:
+            raise fault.error or NodeNotResolving(
+                f"Node {self.node.node_id} is not resolving"
+            )
+        return answer
 
     # Users (DLS:411-662) ----------------------------------------------------
 
