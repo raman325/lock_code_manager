@@ -21,7 +21,9 @@ blueprint:
 
     The credential used event entity records every use of the user's
     credential and says what the device did with it: `unlock`, `lock`, or
-    `unknown` when nothing reported which.
+    `unknown` when nothing reported which. Every kind of credential counts:
+    a card or fingerprint the lock attributes to this user spends a use just
+    as their PIN does.
 
 
     By default `unlock` and `unknown` spend a use and `lock` does not, so a

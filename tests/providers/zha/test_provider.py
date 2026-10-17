@@ -870,6 +870,7 @@ async def test_cluster_command_operation_event(
         mock_fire.assert_called_once_with(
             code_slot=3,
             to_locked=False,
+            credential_type=CredentialType.PIN,
         )
 
 

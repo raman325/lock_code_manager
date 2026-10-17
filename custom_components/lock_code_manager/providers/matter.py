@@ -97,6 +97,21 @@ _CURRENT_FABRIC_INDEX = 5
 _LOCK_OPERATION_EVENT_ID = 2
 _LOCK_USER_CHANGE_EVENT_ID = 4
 
+# LockOperation ``credentials[].credentialType`` (CredentialTypeEnum) -> the
+# kind of credential a use reports. Finger vein is a finger biometric, which
+# is what FINGERPRINT stands for in the Z-Wave vocabulary it shares. Left
+# out, and so not reported, as before: ProgrammingPIN (0), the lock's admin
+# code rather than a user's credential, and the Aliro keys (6-8), which name
+# a phone or wallet credential presented over NFC, BLE or UWB that no
+# CredentialType member describes honestly.
+_MATTER_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
+    1: CredentialType.PIN,
+    2: CredentialType.RFID,
+    3: CredentialType.FINGERPRINT,
+    4: CredentialType.FINGERPRINT,  # Finger vein.
+    5: CredentialType.FACE,
+}
+
 # LockUserChange LockDataType values. A user-record change is handled too:
 # ClearUser (what Home Assistant's Manage access deletion sends) removes the
 # user together with its credentials, and the user-level CLEAR is the event
@@ -1794,17 +1809,19 @@ class MatterLock(BaseLock):
         """
         Handle LockOperation events (event ID 2).
 
-        Fires a code slot event when a PIN credential is used to lock/unlock.
-        Only PIN credentials (credentialType=1) trigger the event -- other
-        credential types (RFID, fingerprint, etc.) are ignored.
+        Fires a code slot event when a user's credential is used to
+        lock/unlock, naming the kind presented: a PIN, a card, a fingerprint
+        or a face (``_MATTER_TO_CREDENTIAL_TYPE``). A kind with no mapping is
+        ignored.
 
         The event's ``credentials[].credentialIndex`` is the Matter
         credential index, which LCM treats as opaque under the user-tag
         model. To find the LCM slot we resolve via the event's top-level
-        ``userIndex`` -> user.name -> ``lcm:<slot>:`` tag, falling back to
-        walking the user list for a PIN credential at ``credentialIndex``
-        when ``userIndex`` is absent. The lookup is async so the callback
-        schedules a task rather than blocking the event loop.
+        ``userIndex`` -> user.name -> ``lcm:<slot>:`` tag, falling back --
+        for a PIN only -- to walking the user list for a PIN credential at
+        ``credentialIndex`` when ``userIndex`` is absent. The lookup is
+        async so the callback schedules a task rather than blocking the
+        event loop.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
         credentials = data.get("credentials")
@@ -1812,27 +1829,38 @@ class MatterLock(BaseLock):
         if not credentials:
             return
 
-        # Find the PIN credential index (credentialType 1 = PIN). Coerce
-        # via ``parse_slot_num`` because some Matter implementations send
-        # the index as a string -- the int-keyed comparison in the fallback
-        # walker would then never match.
-        credential_index = parse_slot_num(
-            next(
-                (
-                    cred.get("credentialIndex")
-                    for cred in credentials
-                    if isinstance(cred, dict) and cred.get("credentialType") == 1
-                ),
-                None,
+        # Every credential presented of a kind a use can report.
+        used = [
+            (credential_type, cred.get("credentialIndex"))
+            for cred in credentials
+            if isinstance(cred, dict)
+            and (
+                credential_type := _MATTER_TO_CREDENTIAL_TYPE.get(
+                    cred.get("credentialType", -1)
+                )
             )
+        ]
+        if not used:
+            return
+        # A PIN wins when one was among them (a PIN-and-fingerprint user,
+        # say): it is the only kind the fallback below can place. Otherwise
+        # the first, ``min`` being stable. Coerce the index via
+        # ``parse_slot_num`` because some Matter implementations send it as
+        # a string -- the int-keyed comparison in the fallback walker would
+        # then never match.
+        credential_type, raw_index = min(
+            used, key=lambda pair: pair[0] is not CredentialType.PIN
         )
+        credential_index = parse_slot_num(raw_index)
         if credential_index is None:
             return
 
         user_index = parse_slot_num(data.get("userIndex"))
 
         self._create_background_task(
-            self._dispatch_lock_operation(user_index, credential_index, data),
+            self._dispatch_lock_operation(
+                user_index, credential_index, data, credential_type
+            ),
             f"Matter LockOperation dispatch for {self.lock.entity_id}",
         )
 
@@ -1841,6 +1869,7 @@ class MatterLock(BaseLock):
         user_index: int | None,
         credential_index: int,
         data: dict[str, Any],
+        credential_type: CredentialType,
     ) -> None:
         """
         Resolve the LCM slot for a LockOperation event and fire it.
@@ -1871,7 +1900,9 @@ class MatterLock(BaseLock):
         code_slot = _lcm_slot_from_raw_users_by_user_index(
             raw_users, user_index, fabric
         )
-        if code_slot is None:
+        # The fallback walks PIN credentials, so it can only place a PIN: a
+        # card's index says nothing about who holds a PIN at that index.
+        if code_slot is None and credential_type is CredentialType.PIN:
             code_slot = _lcm_slot_from_raw_users_by_credential_index(
                 raw_users, credential_index, fabric
             )
@@ -1905,6 +1936,7 @@ class MatterLock(BaseLock):
         self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=to_locked,
+            credential_type=credential_type,
         )
 
     @callback

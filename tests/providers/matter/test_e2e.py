@@ -16,6 +16,7 @@ from pytest_homeassistant_custom_component.common import (
     async_capture_events,
 )
 
+from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
 from homeassistant.components.matter import lock_helpers
 from homeassistant.config_entries import SOURCE_USER, ConfigEntriesFlowManager
 from homeassistant.const import (
@@ -31,6 +32,7 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CREDENTIAL_TYPE,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -635,7 +637,68 @@ class TestKeypadAndSwitch:
         await async_advance_sync_ticks(hass, freezer)
 
         assert hass.states.get(event_entity).state != before
-        assert [event.data["name"] for event in used] == ["slot2"]
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", "pin")]
+
+    @pytest.mark.parametrize(
+        ("kind", "expected"),
+        [
+            pytest.param(DoorLock.Enums.CredentialTypeEnum.kRfid, "rfid", id="rfid"),
+            pytest.param(
+                DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+                "fingerprint",
+                id="fingerprint",
+            ),
+            pytest.param(
+                DoorLock.Enums.CredentialTypeEnum.kFingerVein,
+                "fingerprint",
+                id="finger_vein",
+            ),
+            pytest.param(DoorLock.Enums.CredentialTypeEnum.kFace, "face", id="face"),
+        ],
+    )
+    async def test_a_use_names_the_credential_presented(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        kind: int,
+        expected: str,
+    ) -> None:
+        """
+        A card or a finger the user enrolled in the vendor app is their use.
+
+        The LockOperation for anything but a PIN was dropped, so a user who
+        unlocked with a card was never recorded at all; a keypad use still
+        reads ``pin`` (:meth:`test_a_keypad_use_updates_the_user_s_event_entity`).
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        event_entity = next(
+            state.entity_id
+            for state in hass.states.async_all("event")
+            if state.attributes.get("code_slot") == 2
+        )
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index, kind, 5)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(user_index, kind, 5)
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", expected)]
+        state = hass.states.get(event_entity)
+        assert state.attributes[ATTR_EVENT_TYPE] == expected
+        assert expected in state.attributes[ATTR_EVENT_TYPES]
 
     async def test_turning_a_user_off_takes_its_pin_off_the_lock(
         self,

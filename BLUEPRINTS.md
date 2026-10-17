@@ -292,7 +292,7 @@ template or blueprint reads about that use:
 
 | Attribute | Meaning |
 | --------- | ------- |
-| `event_type` | The kind of credential presented — `pin` today. It says *what* was used, never where |
+| `event_type` | The kind of credential presented — `pin`, or `rfid`, `fingerprint` or `face` on a lock that reports which (Matter, ZHA, Zigbee2MQTT). It says *what* was used, never where |
 | `event_types` | The kinds this user's uses can be: what Lock Code Manager manages, plus everything the configuration's locks advertise |
 | `name` | The user whose credential was used |
 | `target` | What the credential was used against — a lock that reported the use, or whatever `lock_code_manager.use_credential` was told it acted on |
@@ -305,9 +305,10 @@ template or blueprint reads about that use:
 | `slot_field` | Always `credential_used` |
 
 Filtering by credential kind is a template away: `event_type` (or
-`credential_type`) is `pin` for a PIN and would be `rfid` for a card read at
-a lock's own reader, so an automation can act on one kind without acting on
-every other.
+`credential_type`) is `pin` for a PIN and `rfid` for a card read at a lock's
+own reader, so an automation can act on one kind without acting on every
+other. A card or fingerprint use the lock attributes to the user is still that
+user's use, so the Slot Usage Limiter counts it like a PIN use.
 
 > **Breaking:** the entity used to record only unlocks; it now records every
 > use of the user's credential, including a lock reporting which slot locked

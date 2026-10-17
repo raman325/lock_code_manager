@@ -30,7 +30,8 @@ blueprint:
     - `operation` — what the device did with the credential: `unlock`,
       `lock`, or `unknown` when nothing reported which
 
-    - `credential_type` — the kind of credential presented, `pin` today
+    - `credential_type` — the kind of credential presented: `pin`, or
+      `rfid`, `fingerprint` or `face` on a lock that reports which
 
 
     **What runs the actions**

@@ -5,10 +5,18 @@ from typing import Any
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_capture_events,
+)
 from zigpy.zcl.clusters.closures import DoorLock
 from zigpy.zcl.foundation import Status
 
+from homeassistant.components.event import (
+    ATTR_EVENT_TYPE,
+    ATTR_EVENT_TYPES,
+    DOMAIN as EVENT_DOMAIN,
+)
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -32,11 +40,14 @@ from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CREDENTIAL_TYPE,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
     CONF_USERS,
     DOMAIN,
+    EVENT_CREDENTIAL_USED,
     SUBENTRY_TYPE_USER,
 )
 from custom_components.lock_code_manager.ha.runtime import (
@@ -1313,3 +1324,59 @@ class TestLockThatCannotReport:
         assert door_lock.codes[3] == "3333"
         assert lock_reachable(hass, lock_id) is True
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestCredentialPresented:
+    """A use names the credential the lock says was presented."""
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            pytest.param(DoorLock.OperationEventSource.Keypad, "pin", id="keypad"),
+            pytest.param(DoorLock.OperationEventSource.RF, "pin", id="rf"),
+            pytest.param(DoorLock.OperationEventSource.RFID, "rfid", id="rfid"),
+            # A vendor extension zigbee-herdsman-converters names fingerprint.
+            pytest.param(4, "fingerprint", id="fingerprint"),
+        ],
+    )
+    async def test_an_unlock_names_the_credential_presented(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        source: int,
+        expected: str,
+    ) -> None:
+        """
+        A card unlocking the door is announced as a card, not a PIN.
+
+        Every use was announced as a PIN whatever the operation event's
+        source said, so an RFID tag read as its holder typing their code.
+        """
+        await _run_ticks(hass)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        event = lock_frame(
+            door_lock.cluster,
+            "operation_event_notification",
+            operation_event_source=source,
+            operation_event_code=DoorLock.OperationEvent.Unlock,
+            user_id=1,
+            pin="",
+            local_time=0,
+        )
+        door_lock.cluster.listener_event(
+            "cluster_command",
+            0,
+            DoorLock.ClientCommandDefs.operation_event_notification.id,
+            event.payload,
+        )
+        await hass.async_block_till_done()
+
+        assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == [expected]
+        state = hass.states.get(
+            slot_entity_id(
+                hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+            )
+        )
+        assert state.attributes[ATTR_EVENT_TYPE] == expected
+        assert expected in state.attributes[ATTR_EVENT_TYPES]

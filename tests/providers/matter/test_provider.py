@@ -1114,14 +1114,28 @@ class TestLockOperationEvent:
 
         assert len(fired) == 0
 
-    async def test_rfid_credential_ignored(
-        self, hass: HomeAssistant, matter_lock: MatterLock
+    @pytest.mark.parametrize(
+        "credential_type",
+        [
+            pytest.param(0, id="programming_pin"),
+            pytest.param(6, id="aliro"),
+        ],
+    )
+    async def test_an_unreported_credential_is_ignored(
+        self, hass: HomeAssistant, matter_lock: MatterLock, credential_type: int
     ) -> None:
-        """RFID (credentialType=2) does not fire a code slot event."""
+        """
+        The admin code and an Aliro key fire nothing, even from an LCM user.
+
+        Neither has a ``CredentialType`` that describes it honestly, so a
+        use of one is left unreported rather than named as something else.
+        """
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        with self._patch_users([]):
+        with self._patch_users(
+            [{"user_index": 1, "user_name": "lcm:1:Alice", "credentials": []}]
+        ):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -1129,14 +1143,87 @@ class TestLockOperationEvent:
                         "lockOperationType": 1,
                         "userIndex": 1,
                         "credentials": [
-                            {"credentialType": 2, "credentialIndex": 3},  # RFID
+                            {"credentialType": credential_type, "credentialIndex": 3},
                         ],
                     }
                 ),
             )
             await hass.async_block_till_done()
 
-        assert len(fired) == 0
+        assert fired == []
+
+    async def test_a_card_is_not_placed_by_a_pin_at_its_index(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """
+        Without a userIndex, a card at index 4 is not the user with PIN 4.
+
+        The fallback walks PIN credentials, and card and PIN indices are
+        separate spaces on the lock.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 1,
+                    "user_name": "lcm:1:Alice",
+                    "credentials": [{"type": "pin", "index": 4}],
+                }
+            ]
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "credentials": [{"credentialType": 2, "credentialIndex": 4}],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert fired == []
+
+    async def test_a_pin_presented_with_a_fingerprint_is_reported(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """
+        A PIN-and-fingerprint use without a userIndex still finds its user.
+
+        The PIN is the credential the fallback can place, so it is the one
+        reported, wherever it sits in the list.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 1,
+                    "user_name": "lcm:1:Alice",
+                    "credentials": [{"type": "pin", "index": 4}],
+                }
+            ]
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "credentials": [
+                            {"credentialType": 3, "credentialIndex": 9},
+                            {"credentialType": 1, "credentialIndex": 4},
+                        ],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert fired == [
+            {"code_slot": 1, "to_locked": False, "credential_type": CredentialType.PIN}
+        ]
 
     async def test_wrong_cluster_ignored(
         self, hass: HomeAssistant, matter_lock: MatterLock

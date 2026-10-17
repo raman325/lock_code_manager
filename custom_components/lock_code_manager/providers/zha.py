@@ -30,6 +30,7 @@ from ..const import MAX_SEARCHED_SLOT
 from ..model.credentials import (
     Credential,
     CredentialRef,
+    CredentialType,
     SlotCredential,
     User,
     WriteResult,
@@ -158,6 +159,15 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.KeyUnlock: False,
     DoorLock.OperationEvent.Manual_Unlock: False,
     DoorLock.OperationEvent.ScheduleUnlock: False,
+}
+
+# The credential an operation event's source says was presented. RFID is the
+# Door Lock cluster's own; 4 is a vendor extension zigbee-herdsman-converters
+# names "fingerprint". Every other source -- the keypad, an RF command
+# carrying a PIN, manual, indeterminate -- reports PIN, as it always has.
+SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
+    DoorLock.OperationEventSource.RFID: CredentialType.RFID,
+    4: CredentialType.FINGERPRINT,
 }
 
 
@@ -797,6 +807,7 @@ class ZHALock(BaseLock):
         self.async_fire_code_slot_event(
             code_slot=user_id if user_id > 0 else None,
             to_locked=to_locked,
+            credential_type=SOURCE_TO_CREDENTIAL_TYPE.get(source, CredentialType.PIN),
         )
 
     # -- Programming event support detection ---------------------------------
