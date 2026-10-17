@@ -1,7 +1,5 @@
 """Validate that every shipped blueprint parses against the Home Assistant schema."""
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 import pathlib
 from typing import Any

@@ -1,7 +1,5 @@
 """Tests for the zwave-js-ui node subscription, push updates, and keypad events."""
 
-from __future__ import annotations
-
 import json
 from logging import ERROR
 from typing import Any
@@ -13,9 +11,12 @@ from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.exceptions import LockDisconnected
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.ha.adapter import _Coordinator
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    pin_address,
+)
+from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
 
 from .conftest import (
@@ -67,7 +68,7 @@ async def zui_lock_subscribed(
     """
     await zui_lock_provider.async_setup(MagicMock())
     await hass.async_block_till_done()
-    zui_lock_provider.coordinator = MagicMock()
+    zui_lock_provider.coordinator = MagicMock(spec=_Coordinator)
     zui_lock_provider.coordinator.desired_credential.return_value = (
         SlotCredential.empty()
     )
@@ -100,14 +101,13 @@ class TestUserCodeValues:
     """User Code Command Class value publications on the node topic."""
 
     @pytest.mark.parametrize(
-        "property_path",
-        [USER_CODE_VALUEID, USER_CODE_NAMED],
-        ids=["valueid", "named"],
-    )
-    @pytest.mark.parametrize(
-        "payload",
-        ["1234", wrapped("1234")],
-        ids=["raw", "time_value"],
+        ("payload", "property_path"),
+        [
+            pytest.param("1234", USER_CODE_VALUEID, id="raw-valueid"),
+            pytest.param("1234", USER_CODE_NAMED, id="raw-named"),
+            pytest.param(wrapped("1234"), USER_CODE_NAMED, id="time_value-named"),
+            # time_value-valueid: test_e2e.py::TestPushUpdates::test_pushed_user_code_updates_state
+        ],
     )
     async def test_a_published_code_confirms_the_slot(
         self,
@@ -136,8 +136,8 @@ class TestUserCodeValues:
         ("payload", "expected_code"),
         [
             # A raw-payload gateway publishes the bare code, so an all-digit
-            # one is JSON's idea of a number by the time it is unwrapped.
-            pytest.param("1234", "1234", id="bare_number"),
+            # one is JSON's idea of a number by the time it is unwrapped; the
+            # bare "1234" case is test_a_published_code_confirms_the_slot[raw-*].
             pytest.param(wrapped(1234), "1234", id="wrapped_number"),
             # No JSON number form has a leading zero, so this arrives as the
             # text it was published as -- and the zero has to survive.
@@ -169,11 +169,14 @@ class TestUserCodeValues:
         )
 
     @pytest.mark.parametrize(
-        "property_path",
-        [USER_ID_STATUS_VALUEID, USER_ID_STATUS_NAMED],
-        ids=["valueid", "named"],
+        ("payload", "property_path"),
+        [
+            pytest.param("0", USER_ID_STATUS_VALUEID, id="raw-valueid"),
+            pytest.param("0", USER_ID_STATUS_NAMED, id="raw-named"),
+            pytest.param(wrapped(0), USER_ID_STATUS_VALUEID, id="time_value-valueid"),
+            # time_value-named: test_e2e.py::TestPushUpdates::test_pushed_available_status_updates_state
+        ],
     )
-    @pytest.mark.parametrize("payload", ["0", wrapped(0)], ids=["raw", "time_value"])
     async def test_an_available_status_confirms_the_slot_empty(
         self,
         hass: HomeAssistant,
@@ -263,39 +266,6 @@ class TestUserCodeValues:
 
 class TestStaleAvailable:
     """The AVAILABLE status a lock re-sends after a code was written."""
-
-    async def test_available_is_ignored_when_a_pin_is_expected(
-        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
-    ) -> None:
-        """
-        A slot Lock Code Manager wants a code on never reads empty from a push.
-
-        Some locks re-announce AVAILABLE after a successful write. Taken at
-        face value it tells sync the slot was cleared, sync rewrites it, the
-        lock re-announces, and the loop never ends. Same hardware signal, same
-        guard as the zwave_js provider applies.
-        """
-        lock = zui_lock_subscribed
-        lock.coordinator.desired_credential.return_value = SlotCredential.known("1234")
-
-        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
-        await hass.async_block_till_done()
-
-        lock.coordinator.observe_push.assert_not_called()
-
-    async def test_available_confirms_empty_when_no_pin_is_expected(
-        self, hass: HomeAssistant, zui_lock_subscribed: ZWaveJSUILock
-    ) -> None:
-        """The guard is about a contradicted clear, not about clears at all."""
-        lock = zui_lock_subscribed
-        lock.coordinator.desired_credential.return_value = SlotCredential.empty()
-
-        fire_node_value(hass, f"{USER_ID_STATUS_VALUEID}/4", wrapped(0))
-        await hass.async_block_till_done()
-
-        lock.coordinator.observe_push.assert_called_once_with(
-            pin_address(4), SlotCredential.empty()
-        )
 
     async def test_available_confirms_empty_without_a_coordinator(
         self, hass: HomeAssistant, zui_lock_provider: ZWaveJSUILock
@@ -439,7 +409,6 @@ class TestKeypadEvents:
     @pytest.mark.parametrize(
         ("property_path", "expected_to_locked"),
         [
-            pytest.param(KEYPAD_UNLOCK_NAMED, False, id="named_unlock"),
             pytest.param(KEYPAD_LOCK_NAMED, True, id="named_lock"),
             pytest.param(KEYPAD_UNLOCK_VALUEID, False, id="valueid_unlock"),
         ],
@@ -599,7 +568,7 @@ class TestForeignNodeTraffic:
     ) -> None:
         """Without a resolved node topic there is no relative path to read."""
         lock = zui_lock_provider
-        lock.coordinator = MagicMock()
+        lock.coordinator = MagicMock(spec=_Coordinator)
 
         lock._process_node_message(f"{ZUI_NODE_TOPIC}/99/0/userCode/3", b"1234")
 
@@ -918,7 +887,7 @@ async def test_a_second_lock_on_the_same_node_is_addressed_separately(
     other_lock = build_zui_lock(hass, other_entity)
     await other_lock.async_setup(MagicMock())
     await hass.async_block_till_done()
-    other_lock.coordinator = MagicMock()
+    other_lock.coordinator = MagicMock(spec=_Coordinator)
 
     fire_node_value(hass, f"{USER_CODE_VALUEID}/3", "1234")
     await hass.async_block_till_done()

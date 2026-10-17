@@ -4,7 +4,7 @@ import pytest
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 
-from custom_components.lock_code_manager.domain.names import (
+from custom_components.lock_code_manager.model.names import (
     deduplicate,
     fallback_name,
     name_error,

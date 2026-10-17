@@ -167,7 +167,8 @@ export const lcmStatusIndicatorStyles = css`
 
 /**
  * Shared PIN/code display styles.
- * Classes: .lcm-code, .lcm-code.masked, .lcm-code.off, .lcm-code.pending, .lcm-code.no-code
+ * Classes: .lcm-code, .lcm-code.masked, .lcm-code.off, .lcm-code.pending, .lcm-code.no-code,
+ * .lcm-code.configured, .lcm-code.unreadable, .lcm-code.disabled-on-lock
  */
 export const lcmCodeStyles = css`
     .lcm-code {
@@ -182,8 +183,9 @@ export const lcmCodeStyles = css`
         color: var(--secondary-text-color);
     }
 
-    /* Slot disabled by user — PIN exists in config but is intentionally not on
-       the lock. Heavily dimmed dots in a muted pill, no strikethrough. */
+    /* PIN exists in config but is intentionally not on the lock: the slot is
+       turned off or its condition is blocking. Heavily dimmed dots in a muted
+       pill, no strikethrough. */
     .lcm-code.off {
         background: var(--lcm-section-bg, rgba(127, 127, 127, 0.05));
         border-radius: 6px;
@@ -191,8 +193,8 @@ export const lcmCodeStyles = css`
         padding: 2px 8px;
     }
 
-    /* Slot enabled but lock doesn't have the code yet (out-of-sync, syncing, etc.).
-       Dim dots with a clock-icon prefix. No strikethrough. */
+    /* A managed slot that is out of sync: a write is due. Dim dots with a
+       clock-icon prefix. No strikethrough. */
     .lcm-code.pending {
         align-items: center;
         color: var(--secondary-text-color);
@@ -228,6 +230,17 @@ export const lcmCodeStyles = css`
     .lcm-code.unreadable {
         color: var(--secondary-text-color);
         opacity: 0.7;
+    }
+
+    /* The lock holds a code that is not in force. A label, so prose rather
+       than the code font, dimmed like a slot the user turned off. */
+    .lcm-code.disabled-on-lock {
+        color: var(--disabled-text-color);
+        font-family: inherit;
+        font-size: 12px;
+        font-style: italic;
+        font-weight: 400;
+        letter-spacing: normal;
     }
 `;
 

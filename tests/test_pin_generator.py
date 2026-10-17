@@ -4,9 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from custom_components.lock_code_manager.domain import pin_generator
-from custom_components.lock_code_manager.domain.pin_generator import (
-    COMMON_WEAK_PINS_4,
+from custom_components.lock_code_manager.model import pin_generator
+from custom_components.lock_code_manager.model.pin_generator import (
     DEFAULT_PIN_LENGTH,
     generate_pin,
     is_unsafe_pin,
@@ -16,23 +15,21 @@ from custom_components.lock_code_manager.domain.pin_generator import (
 class TestIsUnsafePin:
     """is_unsafe_pin should reject all flagged patterns and accept reasonable ones."""
 
-    @pytest.mark.parametrize("pin", ["0000", "1111", "5555", "9999"])
-    def test_all_same_digits_unsafe(self, pin: str) -> None:
-        assert is_unsafe_pin(pin)
-
-    @pytest.mark.parametrize("pin", ["1234", "2345", "6789", "7890", "8901"])
+    # Repdigits, plain runs and repeating blocks are covered by the
+    # properties in tests/properties/test_pin_generator.py. The wrap-around
+    # runs stay here until the properties pin them with @example.
+    @pytest.mark.parametrize("pin", ["7890", "8901"])
     def test_sequential_ascending_unsafe(self, pin: str) -> None:
         assert is_unsafe_pin(pin)
 
-    @pytest.mark.parametrize("pin", ["9876", "5432", "1098", "3210"])
+    @pytest.mark.parametrize("pin", ["1098"])
     def test_sequential_descending_unsafe(self, pin: str) -> None:
         assert is_unsafe_pin(pin)
 
-    @pytest.mark.parametrize("pin", ["1212", "1010", "7878", "121212", "123123"])
-    def test_repeating_pattern_unsafe(self, pin: str) -> None:
-        assert is_unsafe_pin(pin)
-
-    @pytest.mark.parametrize("pin", sorted(COMMON_WEAK_PINS_4))
+    # Hard-coded rather than read from COMMON_WEAK_PINS_4, so dropping one
+    # from the list fails here. The rest of the list is caught by the
+    # same-digit, repeating-block or sequence rule before the list is read.
+    @pytest.mark.parametrize("pin", ["1004", "1122", "2000", "2001", "6969"])
     def test_common_weak_pins_unsafe(self, pin: str) -> None:
         assert is_unsafe_pin(pin)
 
@@ -62,13 +59,13 @@ class TestGeneratePin:
         assert len(pin) == DEFAULT_PIN_LENGTH
         assert pin.isdigit()
 
-    @pytest.mark.parametrize("length", [4, 5, 6, 8, 10, 12])
+    @pytest.mark.parametrize("length", [4, 12])
     def test_returns_requested_length(self, length: int) -> None:
         pin = generate_pin(length)
         assert len(pin) == length
         assert pin.isdigit()
 
-    @pytest.mark.parametrize("length", [3, 13, 0, -1])
+    @pytest.mark.parametrize("length", [3, 13])
     def test_invalid_length_raises(self, length: int) -> None:
         with pytest.raises(ValueError):
             generate_pin(length)

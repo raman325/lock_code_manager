@@ -151,7 +151,7 @@ describe('lock-codes card, rendered', () => {
 
     it.each([
         [
-            'the masked slot the backend sends',
+            'a readable PIN, masked',
             {
                 code: null,
                 code_length: 6,
@@ -160,21 +160,134 @@ describe('lock-codes card, rendered', () => {
             }
         ],
         [
-            'an unreadable code with its configured length',
+            'a withheld code in sync',
             {
                 code: 'unreadable_code',
+                configured_code_length: 6,
+                in_sync: true
+            }
+        ],
+        [
+            "a slot in sync the lock didn't answer for",
+            {
+                code: 'unanswered',
                 configured_code_length: 6,
                 in_sync: true
             }
         ]
     ])('masks %s to the PIN length, not a fixed 3 dots (PR #1282)', async (_label, code) => {
         // Matter and masking Z-Wave locks never report the digits; the card
-        // showed a fixed three dots whatever the PIN's length. The first slot
-        // is what tests/test_websocket.py's
-        // test_a_lock_that_withholds_codes_tells_the_card_the_pin_length
+        // showed a fixed three dots whatever the PIN's length. The last two
+        // are what tests/test_websocket.py's
+        // test_a_lock_that_gives_no_pin_back_is_never_shown_as_reporting_one
         // receives from the backend.
         const root = await show([{ ...managed, ...code }]);
 
         expect(root.querySelector('.lcm-code')?.textContent?.trim()).toBe('••••••');
     });
+
+    it.each([
+        [
+            'shows "Not reported" when nothing stands in',
+            { active: false, enabled: false, in_sync: true },
+            'Not reported',
+            "This lock can't report its codes"
+        ],
+        [
+            'stands the configured PIN in when in sync',
+            { configured_code_length: 4, in_sync: true },
+            '••••',
+            "Configured in Lock Code Manager — this lock can't report its codes"
+        ]
+    ])(
+        "says a lock that can't report a slot did answer (#1581): %s",
+        async (_label, fields, text, title) => {
+            // Zigbee user status Not Supported: the lock answered, so the slot
+            // is not "unanswered".
+            const root = await show([{ ...managed, code: 'not_reported', ...fields }]);
+
+            const code = root.querySelector<HTMLElement>('.lcm-code');
+            expect(code?.textContent?.trim()).toBe(text);
+            expect(code?.title).toBe(title);
+            expect(root.textContent).not.toContain("didn't answer");
+        }
+    );
+
+    it("shows a code a lock that can report won't report as held, not empty (#1581)", async () => {
+        // The backend only hands "not_reported" over for a slot it doesn't
+        // manage from a lock that has described some slot: a keypad code.
+        const root = await show([
+            managed,
+            { code: 'not_reported', managed: false, slot: 2 },
+            { code: 'empty', managed: false, slot: 3 }
+        ]);
+
+        const chip = [...root.querySelectorAll<HTMLElement>('.slot-chip')].find((element) =>
+            element.textContent?.replace(/\s+/g, ' ').includes('Slot 2 ')
+        );
+        expect(chip, 'slot 2 is folded into the empty slots').toBeTruthy();
+        expect(chip?.querySelector('.lcm-code')?.textContent?.trim()).toBe('Not reported');
+        expect(root.querySelector('.empty-summary-range')?.textContent?.trim() ?? '3').toBe('3');
+    });
+
+    it('keeps codes masked in "masked" mode even when the reveal flag is set', async () => {
+        card.setConfig({
+            code_display: 'masked',
+            lock_entity_id: 'lock.front_door',
+            type: 'custom:lcm-lock-codes'
+        });
+        // eslint-disable-next-line no-underscore-dangle -- no public way to set reveal in masked mode
+        (card as unknown as { _revealed: boolean })._revealed = true;
+        const root = await show([managed]);
+
+        expect(root.querySelector('.lcm-code')?.textContent?.trim()).toBe('••••');
+        expect(root.textContent).not.toContain(MANAGED_PIN);
+    });
+
+    it('titles the card with the entity id when nothing names the lock', async () => {
+        // No lock_name in the payload, and hass has no state for the lock.
+        push({
+            lock_entity_id: 'lock.front_door',
+            slots: [managed]
+        } as unknown as LockCoordinatorData);
+        await card.updateComplete;
+
+        expect(card.shadowRoot!.querySelector('.card-header-title')?.textContent).toBe(
+            'lock.front_door'
+        );
+    });
+
+    it.each([
+        // Both empties between two lone actives are borrowed, one each side.
+        ['active, empty, empty, active, empty', 5, [1, 4], ['Slot 2 Empty', 'Slot 3 Empty'], ['5']],
+        [
+            'active, 3 empty, active, 3 empty',
+            8,
+            [1, 5],
+            ['Slot 2 Empty', 'Slot 6 Empty'],
+            ['3 – 4', '7 – 8']
+        ]
+    ])(
+        'summarises each run of empty slots between interleaved actives: %s',
+        async (_label, total, actives, borrowed, summaries) => {
+            const slots: LockCoordinatorSlotData[] = Array.from({ length: total }, (_, i) =>
+                actives.includes(i + 1)
+                    ? { ...managed, slot: i + 1 }
+                    : { code: 'empty', managed: false, slot: i + 1 }
+            );
+            const root = await show(slots);
+
+            const chips = [...root.querySelectorAll('.slots-grid > .slot-chip')];
+            expect(
+                chips
+                    .filter((chip) => chip.classList.contains('empty'))
+                    .map((chip) => chip.textContent?.replace(/\s+/g, ' ').trim())
+            ).toEqual(borrowed);
+            expect(
+                [...root.querySelectorAll('.empty-summary-range')].map((range) =>
+                    range.textContent?.trim()
+                )
+            ).toEqual(summaries);
+        }
+    );
 });

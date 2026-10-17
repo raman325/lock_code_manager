@@ -1,7 +1,5 @@
 """Shared fixtures and constants for Zigbee2MQTT provider tests."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator, Iterator
 import json
 from types import SimpleNamespace

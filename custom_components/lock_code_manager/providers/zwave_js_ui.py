@@ -1,13 +1,11 @@
 """Module for locks bridged through zwave-js-ui's MQTT gateway."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Any, Literal
+from typing import Any, Literal, override
 from uuid import uuid4
 
 from zwave_js_server.const import CommandClass, SupervisionStatus
@@ -23,16 +21,26 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
+    SlotCredential,
     User,
     WriteResult,
 )
-from ..domain.exceptions import LockDisconnected, LockOperationFailed
-from ..domain.models import SlotCredential
+from ..model.exceptions import (
+    DuplicateCodeError,
+    LockDisconnected,
+    LockOperationError,
+    LockOperationFailed,
+)
 from ._mqtt import BaseMqttLock
-from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
+from ._util import (
+    is_masked_code,
+    parse_slot_num,
+    refuses_write_in_flight,
+    resolve_discovery_payload,
+)
 from .const import LOGGER
 
 # Tail of the HA discovery device identifier zwave-js-ui publishes
@@ -135,6 +143,8 @@ KEYPAD_EVENT_TO_LOCKED = {
     "keypad_lock_operation": True,
     "keypad_unlock_operation": False,
 }
+# Access Control event 15: the lock refused a PIN another slot holds.
+DUPLICATE_CODE_EVENT = "new_user_code_not_added_due_to_duplicate_code"
 # Where the gateways found by scanning a topic prefix live, keyed by
 # ``(prefix, home hex)``. Deliberately in ``hass.data`` rather than on the
 # instance: the scan answers a question about a gateway, not about a lock, and
@@ -330,8 +340,8 @@ def _raise_on_supervision_fail(operation: str, code_slot: int, result: Any) -> N
     command, and hands back whatever the command returned: a Supervision
     result when the lock supervised it, nothing when it did not. Fail is the
     lock explicitly refusing the command. It raises as an operation failure
-    rather than a rejection because the lock gives no reason, so the slot
-    breaker decides what repeated refusals mean.
+    rather than a rejection because the lock gives no reason, so the lock's
+    worker decides what repeated refusals mean.
 
     Every other result leaves the write standing. Unlike the ``userIdStatus``
     checks in this module, this needs no boolean guard: ``True == 1`` and
@@ -348,6 +358,9 @@ def _raise_on_supervision_fail(operation: str, code_slot: int, result: Any) -> N
 class ZWaveJSUILock(BaseMqttLock):
     """Lock bridged through zwave-js-ui's MQTT gateway (api-driven)."""
 
+    # The gateway queues a dead node's commands like the driver does (#139).
+    check_available_before_exchange = True
+
     _api_base: str | None = field(init=False, default=None)
     # Key into the shared scan store, set only when this lock's binding came
     # from a scan. An availability-bound lock has nothing to invalidate for
@@ -360,10 +373,9 @@ class ZWaveJSUILock(BaseMqttLock):
     _api_response_unsub: Callable[[], None] | None = field(init=False, default=None)
     # Topic the live subscription covers, or None when there is none.
     _api_response_topic: str | None = field(init=False, default=None)
-    # Serializes ``_async_ensure_api_response_subscription``. Deliberately not
-    # the base's ``_aio_lock``: that is held across every rate-limited
-    # operation, and those resolve the api base, which ensures this
-    # subscription -- sharing it would deadlock on the first read.
+    # Serializes ``_async_ensure_api_response_subscription``. Its own lock:
+    # every operation resolves the api base, which ensures this
+    # subscription, so a lock held across operations would deadlock here.
     _api_subscription_lock: asyncio.Lock = field(
         init=False, default_factory=asyncio.Lock
     )
@@ -386,9 +398,15 @@ class ZWaveJSUILock(BaseMqttLock):
     # subscription covered: kept across a teardown, a status seen before an
     # unload would gate codes published after the resubscribe.
     _slot_enabled: dict[int, bool] = field(init=False, default_factory=dict)
+    # The slot of a PIN write in flight, and whether the lock refused it as a
+    # duplicate (see ``refuses_write_in_flight``): the set itself is
+    # acknowledged either way.
+    _write_slot: int | None = field(init=False, default=None)
+    _write_refused: bool = field(init=False, default=False)
     _min_operation_delay: float = field(init=False, default=ZWAVE_JS_UI_OPERATION_DELAY)
 
     @property
+    @override
     def supports_push(self) -> bool:
         """
         Return whether this lock's value tree can be subscribed to.
@@ -401,13 +419,14 @@ class ZWaveJSUILock(BaseMqttLock):
         constant it disabled polling for a lock that had no push either,
         leaving it with no data path at all.
 
-        The coordinator reads this once, when it is constructed, and that
-        happens after ``async_setup``; the answer comes from Home Assistant's
-        MQTT discovery data, which is already loaded by then.
+        The port reads it when it starts the poll, and again once a later
+        setup finds push (it is never taken away); the answer comes from Home
+        Assistant's MQTT discovery data.
         """
         return self._prefix_and_node_topic() is not None
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """
         Return whether keypad events can be observed.
@@ -418,12 +437,13 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         return self.supports_push
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
-        Bring both subscriptions up before the coordinator runs its first poll.
+        Bring both subscriptions up before the lock's worker first reads.
 
         Establishing the api response subscription here rather than leaving it
-        to the first api call is what keeps the coordinator's polls off the
+        to the first api call is what keeps the polls off the
         settling path: by the time one publishes, the wire SUBSCRIBE went out
         long ago. Correctness does not depend on that -- every subscribe
         settles itself -- only the latency does.
@@ -535,6 +555,7 @@ class ZWaveJSUILock(BaseMqttLock):
             )
         return parsed
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """
         Return whether MQTT is usable and this lock's gateway is addressable.
@@ -672,15 +693,22 @@ class ZWaveJSUILock(BaseMqttLock):
         ``userId`` is the slot that operated the lock. Raw-buffer parameters
         arrive as a hex string instead and name nobody, so anything that is
         not a dict with a numeric user id is dropped rather than guessed at.
+
+        A duplicate refusal is no use of a code: it marks the write in
+        flight refused when it answers that write, and is dropped otherwise.
         """
         if label.lower() != NOTIFICATION_ACCESS_CONTROL:
+            return
+        value = _unwrap_mqtt_value(payload)
+        user_id = value.get("userId") if isinstance(value, dict) else None
+        if event_label.lower() == DUPLICATE_CODE_EVENT:
+            if refuses_write_in_flight(self._write_slot, parse_slot_num(user_id)):
+                self._write_refused = True
             return
         # ``False`` is a valid mapping value (an unlock), so this compares
         # against None -- a truthiness test would drop every unlock event.
         if (to_locked := KEYPAD_EVENT_TO_LOCKED.get(event_label.lower())) is None:
             return
-        value = _unwrap_mqtt_value(payload)
-        user_id = value.get("userId") if isinstance(value, dict) else None
         if (code_slot := parse_slot_num(user_id)) is None:
             LOGGER.debug(
                 "Lock %s: ignoring %s notification naming no code slot: %r",
@@ -745,6 +773,7 @@ class ZWaveJSUILock(BaseMqttLock):
         )
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe via background task when still unsubscribed (e.g. reconnect).
@@ -917,7 +946,7 @@ class ZWaveJSUILock(BaseMqttLock):
         Find the gateway running ``home_hex`` on ``prefix``, once per gateway.
 
         The scan is the same question for every lock behind one gateway, and
-        they ask it together: their coordinators refresh on the same tick, and
+        they ask it together: their workers read on the same cadence, and
         a gateway that has just come back invalidates all of their bindings at
         once. So the answer is shared across provider instances and the scan
         is serialized behind it -- the second lock waits out the first one's
@@ -1055,7 +1084,7 @@ class ZWaveJSUILock(BaseMqttLock):
             response = await self._async_api_call_at(
                 api_base, "getInfo", [], timeout=GATEWAY_LOCAL_TIMEOUT
             )
-        except (LockDisconnected, LockOperationFailed) as err:
+        except LockOperationError as err:
             LOGGER.debug("Gateway %s did not answer getInfo: %s", api_base, err)
             return None
         result = response.get("result")
@@ -1133,9 +1162,10 @@ class ZWaveJSUILock(BaseMqttLock):
                 ) from err
 
             try:
-                response = await asyncio.wait_for(
-                    future, API_CALL_TIMEOUT if timeout is None else timeout
-                )
+                async with asyncio.timeout(
+                    API_CALL_TIMEOUT if timeout is None else timeout
+                ):
+                    response = await future
             except TimeoutError as err:
                 raise LockDisconnected(
                     f"Timed out waiting for zwave-js-ui {api_name} response for "
@@ -1233,6 +1263,7 @@ class ZWaveJSUILock(BaseMqttLock):
         )
         return response.get("result")
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
@@ -1289,6 +1320,7 @@ class ZWaveJSUILock(BaseMqttLock):
             return None
         return _project_user_code_result(result)
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -1305,8 +1337,12 @@ class ZWaveJSUILock(BaseMqttLock):
         ``credential.slot``. A successful api response is taken as confirmed
         because zwave-js-ui answers only once the driver's supervised set has
         completed, so success here means the lock acknowledged the write --
-        unless the Supervision result it returns is a Fail, which is the lock
-        refusing it (``_raise_on_supervision_fail``).
+        unless the lock refused the PIN as a duplicate by notification while
+        the write was out, or the Supervision result it returns is a Fail,
+        which is the lock refusing it (``_raise_on_supervision_fail``). That
+        refusal is the only word User Code Command Class has for it, and the
+        driver announces the refused code as written, so the slot is read
+        back to replace that announcement before the refusal is raised.
 
         Failures from the api client propagate untouched: the base and sync
         layers decide what a refused or disconnected write means, and the
@@ -1314,19 +1350,30 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         code_slot = credential.slot
         await self._async_ensure_operational()
-        _raise_on_supervision_fail(
-            "set",
-            code_slot,
-            await self._async_user_code_command(
+        self._write_slot, self._write_refused = code_slot, False
+        try:
+            result = await self._async_user_code_command(
                 # ``int`` for the same reason the command class id is cast:
                 # the wire payload's shape stays obvious at the call site.
                 "set",
                 [code_slot, int(CodeSlotStatus.ENABLED), pin],
-            ),
-        )
+            )
+        finally:
+            self._write_slot = None
+        # Before the Supervision result: a supervising lock refuses a
+        # duplicate with Fail as well as the notification, and only the
+        # notification says why.
+        if self._write_refused:
+            if (held := await self._async_read_slot(code_slot)) is not None:
+                self._push_credential_update(code_slot, held)
+            raise DuplicateCodeError(
+                code_slot=code_slot, lock_entity_id=self.lock.entity_id
+            )
+        _raise_on_supervision_fail("set", code_slot, result)
         self._push_credential_update(code_slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a code slot.
@@ -1345,6 +1392,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._push_credential_update(ref.slot, SlotCredential.empty())
         return True
 
+    @override
     async def async_get_max_slot(self) -> int | None:
         """
         Report the User Code capacity the lock advertises, if it advertises one.
@@ -1401,6 +1449,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._pending_api_calls.clear()
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """
         Drop the node subscription and the api transport together.
@@ -1415,6 +1464,7 @@ class ZWaveJSUILock(BaseMqttLock):
         self._slot_enabled.clear()
         self._release_api_subscription()
 
+    @override
     async def async_unload(self, remove_permanently: bool) -> None:
         """
         Release both subscriptions on unload, push or no push.

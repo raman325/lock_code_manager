@@ -1,7 +1,5 @@
 """Tests for centralized provider class resolution."""
 
-from __future__ import annotations
-
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -10,11 +8,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.const import DOMAIN
-from custom_components.lock_code_manager.domain.allocation import (
+from custom_components.lock_code_manager.ha.allocation import (
     LockQuerySkipped,
     build_lock_instance,
 )
-from custom_components.lock_code_manager.domain.locks import async_create_lock_instance
+from custom_components.lock_code_manager.ha.locks import async_create_lock_instance
 from custom_components.lock_code_manager.providers import (
     CONFIG_FLOW_PLATFORMS,
     INTEGRATIONS_CLASS_MAP,

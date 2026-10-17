@@ -1,25 +1,23 @@
 """
 Abstract base for lock providers.
 
-Handles rate limiting, connection checking, and coordinator refresh after operations.
-See ARCHITECTURE.md for the provider interface contract.
+Handles setup, connection checking, push subscriptions, and the user/credential
+orchestration on top of each provider's primitives. Pacing and serialization
+are the lock worker's (``sync/worker.py``). See AGENTS.md for the provider
+interface contract.
 """
 
-from __future__ import annotations
-
 import asyncio
-from collections.abc import Awaitable, Callable, Collection
+from collections.abc import Awaitable, Callable, Collection, Coroutine
 import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
-from functools import partial
 import logging
-import time
-from typing import Any, ClassVar, Literal, NoReturn, final
+from typing import Any, ClassVar, Literal, NoReturn, Protocol, final, override
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.issue_registry import (
     IssueSeverity,
@@ -28,45 +26,43 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import (
+    DATA,
     DOMAIN,
+    LockCodeManagerData,
 )
-from ..domain.coordinator import LockUsercodeUpdateCoordinator
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
+    CredentialAddress,
     CredentialRef,
     CredentialType,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     WriteResult,
     credential_from_slot,
     pin_address,
     user_from_slot,
 )
-from ..domain.events import CredentialOperation, async_fire_credential_used
-from ..domain.exceptions import (
+from ..model.events import CredentialOperation, async_fire_credential_used
+from ..model.exceptions import (
     CodeRejectedError,
-    DuplicateCodeError,
-    LockBusy,
     LockCodeManagerError,
     LockCodeManagerProviderError,
     LockDisconnected,
+    LockOperationError,
     LockOperationFailed,
     LockOperationUnsupported,
     ProviderNotImplementedError,
 )
-from ..domain.models import SlotCredential
-from ..domain.queries import (
+from ..model.locks import lock_display_name, per_lock_issue_id
+from ..model.pin_masking import mask_pin
+from ..model.queries import (
     configured_owner,
     get_entry_config,
     slots_configured_on,
 )
-from ..domain.util import (
-    lock_display_name,
-    mask_pin,
-    per_lock_issue_id,
-)
-from ._util import make_tagged_name, parse_tag
+from ._util import foreign_slots, make_tagged_name, parse_tag
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -88,13 +84,12 @@ MIN_OPERATION_DELAY = 2.0
 # before writing its replacement, so a cancel mid-sequence can leave a door
 # with no working PIN -- but only if the call was going to finish. Ten minutes
 # in, the credential is already gone whichever half is stuck, and the wedge,
-# not the cancel, is what took it. What the cancel buys back is `_aio_lock`,
-# so the slot leaves SYNCING and the next tick retries the whole sequence.
-# Issue #1523 had three PIN changes sit unsynced for seven hours behind one
-# such call. A stop is the one shorter cut; see STOP_GRACE_SECONDS.
+# not the cancel, is what took it. What the cancel buys back is the lock's
+# worker, so the next sync retries the whole sequence. Issue #1523 had three
+# PIN changes sit unsynced for seven hours behind one such call.
 #
-# A FLOOR, not the whole answer. One `_execute_rate_limited` call is one
-# provider call, but on several providers one provider call is a sequential
+# A FLOOR, not the whole answer. One exchange is one provider call, but on
+# several providers one provider call is a sequential
 # walk of slots, one exchange with the lock per slot -- so the honest budget
 # is per exchange, times the exchanges THAT call walks. Those providers
 # declare `per_exchange_budget`, and `_operation_budget` scales this floor by
@@ -104,12 +99,55 @@ MIN_OPERATION_DELAY = 2.0
 # half of issue #1528.
 OPERATION_TIMEOUT = 600.0
 
-_OPERATION_MESSAGES: dict[Literal["get", "set", "clear", "refresh"], str] = {
-    "get": "get from",
-    "set": "set on",
-    "clear": "clear on",
-    "refresh": "hard refresh",
-}
+
+def _keeps_user_records(caps: LockCapabilities) -> bool:
+    """
+    Return whether a lock with ``caps`` exposes a separate user-record write path.
+
+    False covers both no-user-management locks and the implicit-user case
+    (e.g. Z-Wave User Code CC: the user IS the credential).
+    """
+    return caps.supports_user_management and caps.max_user_name_length > 0
+
+
+class ProviderCoordinator(Protocol):
+    """
+    What a provider asks of the coordinator it is set up with.
+
+    The core's adapter answers: pushes go to the lock's worker, refresh
+    requests become its reads.
+    """
+
+    last_update_success: bool
+    last_exception: Exception | None
+
+    def push_update(self, updates: dict[int, SlotCredential]) -> None:
+        """Hand pushed slots on."""
+
+    def observe_push(
+        self, address: CredentialAddress, observed: SlotCredential
+    ) -> None:
+        """Hand a push about one slot on."""
+
+    def desired_credential(
+        self, address: CredentialAddress, *, owner: Any = None
+    ) -> SlotCredential:
+        """Say whether a PIN is wanted at ``address``."""
+
+    async def async_request_refresh(self) -> None:
+        """Read the lock again."""
+
+    async def async_refresh(self) -> None:
+        """Take the first read."""
+
+    async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
+        """Run ``call`` against the lock in its turn; return its result."""
+
+    def async_set_update_error(self, err: Exception) -> None:
+        """Note that the first read failed."""
+
+    def note_push_capability(self) -> None:
+        """Note that the provider has learned it can push."""
 
 
 @dataclass(repr=False, eq=False)
@@ -119,7 +157,8 @@ class BaseLock:
 
     Data Fetching Modes
     -------------------
-    The coordinator supports three update modes. All modes include an initial poll.
+    The adapter (``ha/adapter.py``) runs these cadences. All modes include an
+    initial read by the lock's worker.
 
     1. Poll for updates (default):
        - Periodic calls to get_usercodes() at usercode_scan_interval
@@ -133,7 +172,7 @@ class BaseLock:
        - Updates pushed via self._push_credential_update(slot, credential)
 
     3. Poll for drift:
-       - Periodic hard_refresh_codes() at hard_refresh_interval
+       - Periodic fresh read of the managed slots at hard_refresh_interval
        - Detects out-of-band changes (e.g., codes changed at keypad)
        - Runs regardless of push/poll mode
        - Set hard_refresh_interval = None to disable
@@ -174,8 +213,10 @@ class BaseLock:
     Provider implementations should raise LockCodeManagerProviderError (or one of
     its subclasses: LockDisconnected, CodeRejectedError/DuplicateCodeError,
     ProviderNotImplementedError) for any failure originating from the lock or
-    its integration. The coordinator catches LockCodeManagerError (the broader
-    parent) and handles it appropriately (e.g., retrying, logging).
+    its integration. The adapter maps these onto the worker's answers
+    (``ha/adapter.py`` ``lock_error``): a refusal is the lock's answer about
+    the slot, anything else is no answer. Let them propagate; do not swallow
+    ``LockDisconnected``.
 
     Do NOT raise generic exceptions, HomeAssistantError, or the bare
     LockCodeManagerError for lock/integration failures — use
@@ -190,15 +231,9 @@ class BaseLock:
     lock_config_entry: ConfigEntry | None = field(repr=False)
     lock: er.RegistryEntry
     device_entry: dr.DeviceEntry | None = field(default=None, init=False)
-    coordinator: LockUsercodeUpdateCoordinator | None = field(default=None, init=False)
-    _aio_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
-    # Who holds ``_aio_lock`` and since when (monotonic), None between
-    # holders. ``SlotSyncManager.async_stop`` measures its grace from here.
-    _turn_holder: asyncio.Task[Any] | None = field(default=None, init=False, repr=False)
-    _turn_taken_at: float | None = field(default=None, init=False, repr=False)
-    # Sequence lock for read-modify-write operations that need atomicity
-    # across multiple service calls. Outer lock so each leaf call can
-    # still acquire _aio_lock for rate limiting without deadlocking.
+    coordinator: ProviderCoordinator | None = field(default=None, init=False)
+    # Sequence lock for a provider's read-modify-write operations that need
+    # atomicity across several of its own calls (Schlage, Akuvox).
     _sequence_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     # Registry of push-subscription unsub callables. Providers append to
     # this list via _register_push_unsub() so the base helper can release
@@ -211,14 +246,13 @@ class BaseLock:
     _capabilities_cache: LockCapabilities | None = field(
         default=None, init=False, repr=False
     )
-    _last_operation_time: float = field(default=0.0, init=False)
+    # The pause the lock needs between exchanges: the worker's gap.
     _min_operation_delay: float = field(default=MIN_OPERATION_DELAY, init=False)
     _last_connection_up: bool | None = field(default=None, init=False)
     _config_entry_state_unsub: Callable[[], None] | None = field(
         default=None, init=False
     )
     _last_entry_state: ConfigEntryState | None = field(default=None, init=False)
-    _setup_complete: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _setup_succeeded: bool = field(default=False, init=False)
     _setup_running: bool = field(default=False, init=False)
     # Provider setup was skipped altogether because the integration was not
@@ -226,16 +260,11 @@ class BaseLock:
     # ``_setup_succeeded``, which is also False for a lock whose setup ran
     # and failed -- that one has a diagnosis, this one has never been asked.
     _setup_deferred: bool = field(default=False, init=False)
+    # The last capability probe found no PIN support: the one setup failure
+    # that means no code can be on the lock. Kept apart from the setup flags,
+    # which read "failed" through every recoverable failure and retry too.
+    pin_unsupported: bool = field(default=False, init=False)
     _lcm_config_entry: ConfigEntry | None = field(default=None, init=False)
-    _rejected_code_slots: set[int] = field(default_factory=set, init=False)
-    # Slots whose most recent write from this integration was a clear that
-    # changed something. See ``last_write_was_clear``.
-    _cleared_slots: set[int] = field(default_factory=set, init=False)
-    # Slots with an outstanding optimistic (ambiguous-but-treated-as-completed)
-    # write awaiting confirmation, mapped to (believed_pin, monotonic_deadline).
-    # A confirmation -- a push event or a hard-refresh read observing the slot
-    # present -- clears the entry and re-pushes the believed value as verified;
-    # if none arrives before the deadline, the sync layer re-syncs. See the
     # Reconnect task spawned by the config-entry state listener when the lock
     # integration transitions to LOADED. Tracked so async_unload can cancel it
     # before teardown -- otherwise a late reconnect can call
@@ -244,168 +273,12 @@ class BaseLock:
     _reconnect_task: asyncio.Task[None] | None = field(default=None, init=False)
 
     @final
-    @callback
-    def mark_code_rejected(self, code_slot: int) -> None:
-        """Mark a slot as having its code rejected so the next set attempt raises DuplicateCodeError."""
-        self._rejected_code_slots.add(code_slot)
-
-    @final
-    async def _execute_rate_limited(
-        self,
-        operation_type: Literal["get", "set", "clear", "refresh"],
-        func: Callable[..., Awaitable[Any]],
-        *args: Any,
-        pre_execute: Callable[[], None] | None = None,
-        exchanges: int = 1,
-        **kwargs: Any,
-    ) -> Any:
-        """
-        Execute operation with connection check, serialization, and delay.
-
-        ``exchanges`` is how many exchanges with the lock ``func`` walks; the
-        operation deadline is sized to it (``_operation_budget``).
-
-        Three bounds, one per question, because one number cannot answer
-        "how long may my call take" and "how long will I queue behind
-        someone else's" at once (issue #1535):
-
-        - The availability probes are device I/O on some providers --
-          Schlage's is a cloud round trip -- and get the operation budget.
-          A probe that never answers is ``LockDisconnected``.
-        - The wait for ``_aio_lock`` gets one holder's worth. A wait that
-          runs out is ``LockBusy``: the caller never reached the lock, so it
-          is not the lock's word about anything and charges no breaker.
-        - The operation gets the operation budget, starting at acquire, so a
-          caller that waited its turn still has its whole budget for real
-          I/O. A call that answers nothing in that long is ``LockDisconnected``:
-          a disconnection, not an operation failure, and the distinction
-          decides what happens. A failure charges the SLOT breaker, which is
-          windowed -- three strikes inside five minutes -- so at a budget
-          longer than that window it could never trip. A disconnection
-          charges the LOCK breaker, which counts consecutively: three trips
-          ``unreachable``, the tick gates on it, backoff stops the hammering,
-          and it self-heals on the next successful poll.
-
-        pre_execute runs inside the lock before the operation, for checks
-        that must be atomic with the operation (e.g., duplicate detection).
-        """
-        probe_budget = self.operation_timeout_seconds
-        # The longest holder there can be is a walk of every managed slot, so a
-        # caller queued behind one must be allowed to wait that long. A
-        # confirmation read adds the few pending unmanaged slots to that walk;
-        # the overshoot is bounded by them and ends in LockBusy, which is not
-        # a recovery signal.
-        wait_budget = self._operation_budget(max(len(self.managed_slots), 1))
-        budget = self._operation_budget(exchanges)
-        what = f"{_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id}"
-        try:
-            async with asyncio.timeout(probe_budget):
-                await self._check_reachable(operation_type)
-        except TimeoutError as err:
-            raise LockDisconnected(
-                f"Cannot {what} - availability check gave no answer within "
-                f"{probe_budget:.0f}s"
-            ) from err
-
-        try:
-            async with asyncio.timeout(wait_budget):
-                await self._aio_lock.acquire()
-        except TimeoutError as err:
-            raise LockBusy(
-                f"Cannot {what} - another operation on this lock has held it for "
-                f"{wait_budget:.0f}s"
-            ) from err
-
-        self._turn_holder = asyncio.current_task()
-        self._turn_taken_at = time.monotonic()
-        try:
-            async with asyncio.timeout(budget):
-                return await self._execute_locked(
-                    operation_type, func, *args, pre_execute=pre_execute, **kwargs
-                )
-        except TimeoutError as err:
-            raise LockDisconnected(
-                f"Cannot {what} - no answer within {budget:.0f}s"
-            ) from err
-        finally:
-            self._turn_holder = None
-            self._turn_taken_at = None
-            self._aio_lock.release()
-
-    @property
-    def turn_holder(self) -> asyncio.Task[Any] | None:
-        """Return the task holding the lock's turn, if any."""
-        return self._turn_holder
-
-    @property
-    def turn_taken_at(self) -> float | None:
-        """Return when the current holder took the lock's turn, if anyone has it."""
-        return self._turn_taken_at
-
-    @final
-    async def _check_reachable(
-        self, operation_type: Literal["get", "set", "clear", "refresh"]
-    ) -> None:
-        """Run both availability probes; raise LockDisconnected if either fails."""
-        # Evaluate both layers, feed the combined reachability to the
-        # transition handler, then raise the layer-specific message. The two
-        # checks are kept distinct for diagnostics; the transition only cares
-        # whether the lock is reachable end-to-end.
-        integration_up = await self.async_is_integration_connected()
-        device_up = await self.async_is_device_available()
-        self._note_reachability(integration_up and device_up)
-        if not integration_up:
-            raise LockDisconnected(
-                f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - integration not connected"
-            )
-        if not device_up:
-            raise LockDisconnected(
-                f"Cannot {_OPERATION_MESSAGES[operation_type]} {self.lock.entity_id} - device not available"
-            )
-
-    @final
-    async def _execute_locked(
-        self,
-        operation_type: Literal["get", "set", "clear", "refresh"],
-        func: Callable[..., Any],
-        *args: Any,
-        pre_execute: Callable[[], None] | None = None,
-        **kwargs: Any,
-    ) -> Any:
-        """Run one operation with ``_aio_lock`` held by the caller."""
-        if pre_execute:
-            pre_execute()
-
-        elapsed = time.monotonic() - self._last_operation_time
-        if elapsed < self._min_operation_delay:
-            delay = self._min_operation_delay - elapsed
-            LOGGER.debug(
-                "Rate limiting %s operation on %s, waiting %.1f seconds",
-                operation_type,
-                self.lock.entity_id,
-                delay,
-            )
-            await asyncio.sleep(delay)
-
-        LOGGER.debug(
-            "Executing %s operation on %s",
-            operation_type,
-            self.lock.entity_id,
-        )
-
-        result = await func(*args, **kwargs)
-        self._last_operation_time = time.monotonic()
-        return result
-
-    @final
     def _serialize_sequence(self) -> contextlib.AbstractAsyncContextManager[None]:
         """
         Return an async context manager that serializes a multi-step operation.
 
         Use around read-modify-write sequences (e.g. get-codes/delete/add)
-        so concurrent callers see each sequence as atomic. Uses a separate
-        lock from ``_aio_lock`` so leaf calls inside the sequence can still
-        go through ``_execute_rate_limited`` without deadlocking.
+        so concurrent callers see each sequence as atomic.
         """
         return self._sequence_lock
 
@@ -460,16 +333,19 @@ class BaseLock:
         self.device_entry = self.dev_reg.async_get(device_id)
 
     @final
+    @override
     def __repr__(self) -> str:
         """Return a string representation."""
         return f"{self.__class__.__name__}(domain={self.domain}, lock={self.lock.entity_id})"
 
     @final
+    @override
     def __hash__(self) -> int:
         """Hash by lock entity ID (one BaseLock instance per physical lock)."""
         return hash(self.lock.entity_id)
 
     @final
+    @override
     def __eq__(self, other: Any) -> bool:
         """Two BaseLock instances are equal when they wrap the same lock entity."""
         if not isinstance(other, BaseLock):
@@ -524,7 +400,7 @@ class BaseLock:
         return mask_pin(
             pin,
             code_slot,
-            self.hass.data.get(DOMAIN, {}).get("instance_id", ""),
+            self.hass.data.get(DATA, LockCodeManagerData()).get("instance_id", ""),
         )
 
     @final
@@ -540,11 +416,10 @@ class BaseLock:
     @callback
     def _confirm_slot(self, code_slot: int, observed: SlotCredential) -> None:
         """
-        Resolve a push event for a slot against any write pending on it.
+        Hand the lock's worker a push event's observation of a slot.
 
-        The coordinator owns pending writes and their resolution; this is the
-        provider-facing name for handing it an observation. No-op without a
-        coordinator, when there is nothing to resolve against or update.
+        The provider-facing name for ``coordinator.observe_push``; the worker
+        weighs it against what it last wrote. No-op without a coordinator.
         """
         if self.coordinator is None:
             return
@@ -568,32 +443,34 @@ class BaseLock:
         """Return whether a code slot is managed by any LCM config entry for this lock."""
         return configured_owner(self.hass, self.lock.entity_id, code_slot) is not None
 
-    @final
-    def _check_duplicate_code(self, code_slot: int, usercode: str) -> None:
-        """Raise DuplicateCodeError if the PIN duplicates another slot on this lock."""
-        # Return early if there's nothing to check
-        if not usercode or not self.coordinator or not self.coordinator.data:
-            return
-        try:
-            other_code_slot = next(
-                other_code_slot
-                for other_code_slot, other_credential in self.coordinator.credentials_by_slot().items()
-                if other_code_slot != code_slot and other_credential.matches(usercode)
-            )
-        except StopIteration:
-            pass
-        else:
-            raise DuplicateCodeError(
-                code_slot=code_slot,
-                conflicting_slot=other_code_slot,
-                conflicting_slot_managed=self.is_slot_managed(other_code_slot),
-                lock_entity_id=self.lock.entity_id,
-            )
-
     @property
     def domain(self) -> str:
         """Return integration domain."""
         raise NotImplementedError()
+
+    # The core reads through ``async_hard_refresh_codes`` instead of
+    # ``async_get_usercodes`` when only it asks the lock now: a read the core
+    # checks a write against must never come from a cache (#873, #1090).
+    fresh_read_is_hard_refresh: ClassVar[bool] = False
+    # Ask whether the device is available before every exchange, and send
+    # nothing to one that is not: Z-Wave queues commands for a dead node and
+    # delivers them whenever it comes back (#139).
+    check_available_before_exchange: ClassVar[bool] = False
+    # Seconds a read can lag behind a write (a cloud still serving the table
+    # from before it). Until then a slot just written reads as silent: the
+    # write is trusted, and the first read after decides.
+    read_lag: ClassVar[float] = 0.0
+    # Slots the last read asked about that the lock said nothing about, for
+    # providers that can tell: the core reads them as silent, not unreadable.
+    last_silent_slots: frozenset[int] = field(default=frozenset(), init=False)
+    # Of those, the ones the lock did answer, to say it cannot tell what they
+    # hold (#1581): silent all the same, but the read reached the lock -- and
+    # a code withheld, on a lock a read has seen describe a slot.
+    last_cannot_tell_slots: frozenset[int] = field(default=frozenset(), init=False)
+    # Slots the last read found a PIN at only under a user with no slot tag,
+    # on a lock with user records: someone else's code at that index, not the
+    # slot's own (``_util.foreign_slots``). The core reads the slot as empty.
+    last_foreign_slots: frozenset[int] = field(default=frozenset(), init=False)
 
     @property
     def usercode_scan_interval(self) -> timedelta:
@@ -660,7 +537,7 @@ class BaseLock:
 
         False both while setup is deferred (provider integration still
         loading) and after a structural validation failure (e.g. the lock
-        reports zero usable PIN slots). Sync managers gate write attempts
+        reports zero usable PIN slots). The adapter gates reads and writes
         on this so a degraded lock is not hammered with operations that
         fail on the capability probe; the LOADED-transition revalidation
         flips it back and reconciliation resumes.
@@ -788,9 +665,13 @@ class BaseLock:
         )
 
     @final
-    async def async_setup_internal(self, config_entry: ConfigEntry) -> None:
+    async def async_setup_internal(
+        self,
+        config_entry: ConfigEntry,
+        coordinator: ProviderCoordinator,
+    ) -> None:
         """
-        Set up lock and coordinator, signaling completion to waiters.
+        Set up lock and coordinator.
 
         Validates the lock advertises PIN credential support for
         native-user providers; structural failures
@@ -822,126 +703,127 @@ class BaseLock:
         """
         self._lcm_config_entry = config_entry
         try:
-            try:
-                if not await self.async_is_integration_connected():
-                    # Expected during a cold start (the provider integration
-                    # simply hasn't finished loading); recovery is automatic,
-                    # so this is informational, not a warning.
-                    self._setup_deferred = True
-                    LOGGER.info(
-                        "Provider integration for %s is not ready yet. "
-                        "Provider setup is deferred until it finishes "
-                        "loading; entities will be created but unavailable "
-                        "until then.",
-                        self.lock.entity_id,
-                    )
-                else:
-                    await self._async_run_provider_setup(config_entry)
-                    self._setup_succeeded = True
-                    self._clear_setup_validation_issue()
-            except TimeoutError:
-                # Distinct from the transport failures below, and warned
-                # rather than logged at info: those mean the lock answered
-                # "no", this means it did not answer at all. A lock that is
-                # merely still coming up raises LockDisconnected instead of
-                # going quiet, so silence here is a wedge, not a slow boot.
-                # Re-armed, or nothing ever retries. `_async_run_provider_setup`
-                # clears this on the way in, and it is the only thing
-                # `_handle_connection_transition` checks -- while the LOADED
-                # transition the state listener waits for never comes for an
-                # integration that was already loaded and then wedged. Without
-                # it the lock is permanently un-set-up: sync stays gated on
-                # `provider_setup_succeeded` and refuses to write anything
-                # until somebody reloads by hand.
+            if not await self.async_is_integration_connected():
+                # Expected during a cold start (the provider integration
+                # simply hasn't finished loading); recovery is automatic,
+                # so this is informational, not a warning.
                 self._setup_deferred = True
-                LOGGER.warning(
-                    "Capability probe for %s got no answer within %.0fs; its "
-                    "integration is likely wedged rather than slow. Entities "
-                    "will be created but unavailable, and setup is retried "
-                    "once that integration answers again.",
+                LOGGER.info(
+                    "Provider integration for %s is not ready yet. "
+                    "Provider setup is deferred until it finishes "
+                    "loading; entities will be created but unavailable "
+                    "until then.",
                     self.lock.entity_id,
-                    self.operation_timeout_seconds,
-                )
-            except (LockDisconnected, LockOperationFailed) as err:
-                LOGGER.warning(
-                    "Provider setup failed for %s: %s. Coordinator will be "
-                    "created but data will be unavailable until the lock "
-                    "comes online. Setup will be retried when the lock "
-                    "integration reconnects.",
-                    self.lock.entity_id,
-                    err,
-                )
-            except LockCodeManagerProviderError as err:
-                LOGGER.error(
-                    "Provider setup failed validation for %s: %s. Entities "
-                    "will be created but unavailable; validation is retried "
-                    "when the lock's integration reloads or reconnects.",
-                    self.lock.entity_id,
-                    err,
-                )
-                self._report_setup_validation_failure(err)
-
-            lock_entity_id = self.lock.entity_id
-            # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
-            # when that integration reloads or reconnects.
-            self._setup_config_entry_state_listener()
-
-            if self.coordinator is not None:
-                self.hass.async_create_task(
-                    self.coordinator.async_request_refresh(),
-                    f"Refresh coordinator for {lock_entity_id}",
                 )
             else:
-                self.coordinator = LockUsercodeUpdateCoordinator(self.hass, self)
-                # Bounded, unlike the write path. Setup runs while Home
-                # Assistant holds this entry's lock, so a read that never
-                # returns parks it in `setup_in_progress` and takes reload and
-                # remove down with it -- the same trap `async_stop`'s bounded
-                # wait exists for, at the other end of the lifecycle.
-                #
-                # Cancelling a READ is safe: it mutates nothing, so there is no
-                # half-written sequence to leave behind. That is what makes a
-                # deadline right here and wrong around a write.
-                #
-                # Sized to a walk of every managed slot because that is what
-                # the first read is, and a second, smaller number would give up
-                # on a slow-but-working lock.
-                refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
-                try:
-                    async with asyncio.timeout(refresh_budget):
-                        # Records a failure rather than raising it; reported
-                        # by the check below.
-                        await self.coordinator.async_refresh()
-                except TimeoutError:
-                    # The coordinator already recorded the cancellation this
-                    # timeout raised through it -- but it recorded a bare
-                    # CancelledError, which formats as the empty string and
-                    # would leave the report below saying nothing at all.
-                    self.coordinator.async_set_update_error(
-                        TimeoutError(f"no answer within {refresh_budget:.0f}s")
-                    )
+                await self._async_run_provider_setup(config_entry)
+                self._setup_succeeded = True
+                self._clear_setup_validation_issue()
+        except TimeoutError:
+            # Distinct from the transport failures below, and warned
+            # rather than logged at info: those mean the lock answered
+            # "no", this means it did not answer at all. A lock that is
+            # merely still coming up raises LockDisconnected instead of
+            # going quiet, so silence here is a wedge, not a slow boot.
+            # Re-armed, or nothing ever retries. `_async_run_provider_setup`
+            # clears this on the way in, and it is the only thing
+            # `_handle_connection_transition` checks -- while the LOADED
+            # transition the state listener waits for never comes for an
+            # integration that was already loaded and then wedged. Without
+            # it the lock is permanently un-set-up: sync stays gated on
+            # `provider_setup_succeeded` and refuses to write anything
+            # until somebody reloads by hand.
+            self._setup_deferred = True
+            LOGGER.warning(
+                "Capability probe for %s got no answer within %.0fs; its "
+                "integration is likely wedged rather than slow. Entities "
+                "will be created but unavailable, and setup is retried "
+                "once that integration answers again.",
+                self.lock.entity_id,
+                self.operation_timeout_seconds,
+            )
+        except LockOperationError as err:
+            # Re-armed like the reconnect path does: an integration that
+            # stays loaded (a Z-Wave node dead at boot) never brings the
+            # LOADED transition this would otherwise wait for.
+            self._setup_deferred = True
+            LOGGER.warning(
+                "Provider setup failed for %s: %s. Coordinator will be "
+                "created but data will be unavailable until the lock "
+                "comes online. Setup will be retried when the lock "
+                "integration reconnects.",
+                self.lock.entity_id,
+                err,
+            )
+        except LockCodeManagerProviderError as err:
+            LOGGER.error(
+                "Provider setup failed validation for %s: %s. Entities "
+                "will be created but unavailable; validation is retried "
+                "when the lock's integration reloads or reconnects.",
+                self.lock.entity_id,
+                err,
+            )
+            self._report_setup_validation_failure(err)
 
-                if not self.coordinator.last_update_success:
-                    LOGGER.info(
-                        "Failed to fetch initial data for lock %s: %s. "
-                        "Entities will be created but unavailable until lock is ready.",
+        lock_entity_id = self.lock.entity_id
+        # Track the provider's config entry (e.g., zwave_js) so we can resubscribe
+        # when that integration reloads or reconnects.
+        self._setup_config_entry_state_listener()
+
+        if self.coordinator is not None:
+            self._create_background_task(
+                self.coordinator.async_request_refresh(),
+                f"Refresh coordinator for {lock_entity_id}",
+            )
+        else:
+            self.coordinator = coordinator
+            # Bounded, unlike the write path. Setup runs while Home
+            # Assistant holds this entry's lock, so a read that never
+            # returns parks it in `setup_in_progress` and takes reload and
+            # remove down with it -- the same trap `async_stop`'s bounded
+            # wait exists for, at the other end of the lifecycle.
+            #
+            # Cancelling a READ is safe: it mutates nothing, so there is no
+            # half-written sequence to leave behind. That is what makes a
+            # deadline right here and wrong around a write.
+            #
+            # Sized to a walk of every managed slot because that is what
+            # the first read is, and a second, smaller number would give up
+            # on a slow-but-working lock.
+            refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
+            try:
+                async with asyncio.timeout(refresh_budget):
+                    # Records a failure rather than raising it; reported
+                    # by the check below.
+                    await self.coordinator.async_refresh()
+            except TimeoutError:
+                # The coordinator already recorded the cancellation this
+                # timeout raised through it -- but it recorded a bare
+                # CancelledError, which formats as the empty string and
+                # would leave the report below saying nothing at all.
+                self.coordinator.async_set_update_error(
+                    TimeoutError(f"no answer within {refresh_budget:.0f}s")
+                )
+
+            if not self.coordinator.last_update_success:
+                LOGGER.info(
+                    "Failed to fetch initial data for lock %s: %s. "
+                    "Entities will be created but unavailable until lock is ready.",
+                    lock_entity_id,
+                    self.coordinator.last_exception,
+                )
+
+            if self.supports_push:
+                if (
+                    self.lock_config_entry
+                    and self.lock_config_entry.state != ConfigEntryState.LOADED
+                ):
+                    LOGGER.debug(
+                        "Lock %s: deferring push subscription until config entry is loaded",
                         lock_entity_id,
-                        self.coordinator.last_exception,
                     )
-
-                if self.supports_push:
-                    if (
-                        self.lock_config_entry
-                        and self.lock_config_entry.state != ConfigEntryState.LOADED
-                    ):
-                        LOGGER.debug(
-                            "Lock %s: deferring push subscription until config entry is loaded",
-                            lock_entity_id,
-                        )
-                    else:
-                        self.subscribe_push_updates()
-        finally:
-            self._setup_complete.set()
+                else:
+                    self.subscribe_push_updates()
 
     async def _async_run_provider_setup(self, config_entry: ConfigEntry) -> None:
         """
@@ -967,12 +849,13 @@ class BaseLock:
         if self.supports_native_users:
             # Bounded like the initial read, and for the same reason: setup
             # runs while Home Assistant holds the entry's lock, and this probe
-            # goes through neither `_execute_rate_limited` nor any budget of
-            # the provider's own -- `MatterLock.async_get_capabilities` awaits
+            # goes through neither the lock's worker nor any budget of the
+            # provider's own -- `MatterLock.async_get_capabilities` awaits
             # `get_lock_info` bare. A probe is a read, so cancelling it is
             # safe.
             caps = await self._get_cached_capabilities()
-            if CredentialType.PIN not in caps.credential_types:
+            self.pin_unsupported = CredentialType.PIN not in caps.credential_types
+            if self.pin_unsupported:
                 # A degenerate-but-successful probe was just cached;
                 # invalidate it so the reconnect-path revalidation
                 # re-probes instead of serving the failed read forever.
@@ -1052,7 +935,7 @@ class BaseLock:
         self._setup_running = True
         try:
             await self._async_run_provider_setup(self._lcm_config_entry)
-        except LockDisconnected, LockOperationFailed, TimeoutError:
+        except LockOperationError, TimeoutError:
             # TimeoutError because the capability probe is bounded: a lock that
             # answers nothing is a connectivity failure like any other, and it
             # has to re-arm the deferred flag. Letting it escape instead would
@@ -1107,11 +990,6 @@ class BaseLock:
         and again on every provider integration reconnect. Clean up any
         previous state before re-initializing.
         """
-
-    @final
-    async def async_wait_for_setup(self) -> None:
-        """Wait until async_setup has completed."""
-        await self._setup_complete.wait()
 
     async def async_unload(self, remove_permanently: bool) -> None:
         """Tear down config-entry-state listener, reconnect task, and push subscription."""
@@ -1187,6 +1065,26 @@ class BaseLock:
 
     @final
     @callback
+    def _create_background_task[T](
+        self, target: Coroutine[Any, Any, T], name: str
+    ) -> asyncio.Task[T]:
+        """
+        Run ``target`` until the lock's integration unloads.
+
+        Tied to that integration's config entry, so its unload or reload
+        cancels the task rather than leaving it to talk to a torn-down
+        integration; the reconnect a reload calls for starts only once the
+        entry is LOADED again, after the cancelling. A lock with no config
+        entry (the virtual lock) runs it until Home Assistant stops.
+        """
+        if self.lock_config_entry is None:
+            return self.hass.async_create_background_task(target, name)
+        return self.lock_config_entry.async_create_background_task(
+            self.hass, target, name
+        )
+
+    @final
+    @callback
     def _async_start_reconnect(self) -> None:
         """
         Run the integration-loaded path, superseding any reconnect in flight.
@@ -1205,7 +1103,7 @@ class BaseLock:
             self._reconnect_task.add_done_callback(self._drain_superseded_reconnect)
             if not self._reconnect_task.done():
                 self._reconnect_task.cancel()
-        self._reconnect_task = self.hass.async_create_task(
+        self._reconnect_task = self._create_background_task(
             self._async_on_integration_loaded(),
             f"Provider reconnect for {self.lock.entity_id}",
         )
@@ -1251,7 +1149,7 @@ class BaseLock:
         outage was at the network or the device layer -- a node that comes
         back while the integration stayed connected drives the same
         resubscribe/refresh transition as an integration reconnect, instead of
-        waiting out the connectivity breaker's backoff probe (issue #1257).
+        waiting out the worker's backoff probe (issue #1257).
         """
         is_up = (
             await self.async_is_integration_connected()
@@ -1299,7 +1197,7 @@ class BaseLock:
             return
         if self._last_connection_up is False and is_up:
             if self.coordinator:
-                self.hass.async_create_task(
+                self._create_background_task(
                     self.coordinator.async_request_refresh(),
                     f"Refresh coordinator for {self.lock.entity_id} after reconnect",
                 )
@@ -1315,37 +1213,18 @@ class BaseLock:
 
         ``slots`` names the slots whose device state must be re-read; ``None``
         means everything. The returned projection is never narrowed by it:
-        the coordinator replaces its data with what comes back, so a read
-        must still name every managed slot. A provider that reads the whole
-        device in one call may ignore ``slots``. One that keeps a cache
+        a read must still name every managed slot. A provider that reads the
+        whole device in one call may ignore ``slots``. One that keeps a cache
         re-reads only ``slots`` and projects the rest from the cache: the
-        coordinator's confirmation read asks about the one or two slots with
-        a write pending, and on a marginal radio link the difference between
-        one command and a walk of the lock is the difference between
-        confirming the write and never confirming it. One with no cache
-        re-reads every managed slot plus ``slots``.
+        worker's read-back after a write asks about the one slot written, and
+        on a marginal radio link the difference between one command and a
+        walk of the lock is the difference between confirming the write and
+        never confirming it. One with no cache re-reads every managed slot
+        plus ``slots``.
         """
         self._raise_not_implemented(
             "async_hard_refresh_codes",
             "Override this method to re-fetch codes from the lock device.",
-        )
-
-    @final
-    async def async_internal_hard_refresh_codes(
-        self, slots: Collection[int] | None = None
-    ) -> dict[int, SlotCredential]:
-        """Rate-limited wrapper around async_hard_refresh_codes()."""
-        # A provider with no cache re-reads every managed slot plus ``slots``
-        # (the answer has to name them all); one with a cache re-reads only
-        # ``slots``. Declaring the union covers both without cutting either
-        # off partway.
-        return await self._execute_rate_limited(
-            "refresh",
-            self.async_hard_refresh_codes,
-            slots,
-            exchanges=len(
-                self.managed_slots if slots is None else self.managed_slots | set(slots)
-            ),
         )
 
     async def async_set_usercode(
@@ -1379,80 +1258,7 @@ class BaseLock:
             source=source,
         )
 
-    @final
-    async def async_internal_set_usercode(
-        self,
-        code_slot: int,
-        usercode: str,
-        name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
-    ) -> None:
-        """Set a usercode on a code slot."""
-        # Discarded BEFORE the write: a set that raises may still have landed
-        # -- the verification read is what times out -- and a slot still
-        # remembered as cleared would be reported cleared while it holds a
-        # working code.
-        self._cleared_slots.discard(code_slot)
-        LOGGER.debug(
-            "Setting usercode on %s slot %s (pin=%s, source=%s)",
-            self.lock.entity_id,
-            code_slot,
-            self.mask_pin(usercode, code_slot),
-            source,
-        )
-
-        await self._assert_slot_within_capacity(code_slot)
-
-        def _pre_execute_checks() -> None:
-            """Check for duplicate PINs and firmware-rejected codes, atomically inside the lock."""
-            # Clear the firmware-rejection flag first so it doesn't persist
-            # if _check_duplicate_code raises its own DuplicateCodeError
-            firmware_rejected = code_slot in self._rejected_code_slots
-            self._rejected_code_slots.discard(code_slot)
-            self._check_duplicate_code(code_slot, str(usercode))
-            if firmware_rejected:
-                raise DuplicateCodeError(
-                    code_slot=code_slot,
-                    lock_entity_id=self.lock.entity_id,
-                )
-
-        result: WriteResult = await self._execute_rate_limited(
-            "set",
-            self.async_set_usercode,
-            code_slot,
-            usercode,
-            pre_execute=_pre_execute_checks,
-            # A native-user provider may name the user, write the credential
-            # and roll the user back again: three exchanges, not one.
-            exchanges=3 if self.supports_native_users else 1,
-            name=name,
-            source=source,
-        )
-        if self.coordinator is None or not result.changed:
-            return
-        address = pin_address(code_slot)
-        if result is WriteResult.OPTIMISTIC:
-            # Ambiguous: the driver most likely stored it but could not say.
-            # Record it pending with the value believed, and let the
-            # coordinator read the lock back -- some stacks send no confirming
-            # push for an ambiguous write, so waiting passively would let the
-            # breaker suspend a slot whose code actually landed.
-            self.coordinator.record_write(address, str(usercode), believed=True)
-        elif self.supports_push:
-            # The provider's own push (or the driver's event) is the lock's
-            # word for the write. Any older pending write to the slot is
-            # superseded by it.
-            self.coordinator.drop_pending(address)
-        else:
-            # A polled lock has nothing to vouch for the write but a later
-            # read: "confirmed" here is the cloud service accepting it, not
-            # the lock reporting it. Record it pending; the coordinator reads
-            # the lock back and settles it -- for any slot, managed or not.
-            self.coordinator.record_write(address, str(usercode), believed=False)
-
-    async def async_clear_usercode(
-        self, code_slot: int, *, adopt_untagged: bool = True
-    ) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """
         Clear a usercode on a code slot via the User->Credential primitives.
 
@@ -1468,16 +1274,18 @@ class BaseLock:
         is removed from LCM config (see ``async_release_managed_slot``).
         Returns True if the value changed, False if it was already cleared
         -- and True when the provider cannot determine whether a change
-        occurred, so the coordinator refreshes and verifies the actual
-        state.
+        occurred. Either way the worker reads the slot back.
 
-        ``adopt_untagged`` is what separates a clear from a release. Clearing
-        a slot LCM still manages may adopt an untagged owner: the slot is
-        ours, adoption is how a pre-tag install is taken over, and the write
-        that follows corrects a wrong guess. Releasing a slot LCM no longer
-        manages may not -- the premise has inverted, nothing follows to
-        correct anything, and the untagged user at that index is as likely to
-        be somebody else's as ours.
+        A clear adopts no untagged user (#1518). Adoption belongs to the set
+        path, where the write that follows tags the user and corrects a wrong
+        guess; a clear is an end state -- a slot turned off or released --
+        and nothing follows it to correct anything. The untagged user holding
+        a PIN at that index is as likely to be one the homeowner made in the
+        vendor's app as ours. The cost: a pre-tag install's PIN in a slot
+        that is off stays on the lock until the slot is turned on again and
+        the write adopts it. The exception is a lock that keeps no user
+        records (a Z-Wave User Code lock): no user there can carry a tag, so
+        the slot is the identity.
         """
         if not self.supports_native_users:
             ref = CredentialRef(
@@ -1485,11 +1293,9 @@ class BaseLock:
             )
             return await self.async_delete_credential(ref)
 
-        # Owner resolution is two-pass to match the same identity rule the
-        # set path uses (see Matter's _find_user_index_for_slot). The
-        # canonical pass matches by the ``lcm:<slot>:`` tag in user.name;
-        # the fallback adopts installs from before user-tag matching,
-        # where ``credential.slot`` was pinned to the LCM slot. Matching
+        # Owner resolution matches by the ``lcm:<slot>:`` tag in user.name,
+        # falling back to the slot only on a lock with no user records,
+        # where ``credential.slot`` is the LCM slot. Matching
         # by ``credential.slot == code_slot`` alone is unsafe once
         # providers let the lock auto-allocate the credential index -- a
         # tagged user for slot A whose credential lands at index B would
@@ -1511,19 +1317,17 @@ class BaseLock:
                 if credential.slot == code_slot
             )
         except StopIteration:
-            owner_user_id = (
-                next(
-                    (
-                        user.user_id
-                        for user in users
-                        if parse_tag(user.name or "")[0] is None
-                        for credential in user.pin_credentials
-                        if credential.slot == code_slot
-                    ),
-                    None,
-                )
-                if adopt_untagged
-                else None
+            if await self._supports_user_records():
+                return False
+            owner_user_id = next(
+                (
+                    user.user_id
+                    for user in users
+                    if parse_tag(user.name or "")[0] is None
+                    for credential in user.pin_credentials
+                    if credential.slot == code_slot
+                ),
+                None,
             )
         if owner_user_id is None:
             # No user owns this slot's credential -- nothing to clear.
@@ -1533,55 +1337,6 @@ class BaseLock:
             user_id=owner_user_id, type=CredentialType.PIN, slot=code_slot
         )
         return await self._delete_credential(ref)
-
-    @final
-    async def async_internal_clear_usercode(
-        self,
-        code_slot: int,
-        source: Literal["sync", "direct"] = "direct",
-        *,
-        adopt_untagged: bool = True,
-    ) -> bool:
-        """
-        Clear a usercode on a code slot.
-
-        Returns whether the provider actually changed anything. A clear that
-        found nothing to clear has told the caller nothing about what the
-        slot holds.
-        """
-        LOGGER.debug(
-            "Clearing usercode on %s slot %s (source=%s)",
-            self.lock.entity_id,
-            code_slot,
-            source,
-        )
-        changed = await self._execute_rate_limited(
-            "clear",
-            partial(self.async_clear_usercode, adopt_untagged=adopt_untagged),
-            code_slot,
-            # A native-user provider reads every user first to find whose
-            # credential this is; on a provider that walks the lock that is one
-            # exchange per managed slot on top of the clear itself.
-            exchanges=(
-                len(self.managed_slots) + 1 if self.supports_native_users else 1
-            ),
-        )
-        # A clear that ran supersedes any write pending on this slot. One that
-        # raised superseded nothing: the write stays pending, so a believed
-        # value it pushed is not taken as verified on the strength of a clear
-        # that never reached the lock.
-        if self.coordinator is not None:
-            self.coordinator.drop_pending(pin_address(code_slot))
-        # Only a clear that changed something is evidence about the slot. A
-        # provider that found nothing to clear has said nothing about what is
-        # there.
-        if changed:
-            self._cleared_slots.add(code_slot)
-        else:
-            self._cleared_slots.discard(code_slot)
-        if changed and self.coordinator and not self.supports_push:
-            await self.coordinator.async_request_refresh()
-        return bool(changed)
 
     async def _project_users_to_slots(
         self,
@@ -1596,9 +1351,9 @@ class BaseLock:
         none -- mapped to ``SlotCredential.empty()``
         and then overlays the credentials of ``credential_type`` read via
         ``async_get_users``. This preserves the slot-keyed contract the
-        coordinator, sync manager, and slot entities depend on -- a
-        managed slot missing from the map is treated as unavailable, not
-        empty, so the empty placeholders are load-bearing. Occupied slots
+        lock's worker and the slot entities depend on -- a managed slot
+        missing from the map is read as silent (nothing said), not empty, so
+        the empty placeholders are load-bearing. Occupied slots
         the lock reports that are not managed are surfaced too.
         Credentials of other types are dropped here -- the seam keeps
         everything below it slot-shaped and single-type this round.
@@ -1621,12 +1376,25 @@ class BaseLock:
         """
         scope = self.managed_slots if slots is None else slots
         codes = {slot: SlotCredential.empty() for slot in scope}
+        users = await self.async_get_users(slots)
         codes.update(
             {
                 credential.slot: credential.state
-                for user in await self.async_get_users(slots)
+                for user in users
                 for credential in user.credentials_of_type(credential_type)
             }
+        )
+        # Still in the map: what the lock holds counts for occupancy and the
+        # views. Only a lock with user records can tag a user; on one without
+        # (Z-Wave User Code), the slot is the identity. From what setup probed,
+        # so a read asks the lock nothing more.
+        caps = self.cached_capabilities
+        self.last_foreign_slots = (
+            foreign_slots(users)
+            if self.supports_native_users
+            and caps is not None
+            and _keeps_user_records(caps)
+            else frozenset()
         )
         return codes
 
@@ -1638,14 +1406,14 @@ class BaseLock:
 
         Thin Personal-Identification-Number-shaped wrapper over
         ``_project_users_to_slots``; preserved as a stable name because
-        the coordinator, sync manager, and slot entities are all
+        the lock's worker and the slot entities are all
         Personal Identification Number-scoped today.
 
         ``slots`` replaces the set of slots this integration manages, for
         callers asking what the lock holds rather than what this integration
         put there. It can be wider or narrower, so a scoped result is not
-        the coordinator's contract and must not be handed to it: a managed
-        slot missing from a narrow read reads as unavailable, not empty. Everything read-repairing happens on
+        the worker's contract and must not be handed to it: a managed
+        slot missing from a narrow read reads as silent, not empty. Everything read-repairing happens on
         this side of the seam, so a caller asking a wider question gets the
         repairs too -- which is why occupancy is derived from here and not
         read separately.
@@ -1684,8 +1452,7 @@ class BaseLock:
         False covers both no-user-management locks and the implicit-user
         case (e.g. Z-Wave User Code CC: the user IS the credential).
         """
-        caps = await self._get_cached_capabilities()
-        return caps.supports_user_management and caps.max_user_name_length > 0
+        return _keeps_user_records(await self._get_cached_capabilities())
 
     async def _build_tagged_user_name(
         self, slot: int, display: str | None
@@ -1695,18 +1462,21 @@ class BaseLock:
 
         Emits ``lcm:{slot}:{display}`` (canonical format from
         :func:`._util.make_tagged_name`) and truncates the display portion
-        so the overall length fits ``max_user_name_length``. The tag prefix
+        so the overall length fits ``max_user_name_length``. Length is
+        whatever :meth:`_user_name_length` counts -- characters by default,
+        UTF-8 bytes on Matter -- and the display is cut a whole character
+        at a time, never mid-character. The tag prefix
         is sacred -- it's how :func:`._util.parse_tag` recovers the slot
         binding on subsequent reads -- so when the full prefix fits,
         truncation only ever shortens the user-supplied display.
 
         When the lock's limit can't even fit the canonical prefix
-        (``len("lcm:{slot}:") > max_user_name_length``), the helper
+        (``_user_name_length("lcm:{slot}:") > max_user_name_length``), the helper
         falls back to writing just the slot number as the user name
         (``str(slot)``). :func:`._util.parse_tag` recognizes
         digit-only names as a length-constrained encoding of the slot
         binding. If even the slot digits don't fit
-        (``len(str(slot)) > max_user_name_length``, e.g. slot 255 on a
+        (``_user_name_length(str(slot)) > max_user_name_length``, e.g. slot 255 on a
         2-char-limit lock), the helper returns ``None`` rather than
         truncating the slot to a different number and silently
         mis-binding the user. The seam treats ``None`` as "leave name
@@ -1732,25 +1502,34 @@ class BaseLock:
         """
         try:
             caps = await self._get_cached_capabilities()
-        except LockDisconnected, LockOperationFailed:
+        except LockOperationError:
             return None
         if not caps.supports_user_management or caps.max_user_name_length <= 0:
             return None
+        limit = caps.max_user_name_length
         tagged = make_tagged_name(slot, display)
-        if len(tagged) <= caps.max_user_name_length:
+        if self._user_name_length(tagged) <= limit:
             return tagged
-        if len(f"lcm:{slot}:") > caps.max_user_name_length:
+        if self._user_name_length(f"lcm:{slot}:") > limit:
             # Canonical prefix doesn't fit. Try the slot-only fallback so
             # the slot binding survives the read; if the slot digits
             # themselves can't fit either, return ``None`` rather than
             # truncate the slot number to a different one and mis-bind
             # the user.
             slot_str = str(slot)
-            if len(slot_str) > caps.max_user_name_length:
+            if self._user_name_length(slot_str) > limit:
                 return None
             return slot_str
-        # Canonical prefix fits; truncate only the display portion.
-        return tagged[: caps.max_user_name_length]
+        # Canonical prefix fits; truncate only the display portion, a whole
+        # character at a time.
+        while self._user_name_length(tagged) > limit:
+            tagged = tagged[:-1]
+        return tagged
+
+    @staticmethod
+    def _user_name_length(name: str) -> int:
+        """Return ``name``'s length as the lock counts it against its limit."""
+        return len(name)
 
     async def _assert_credential_type_supported(self, credential: Credential) -> None:
         """
@@ -1939,15 +1718,24 @@ class BaseLock:
         await self._assert_credential_ref_supported(ref)
         return await self.async_delete_credential(ref)
 
-    async def async_release_managed_slot(self, slot: int) -> None:
+    async def async_release_managed_slot(
+        self, slot: int, *, written: bool = False
+    ) -> None:
         """
         Release any lock-side state LCM owns for ``slot``.
 
-        Called by ``__init__.py``'s teardown path once a slot is removed
-        from LCM config (per the user-tag idempotency design's lifecycle
-        decoupling: a lock-side user is the slot's persistent anchor and
-        survives PIN clear/rewrite cycles, so it can only be torn down
-        when the slot itself is removed from LCM management).
+        ``written`` says whether Lock Code Manager's store showed a PIN it
+        wrote to ``slot`` on this lock when the release began. A provider
+        that finds nothing of its own to release uses it to tell a slot LCM
+        never put a code in (nothing to say) from one whose code it can no
+        longer recognize (worth a warning).
+
+        Sent by the lock's worker as the clear of a slot no entry manages
+        any more (``ProviderPort.release``): a lock-side user is the slot's
+        persistent anchor and survives PIN clear/rewrite cycles, so it can
+        only be torn down when the slot itself leaves LCM management. A
+        release is retried like any clear and held after its tries; errors
+        must propagate, not be swallowed.
 
         Clears the credential. A slot-only provider has no user record,
         but the credential IS lock-side state this integration owns, and
@@ -1955,21 +1743,14 @@ class BaseLock:
         door -- and that the slot number can never be reissued, because
         allocation refuses to write over a code it can still read.
 
-        Providers that anchor a slot to a lock-side user (Matter,
-        eventually Z-Wave User Credential CC) override this to delete
-        that user instead; the cascade defined by the lock's protocol
-        removes its credentials, so they must not also clear here.
+        Providers that anchor a slot to a lock-side user (Matter, Z-Wave
+        User Credential CC) override this to remove only what LCM wrote to
+        that user: its PIN, and the user itself only when it holds nothing
+        else -- deleting a user cascades to every credential on it, a card
+        or PIN added in the vendor's app among them. They do not also clear
+        here.
         """
-        # Adopts no untagged user (see ``async_clear_usercode``): a slot LCM
-        # no longer manages has no claim on whoever owns the credential at
-        # that index. Unless the lock keeps no user records (a Z-Wave User
-        # Code lock): no user there can carry a tag, the slot is the
-        # identity, and it was this integration's until now.
-        await self.async_internal_clear_usercode(
-            slot,
-            adopt_untagged=self.supports_native_users
-            and not await self._supports_user_records(),
-        )
+        await self.async_clear_usercode(slot)
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """
@@ -2040,8 +1821,7 @@ class BaseLock:
         ``WriteResult.CONFIRMED`` when the lock acknowledged the write, and
         ``WriteResult.OPTIMISTIC`` when the result is ambiguous (the write may
         have landed but is unconfirmed -- e.g. a write-only/masked lock). The
-        outcome drives the coordinator refresh and the verified/unverified
-        slot lifecycle.
+        core does not act on the result: the worker reads every write back.
         """
         self._raise_not_implemented(
             "async_set_credential",
@@ -2085,10 +1865,10 @@ class BaseLock:
         provider reports, so an unmanaged occupied slot stays visible on the
         default path. A caller that needs the answer bounded must bound it.
 
-        A wide scope is the caller's to justify. The whole read is one
-        rate-limited operation, so on a per-index provider it holds the
-        operation lock for every round trip it makes -- blocking the poll
-        and any set or clear behind it for as long as that takes.
+        A wide scope is the caller's to justify. The whole read is one job
+        in the lock's worker, so on a per-index provider it holds the lock's
+        turn for every round trip it makes -- blocking the poll and any set
+        or clear behind it for as long as that takes.
         """
         self._raise_not_implemented(
             "async_get_users",
@@ -2152,80 +1932,6 @@ class BaseLock:
         )
 
     @final
-    async def async_internal_get_usercodes(
-        self, slots: Collection[int] | None = None
-    ) -> dict[int, SlotCredential]:
-        """
-        Rate-limited wrapper around async_get_usercodes().
-
-        ``slots`` widens or narrows the read's scope; left unset, the provider
-        reads its managed slots. The coordinator's confirmation read names the
-        pending addresses too, so a write to a slot nothing manages is still
-        asked about.
-        """
-        if slots is None:
-            return await self._execute_rate_limited(
-                "get", self.async_get_usercodes, exchanges=len(self.managed_slots)
-            )
-        return await self._execute_rate_limited(
-            "get", self.async_get_usercodes, slots, exchanges=len(slots)
-        )
-
-    @final
-    async def async_internal_get_occupied_indices(
-        self, indices: Collection[int]
-    ) -> frozenset[int] | None:
-        """
-        Return which of ``indices`` this lock holds, or None.
-
-        Takes the numbers to ask about rather than a ceiling, so a caller
-        widening its search can ask only about what it has not asked about
-        yet. On a lock that answers one index per round trip, asking again
-        from one would cost it the whole range every time.
-
-        These are slot numbers, not device credential indices. The two
-        coincide on every provider where allocation consults this, because
-        it only consults locks whose credential index IS the slot number
-        (``credential_index_follows_slot``). Matter is the exception both
-        ways: it allocates its own index, so allocation does not consult it,
-        and the number reported here is the Lock Code Manager slot from the
-        user's tag -- or, for a user this integration never tagged, the raw
-        Matter credential index standing in for one.
-
-        Derived from ``async_get_usercodes`` rather than read separately, so
-        that whatever a provider does to make its read honest -- Z-Wave's
-        User Code CC occupancy overlay, most of all -- applies here too. A
-        second read path would have to repeat every one of those repairs, and
-        the one it missed would report an occupied slot as free.
-
-        An index whose value could not be read still counts as occupied: it
-        holds something, and over-reserving costs a user a slot number, while
-        under-reserving costs them the code on their door.
-
-        ``None`` means the lock could not be read at all, which callers must
-        treat as unknown rather than free.
-        """
-        wanted = frozenset(indices)
-        if not wanted:
-            return frozenset()
-        try:
-            codes = await self._execute_rate_limited(
-                "get", partial(self.async_get_usercodes, wanted), exchanges=len(wanted)
-            )
-        except LockCodeManagerError as err:
-            _LOGGER.debug(
-                "Could not read occupied indices from %s: %s",
-                self.lock.entity_id,
-                err,
-            )
-            return None
-        return frozenset(
-            slot
-            for slot, credential in codes.items()
-            if credential.is_present and slot in wanted
-        )
-
-    @final
     async def async_call_service(
         self,
         domain: str,
@@ -2234,6 +1940,7 @@ class BaseLock:
         target: dict[str, Any] | None = None,
         blocking: bool = True,
         return_response: bool = False,
+        code_slot: int | None = None,
     ) -> dict[str, Any] | None:
         """
         Call a hass service and re-raise failures as LockDisconnected.
@@ -2242,6 +1949,12 @@ class BaseLock:
         dict) so callers don't have to write their own service-call wrapper
         just to access response data. ``target`` mirrors HA's standard
         target dict for platform-aware services.
+
+        A write passes its ``code_slot``: the integration's own
+        ``ServiceValidationError`` is then the lock refusing the code, raised
+        as ``CodeRejectedError``. Home Assistant's own (the action not found,
+        the integration's entry not loaded, the entity not supporting it) is
+        not the lock's answer, and stays a failed operation.
         """
         try:
             return await self.hass.services.async_call(
@@ -2270,26 +1983,19 @@ class BaseLock:
             LOGGER.error(
                 "Error calling %s.%s service call: %s", domain, service, str(err)
             )
+            if (
+                code_slot is not None
+                and isinstance(err, ServiceValidationError)
+                and err.translation_domain != HOMEASSISTANT_DOMAIN
+            ):
+                raise CodeRejectedError(
+                    code_slot=code_slot,
+                    lock_entity_id=self.lock.entity_id,
+                    reason=f"{domain}.{service} refused: {err}",
+                ) from err
             raise LockOperationFailed(
                 f"Service call {domain}.{service} failed: {err}"
             ) from err
-
-    @final
-    @final
-    def last_write_was_clear(self, code_slot: int) -> bool:
-        """
-        Return whether the last write this integration made here was a clear.
-
-        The only evidence a clear landed on a lock that reports a slot
-        occupied without saying what it holds. Kept on the provider rather
-        than in the sync manager because every write funnels through here,
-        including the ones a service call makes directly -- a memory the sync
-        manager kept could not see those and would go stale.
-
-        In memory only, so a restart forgets and the slot is cleared once
-        more rather than assumed.
-        """
-        return code_slot in self._cleared_slots
 
     @property
     def managed_slots(self) -> set[int]:

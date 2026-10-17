@@ -2,17 +2,17 @@
 Z-Wave JS lock provider.
 
 Handles push updates via access-control credential node events and operation
-notifications for lock/unlock state changes. See ARCHITECTURE.md for the
+notifications for lock/unlock state changes. See AGENTS.md for the
 provider's role in the data flow.
 """
 
-from __future__ import annotations
-
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterator
+import contextlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, Literal
+import time
+from typing import Any, Literal, override
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
@@ -29,6 +29,7 @@ from zwave_js_server.const.command_class.notification import (
     NotificationType,
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
+from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 from zwave_js_server.util.lock import get_code_slot_value, get_usercodes
 
@@ -49,17 +50,18 @@ from homeassistant.const import ATTR_DEVICE_ID
 from homeassistant.core import Event, callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
     SetUserResult,
+    SlotCredential,
     User,
     WriteResult,
 )
-from ..domain.exceptions import (
+from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
     LockCodeManagerProviderError,
@@ -67,11 +69,37 @@ from ..domain.exceptions import (
     LockOperationFailed,
     LockOperationUnsupported,
 )
-from ..domain.models import SlotCredential
 from ._base import BaseLock
-from ._util import is_masked_code, parse_tag
+from ._util import is_masked_code, parse_tag, refuses_write_in_flight
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _timed(entity_id: str, slot: int, op: str) -> Iterator[None]:
+    """
+    Log how long one call to the driver took, and how it ended.
+
+    The result is ``ok``, or the error's translation key (the Supervision
+    status HA mapped it to) or its type: never the PIN.
+    """
+    start = time.monotonic()
+    result = "ok"
+    try:
+        yield
+    except BaseException as err:
+        result = getattr(err, "translation_key", None) or type(err).__name__
+        raise
+    finally:
+        _LOGGER.debug(
+            "%s slot %s: driver %s %s in %.0f ms",
+            entity_id,
+            slot,
+            op,
+            result,
+            (time.monotonic() - start) * 1000,
+        )
+
 
 # Numeric ``ZWaveErrorCodes`` values from node-zwave-js. zwave-js-server-python
 # surfaces the code as a bare int on ``FailedZWaveCommand.zwave_error_code``
@@ -212,17 +240,25 @@ class ZWaveJSLock(BaseLock):
         except ValueError as err:
             raise LockDisconnected(f"Z-Wave JS node unavailable: {err}") from err
 
+    # The plain read is the driver's value cache; only a hard refresh asks the node.
+    fresh_read_is_hard_refresh = True
+    # A dead node's commands are queued and land whenever it comes back.
+    check_available_before_exchange = True
+
     @property
+    @override
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
         return True
 
     @property
+    @override
     def connection_check_interval(self) -> timedelta | None:
         """Z-Wave JS exposes config entry state changes, so skip polling."""
         return None
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Disable periodic drift detection: Z-Wave is event-driven end to end.
@@ -233,12 +269,13 @@ class ZWaveJSLock(BaseLock):
         anyway, so it would not even resolve the slot it claims to protect. LCM
         does not chase silent out-of-band changes, so the hourly poll earned its
         keep for neither readability nor occupancy. Hard refresh is still used on
-        demand (initial load, missing/unknown slots) and by the per-write
-        confirmation read -- just not on a timer.
+        demand (initial load, missing/unknown slots) and by the worker's
+        read-back after each write -- just not on a timer.
         """
         return None
 
     @property
+    @override
     def supports_native_users(self) -> bool:
         """Return True: this provider implements the credential primitives."""
         return True
@@ -265,6 +302,20 @@ class ZWaveJSLock(BaseLock):
             return SlotCredential.unreadable()
         return SlotCredential.known(code)
 
+    async def _async_read_access_control(
+        self,
+    ) -> tuple[list[UserData], list[CredentialData]]:
+        """Return the driver's cached users and credentials, every type kept."""
+        try:
+            users = await self.node.access_control.get_users_cached()
+            credentials = await self.node.access_control.get_all_credentials_cached()
+        except BaseZwaveJSServerError as err:
+            raise _mapped_zwave_error(err, "get users failed") from err
+        except HomeAssistantError as err:
+            raise LockOperationFailed(f"get users failed: {err}") from err
+        return users, credentials
+
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read every user and all of their credentials from the lock.
@@ -290,13 +341,7 @@ class ZWaveJSLock(BaseLock):
         unified API models each User Code CC slot as an implicit user
         carrying its single PIN credential.
         """
-        try:
-            users = await self.node.access_control.get_users_cached()
-            credentials = await self.node.access_control.get_all_credentials_cached()
-        except BaseZwaveJSServerError as err:
-            raise _mapped_zwave_error(err, "get users failed") from err
-        except HomeAssistantError as err:
-            raise LockOperationFailed(f"get users failed: {err}") from err
+        users, credentials = await self._async_read_access_control()
         users_by_id: dict[int, User] = {
             user.user_id: User(
                 user_id=user.user_id,
@@ -326,6 +371,7 @@ class ZWaveJSLock(BaseLock):
             )
         return list(users_by_id.values())
 
+    @override
     async def async_get_usercodes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -352,7 +398,7 @@ class ZWaveJSLock(BaseLock):
         credential from the unified read rather than returning it with no
         value. The slot then projects to ``empty()``, which tells the sync
         layer the write definitively did not land -- so it rewrites, fails
-        to confirm again, and the circuit breaker suspends a slot whose
+        to confirm again, and the slot is held after its tries although its
         Personal Identification Number works on the keypad (issue #1397).
 
         ``userIdStatus`` is the occupancy authority and the credential
@@ -382,6 +428,7 @@ class ZWaveJSLock(BaseLock):
                 codes[slot] = SlotCredential.unreadable()
         return codes
 
+    @override
     async def async_get_capabilities(self) -> LockCapabilities:
         """
         Report the lock's user/credential capabilities via the unified API.
@@ -505,6 +552,7 @@ class ZWaveJSLock(BaseLock):
             return False
         return True
 
+    @override
     async def async_set_user(self, user: User) -> SetUserResult:
         """
         Find-or-create the lock user for the LCM slot encoded in ``user.name``.
@@ -565,7 +613,9 @@ class ZWaveJSLock(BaseLock):
                 return slot
         return user.user_id
 
-    async def _find_user_index_for_slot(self, slot: int) -> int | None:
+    async def _find_user_index_for_slot(
+        self, slot: int, *, adopt_untagged: bool = True
+    ) -> int | None:
         """
         Return the lock ``user_id`` LCM owns for ``slot``, if any.
 
@@ -589,16 +639,28 @@ class ZWaveJSLock(BaseLock):
            ANY LCM slot, so a user tagged for slot A is never adopted as
            slot B's anchor.
 
+        ``adopt_untagged=False`` skips the legacy pass: the release path
+        deletes what it finds, so it must never find a user LCM did not tag.
+        It also takes a bare-digit name for LCM's only where LCM would have
+        written one -- a lock whose name limit cannot fit ``lcm:<slot>:``
+        (``_build_tagged_user_name``). Anywhere else a user named ``3`` is
+        the homeowner's, and deleting it would delete their codes.
+
         Returns ``None`` when neither lookup matches.
         """
         users = await self.async_get_users()
+        digits_ours = adopt_untagged or await self._names_slot_only(slot)
         try:
             return next(
                 existing.user_id
                 for existing in users
-                if existing.name and parse_tag(existing.name)[0] == slot
+                if existing.name
+                and parse_tag(existing.name)[0] == slot
+                and (digits_ours or not existing.name.isdecimal())
             )
         except StopIteration:
+            if not adopt_untagged:
+                return None
             return next(
                 (
                     existing.user_id
@@ -611,6 +673,118 @@ class ZWaveJSLock(BaseLock):
                 None,
             )
 
+    async def _names_slot_only(self, slot: int) -> bool:
+        """Return whether LCM names ``slot``'s user with the bare slot number here."""
+        caps = await self._get_cached_capabilities()
+        return self._user_name_length(f"lcm:{slot}:") > caps.max_user_name_length
+
+    @override
+    async def async_release_managed_slot(
+        self, slot: int, *, written: bool = False
+    ) -> None:
+        """
+        Remove LCM's PIN from its tagged user for ``slot``; clear a User Code slot.
+
+        A User Credential lock keeps a user record per slot, tagged
+        ``lcm:<slot>:``, holding the PIN LCM wrote at credential slot
+        ``slot``. The user is found by its tag ONLY, never by adoption: an
+        untagged user is never touched here (#1518/#1694). Finding no tagged
+        user warns only when ``written`` -- LCM's store shows it wrote a PIN
+        to this slot -- as LCM's code may still be on the lock under a user
+        it can no longer recognize. A slot never turned on had no code of
+        LCM's to lose, so that is logged at debug.
+
+        LCM wrote only that PIN, so only that PIN is LCM's to remove. The
+        user may also hold credentials someone added in the vendor's app (an
+        RFID tag, a fingerprint, another PIN); deleting the user would
+        cascade to them. So the user goes only when LCM's PIN is all it
+        holds -- one User Delete, whose cascade takes the PIN -- and
+        otherwise only the PIN goes and the user stays. The check reads the
+        driver's raw credentials, not ``async_get_users``, which drops the
+        credential types LCM has no name for (DESFire, BLE, UWB, ...).
+
+        A user kept loses LCM's tag in the same release (``_async_untag``),
+        PIN first: it is an ordinary user of the lock's now, and a later use
+        of the slot number must not find it as LCM's and write onto it. A
+        failed rename still leaves the release done -- LCM's PIN is gone --
+        and is logged.
+
+        A User Code lock has no user records -- each slot is an implicit
+        user carrying one PIN -- so the base clears the slot, as before.
+        """
+        if not await self._supports_user_records():
+            await super().async_release_managed_slot(slot, written=written)
+            return
+        user_id = await self._find_user_index_for_slot(slot, adopt_untagged=False)
+        if user_id is None:
+            # Never fall back to an untagged user: deleting it, or its PIN,
+            # would delete a code LCM may never have created.
+            if not written:
+                _LOGGER.debug(
+                    "Lock %s: released slot %s, which LCM never wrote a PIN "
+                    "to; no user carries its tag, so nothing was removed",
+                    self.lock.entity_id,
+                    slot,
+                )
+                return
+            _LOGGER.warning(
+                "Lock %s: released slot %s, but no user on the lock carries "
+                "LCM's tag for it, so nothing was removed. A code may remain "
+                "that LCM cannot identify as its own (for example, if its "
+                "user was renamed in the lock vendor's app); remove it there "
+                "if it should not open the door",
+                self.lock.entity_id,
+                slot,
+            )
+            return
+        users, credentials = await self._async_read_access_control()
+        held = [cred for cred in credentials if cred.user_id == user_id]
+        lcm_pin = any(
+            cred.type is UserCredentialType.PIN_CODE and cred.slot == slot
+            for cred in held
+        )
+        if len(held) == int(lcm_pin):
+            await self.async_delete_user(user_id)
+            return
+        if lcm_pin:
+            await self._delete_credential(
+                CredentialRef(user_id=user_id, type=CredentialType.PIN, slot=slot)
+            )
+        name = next((u.user_name for u in users if u.user_id == user_id), None)
+        await self._async_untag(slot, user_id, name or "")
+
+    async def _async_untag(self, slot: int, user_id: int, name: str) -> None:
+        """
+        Rename the user LCM tagged for ``slot`` to a name that claims no slot.
+
+        What the user was called before LCM adopted it is not kept anywhere
+        (adoption wrote over it), so it keeps the display part of its tagged
+        name -- ``Alice`` of ``lcm:2:Alice`` -- or no name at all when that is
+        empty or would read as a tag itself (a bare ``3``). Z-Wave allows an
+        empty user name. A failure is logged, not raised: LCM's PIN is
+        already gone, so the release is done.
+        """
+        _, display = parse_tag(name)
+        neutral = display if parse_tag(display)[0] is None else ""
+        try:
+            await lock_helpers.async_set_user(
+                self.node, user_id=user_id, user_name=neutral
+            )
+        except (BaseZwaveJSServerError, HomeAssistantError) as err:
+            _LOGGER.warning(
+                "Lock %s: released slot %s and removed LCM's PIN, but could "
+                "not rename user %s, which holds other credentials, to drop "
+                "LCM's tag (%s). Until it is renamed, turning slot %s on "
+                "again writes onto that user; rename it in the lock vendor's "
+                "app",
+                self.lock.entity_id,
+                slot,
+                user_id,
+                err,
+                slot,
+            )
+
+    @override
     async def async_delete_user(self, user_id: int) -> None:
         """Delete the lock user (cascades its credentials)."""
         try:
@@ -620,6 +794,7 @@ class ZWaveJSLock(BaseLock):
         except HomeAssistantError as err:
             raise LockOperationFailed(f"delete user {user_id} failed: {err}") from err
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -655,13 +830,14 @@ class ZWaveJSLock(BaseLock):
         if self._node_advertises_user_code_cc():
             self._uc_write_slot = credential.slot
         try:
-            await lock_helpers.async_set_credential(
-                self.node,
-                user_id,
-                UserCredentialType.PIN_CODE,
-                pin,
-                credential_slot=credential.slot,
-            )
+            with _timed(self.lock.entity_id, credential.slot, "set"):
+                await lock_helpers.async_set_credential(
+                    self.node,
+                    user_id,
+                    UserCredentialType.PIN_CODE,
+                    pin,
+                    credential_slot=credential.slot,
+                )
         except BaseZwaveJSServerError as err:
             # Retry a transient command failure (e.g. a sleeping/battery lock);
             # suspend only on a code the node can never accept. _mapped_zwave_error
@@ -682,15 +858,10 @@ class ZWaveJSLock(BaseLock):
                     credential.slot,
                     err,
                 )
-                # No reconciliation read here: the seam's on-demand
-                # confirmation read hard-refreshes for every OPTIMISTIC
-                # write, so a single-slot read would be pure duplication.
+                # No reconciliation read here: the worker reads every write
+                # back with a hard refresh of the slot, so a read here would
+                # be pure duplication.
                 return WriteResult.OPTIMISTIC
-            # Definitive rejection: pre-15.25.2 drivers never re-read the
-            # slot after a supervised failure, so an already-stale cache
-            # entry would stay wrong forever (see
-            # _async_uc_reconcile_value_db).
-            await self._async_uc_reconcile_value_db(credential.slot)
             if key == "credential_rejected_duplicate" or self._uc_write_refused:
                 raise DuplicateCodeError(
                     code_slot=credential.slot,
@@ -703,11 +874,12 @@ class ZWaveJSLock(BaseLock):
             ) from err
         finally:
             self._uc_write_slot = None
-        # Pre-15.25.2 drivers never persist a supervised success to the
-        # value database (see _async_uc_reconcile_value_db). On a refusal the
-        # read also replaces the code the driver's "credential modified"
-        # event announced with what the lock reports holding.
-        await self._async_uc_reconcile_value_db(credential.slot)
+        # Before 15.25.2 the driver cached nothing of a supervised write and
+        # read nothing back after a failed one. The worker reads the slot
+        # back after a write that returns -- a fresh get_credential, which
+        # puts that cache right. It reads nothing back after a refusal: the
+        # lock kept the slot's old code, and so did that driver's cache. A
+        # slot turned off for the refusal is read again before its clear.
         if self._uc_write_refused:
             raise DuplicateCodeError(
                 code_slot=credential.slot,
@@ -721,6 +893,7 @@ class ZWaveJSLock(BaseLock):
         self._push_credential_update(credential.slot, SlotCredential.known(pin))
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ref.
@@ -728,19 +901,17 @@ class ZWaveJSLock(BaseLock):
         The clear goes through HA's ``lock_helpers.async_delete_credential``.
         """
         try:
-            await lock_helpers.async_delete_credential(
-                self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
-            )
+            with _timed(self.lock.entity_id, ref.slot, "clear"):
+                await lock_helpers.async_delete_credential(
+                    self.node, ref.user_id, UserCredentialType.PIN_CODE, ref.slot
+                )
         except BaseZwaveJSServerError as err:
             raise _mapped_zwave_error(
                 err, f"delete credential slot {ref.slot} failed"
             ) from err
         except HomeAssistantError as err:
-            # Same supervised-failure staleness as the set path (see
-            # _async_uc_reconcile_value_db). Success needs no read: the
-            # driver clears its cached User Code CC values on a
-            # successful delete since 15.24.3 (zwave-js/zwave-js#8866).
-            await self._async_uc_reconcile_value_db(ref.slot)
+            # The worker reads the slot back after a failed clear, which
+            # also corrects a cache an older driver left stale.
             raise LockOperationFailed(
                 f"delete credential slot {ref.slot} failed: {err}"
             ) from err
@@ -769,6 +940,7 @@ class ZWaveJSLock(BaseLock):
         return True, ""
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe to credential change events.
@@ -856,23 +1028,23 @@ class ZWaveJSLock(BaseLock):
     # to take over: the shim goes dormant on its own, no LCM change
     # needed.
     #
-    # The shim also carries ``_async_uc_reconcile_value_db``, a
-    # post-write single-slot read that bridges a second gap fixed in
-    # driver 15.25.2 (zwave-js/zwave-js#8927): before that, supervised
-    # User Code CC writes through the unified API never persisted to
-    # (success) or reconciled (failure) the driver's value database,
-    # so cached reads served stale slots until the next report.
+    # A second gap, fixed in driver 15.25.2 (zwave-js/zwave-js#8927):
+    # before it, supervised User Code CC writes through the unified API
+    # never persisted to (success) or reconciled (failure) the driver's
+    # value database. The worker's read-back after a write that returns
+    # is a fresh single-slot get_credential, which repairs that cache.
+    # A slot forgotten mid-write is not read back, so on such a driver
+    # its cache -- and what the views show of it -- can stay at the old
+    # code until a full hard refresh.
     #
     # To remove the whole section once the minimum supported driver
-    # includes #8930 (which implies #8927):
+    # includes #8930:
     #
     # 1. Delete everything from this comment through
-    #    ``_async_uc_reconcile_value_db``.
+    #    ``_uc_slot_status``.
     # 2. Delete the ``_node_advertises_user_code_cc`` branch in
     #    ``setup_push_subscription`` (and its docstring paragraph).
-    # 3. Delete the ``_async_uc_reconcile_value_db`` call sites in
-    #    ``async_set_credential`` and ``async_delete_credential``.
-    # 4. Delete the shim tests in
+    # 3. Delete the shim tests in
     #    ``tests/providers/zwave_js/test_events.py`` and
     #    ``tests/providers/zwave_js/test_provider.py`` (grep ``_uc_``)
     #    and restore ``_EXPECTED_PUSH_UNSUB_COUNT`` to 3.
@@ -950,7 +1122,7 @@ class ZWaveJSLock(BaseLock):
             # No value from a slot the status says is occupied is the lock
             # withholding the code, not a cleared slot -- the same rule the
             # read path's occupancy overlay applies. Taken as empty, it
-            # would fail a pending write the lock in fact kept.
+            # would count against a write the lock in fact kept.
             resolved = (
                 SlotCredential.unreadable()
                 if slot_in_use is True
@@ -983,53 +1155,8 @@ class ZWaveJSLock(BaseLock):
         except NotFoundError:
             return None
 
-    async def _async_uc_reconcile_value_db(self, code_slot: int) -> None:
-        """
-        Read one slot back from the device so the driver's cache converges.
-
-        Pre-15.25.2 drivers never persist a supervised User Code CC write
-        to the value database (success) and never re-read the slot after a
-        failure, so every later cached read -- including LCM's own initial
-        load after a restart -- serves the pre-write state. This fresh
-        single-slot read through the unified API forces the driver to
-        query the device: on the User Code CC dispatch path the solicited
-        report repairs the value database and doubles as a push through
-        the report shim above; on a User Credential CC lock the driver
-        dispatches natively and the read is merely redundant.
-
-        Best-effort by design: the write already concluded (the caller
-        returns or raises on its own evidence), so a failed read must not
-        change the outcome -- the next hard refresh or sync tick reconciles
-        instead.
-        """
-        if not self._node_advertises_user_code_cc():
-            return
-        try:
-            await self.node.access_control.get_credential(
-                UserCredentialType.PIN_CODE, code_slot
-            )
-        except BaseZwaveJSServerError as err:
-            _LOGGER.debug(
-                "Lock %s slot %s: post-write reconciliation read failed (%s); "
-                "leaving it to the next hard refresh or sync tick",
-                self.lock.entity_id,
-                code_slot,
-                err,
-            )
-        except Exception:
-            # Broad by design, mirroring the coordinator's confirmation-read
-            # backstop: two call sites run inside except clauses mapping the
-            # write outcome to typed errors, and an escaping exception here
-            # would replace that typed error and derail the seam's handling.
-            _LOGGER.exception(
-                "Lock %s slot %s: unexpected error during post-write "
-                "reconciliation read; leaving it to the next hard refresh "
-                "or sync tick",
-                self.lock.entity_id,
-                code_slot,
-            )
-
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from credential change events."""
         self._clear_push_unsubs()
@@ -1058,15 +1185,11 @@ class ZWaveJSLock(BaseLock):
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
 
-        # Some locks name no slot in a duplicate refusal (no parameters, or
-        # user 0). Writes to a lock run one at a time, so one arriving during
-        # a write is that write's; one naming another slot, or arriving with
-        # no write in flight, is not ours to pin on a slot.
-        if (
-            evt.data[ATTR_EVENT]
-            == AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-            and self._uc_write_slot is not None
-            and code_slot in (0, self._uc_write_slot)
+        duplicate = (
+            AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+        )
+        if evt.data[ATTR_EVENT] == duplicate and refuses_write_in_flight(
+            self._uc_write_slot, code_slot
         ):
             self._uc_write_refused = True
             return
@@ -1084,6 +1207,7 @@ class ZWaveJSLock(BaseLock):
         )
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return ZWAVE_JS_DOMAIN
@@ -1094,6 +1218,7 @@ class ZWaveJSLock(BaseLock):
             listener()
         self._listeners.clear()
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
         Set up lock by provider.
@@ -1110,16 +1235,19 @@ class ZWaveJSLock(BaseLock):
             )
         )
 
+    @override
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         self._clear_listeners()
         await super().async_unload(remove_permanently)
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Return whether the Z-Wave JS client is connected."""
         ready, _reason = self._get_client_state()
         return ready
 
+    @override
     async def async_is_device_available(self) -> bool:
         """Return whether the Z-Wave node is available for commands."""
         try:
@@ -1132,6 +1260,7 @@ class ZWaveJSLock(BaseLock):
             )
             return False
 
+    @override
     def describe_link_health(self) -> str | None:
         """
         Report how much of the traffic aimed at this node fails to complete.
@@ -1187,6 +1316,7 @@ class ZWaveJSLock(BaseLock):
             f"refusing the code."
         )
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -1196,7 +1326,7 @@ class ZWaveJSLock(BaseLock):
         Unscoped, this re-reads every user and credential: a walk of the
         whole lock, one command per slot on a User Code CC lock. Given
         ``slots`` it re-reads only those, one command each. That is what the
-        coordinator's confirmation read needs, and on a lock dropping half
+        worker's read-back after a write needs, and on a lock dropping half
         its responses it is the difference between a read that completes
         about half the time and one that essentially never does (issues
         #1397 and #1307). The projection is unscoped either way, so the

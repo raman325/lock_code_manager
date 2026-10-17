@@ -1,9 +1,7 @@
 """Base entity class for Lock Code Manager."""
 
-from __future__ import annotations
-
 import logging
-from typing import TYPE_CHECKING, Any, final
+from typing import TYPE_CHECKING, Any, final, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE
@@ -16,6 +14,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.helpers.event import TrackStates, async_track_state_change_filtered
 
@@ -24,15 +23,20 @@ from .const import (
     ATTR_SLOT_FIELD,
     DOMAIN,
 )
-from .domain.config import build_slot_device_identifier, build_slot_unique_id
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.names import fallback_name
-from .domain.queries import get_entry_config
-from .domain.slot_coordinator import SlotEntityCoordinator
+from .ha.entry import LockCodeManagerConfigEntry
+from .ha.runtime import lock_registry, signal_lock_changed
+from .ha.slot_coordinator import SlotEntityCoordinator
+from .model.config import build_slot_device_identifier, build_slot_unique_id
+from .model.names import fallback_name
+from .model.queries import get_entry_config
 from .providers import BaseLock
+from .sync.slot import Slot, Status
+from .sync.worker import LockWorker
 
 if TYPE_CHECKING:
     from homeassistant.helpers.event import _TrackStateChangeFiltered
+
+    from .ha.adapter import ProviderPort
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,7 +85,9 @@ class BaseLockCodeManagerEntity(Entity):
         self._hass = hass
         self.config_entry = config_entry
         self.entry_id = self.base_unique_id = config_entry.entry_id
-        self.locks: list[BaseLock] = list(config_entry.runtime_data.locks.values())
+        # The entry's locks, taken when the entity is added (see
+        # ``_register_callbacks``), then kept by the lock added/removed handlers.
+        self.locks: list[BaseLock] = []
         self.slot_num = slot_num
         self.key = key
         self.ent_reg = ent_reg
@@ -208,6 +214,9 @@ class BaseLockCodeManagerEntity(Entity):
         self.async_on_remove(
             callbacks.register_lock_removed_handler(self._handle_remove_lock)
         )
+        # Taken here, with the handler that keeps it current: a lock held
+        # earlier, even since this entity was made, announced itself before.
+        self.locks = list(self.config_entry.runtime_data.locks.values())
         self.async_on_remove(
             callbacks.register_lock_added_handler(self._handle_add_locks)
         )
@@ -253,6 +262,7 @@ class BaseLockCodeManagerEntity(Entity):
             self._attr_available: bool = new_available
             self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await Entity.async_added_to_hass(self)
@@ -350,11 +360,13 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
             self.base_unique_id, slot_num, self.key, lock.lock.entity_id
         )
 
+    @override
     def _get_removal_uid(self) -> str:
         """Get unique ID for removal callback registration (per-lock variant)."""
         return f"{self.slot_num}|{self.key}|{self.lock.lock.entity_id}"
 
     @callback
+    @override
     def _handle_remove_lock(self, lock_entity_id: str) -> None:
         """Handle lock entity is being removed."""
         super()._handle_remove_lock(lock_entity_id)
@@ -363,12 +375,93 @@ class BaseLockCodeManagerCodeSlotPerLockEntity(BaseLockCodeManagerEntity):
         self.config_entry.async_create_task(self.hass, self._internal_async_remove())
 
     @callback
+    @override
     def _is_available(self) -> bool:
         """Return whether entity is available."""
         return (
             state := self.hass.states.get(self.lock.lock.entity_id)
         ) and state.state != STATE_UNAVAILABLE
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
+
+
+class LockWorkerView:
+    """
+    A per-lock slot entity reading what the lock's worker knows of the slot.
+
+    It writes its state whenever the worker reports a change on the lock.
+    """
+
+    hass: HomeAssistant
+    lock: BaseLock
+    slot_num: int
+
+    config_entry: ConfigEntry
+
+    def _core_worker(self) -> LockWorker[ProviderPort] | None:
+        """
+        Return the lock's worker if it syncs this slot for this entry.
+
+        A slot another entry already manages on the lock is that entry's:
+        its state is not this entry's user's (their code is not there).
+        """
+        registry = lock_registry(self.hass)
+        lock_entity_id = self.lock.lock.entity_id
+        if registry.owner(lock_entity_id, int(self.slot_num)) not in (
+            None,
+            self.config_entry.entry_id,
+        ):
+            return None
+        return registry.worker(lock_entity_id)
+
+    def _core_slot(self) -> Slot | None:
+        """Return the worker's view of this slot, if the lock's worker has it."""
+        if (worker := self._core_worker()) is None:
+            return None
+        return worker.slots.get(int(self.slot_num))
+
+    def _core_status(self) -> Status | None:
+        """Return the slot's sync status, or None if the worker does not have it."""
+        worker = self._core_worker()
+        if worker is None or int(self.slot_num) not in worker.slots:
+            return None
+        return worker.status(int(self.slot_num))[0]
+
+    @property
+    def available(self) -> bool:
+        """
+        Return whether the lock is up and has said something about the slot.
+
+        Before the lock first answers, a slot never read has nothing to show.
+        After that, a slot without a reading is being checked: its reading
+        was set aside to read the slot again (``Slot.doubt``), so it is not
+        gone, and the entity says unknown, not unavailable, until the read.
+        """
+        assert isinstance(self, BaseLockCodeManagerCodeSlotPerLockEntity)
+        worker = self._core_worker()
+        return (
+            self._is_available()
+            and worker is not None
+            and (slot := worker.slots.get(int(self.slot_num))) is not None
+            and (slot.seen is not None or worker.answered)
+        )
+
+    def _core_syncing(self) -> bool:
+        """Return whether a sync of this slot is queued or running."""
+        worker = self._core_worker()
+        return worker is not None and worker.syncing(int(self.slot_num))
+
+    @callback
+    def _watch_lock(self) -> None:
+        """Write state on every change the lock's worker reports."""
+        assert isinstance(self, Entity)
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_lock_changed(self.lock.lock.entity_id),
+                self.async_write_ha_state,
+            )
+        )

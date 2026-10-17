@@ -1,13 +1,11 @@
 """Module for Zigbee2MQTT locks."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from functools import partial
 import json
-from typing import Any, ClassVar, Literal, NoReturn
+from typing import Any, ClassVar, Literal, NoReturn, override
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -19,10 +17,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError
 
-from ..domain.credentials import Credential, CredentialRef, User, WriteResult
-from ..domain.exceptions import LockDisconnected, LockOperationFailed
-from ..domain.models import SlotCredential
-from ._mqtt import BaseMqttLock
+from ..model.credentials import (
+    Credential,
+    CredentialRef,
+    SlotCredential,
+    User,
+    WriteResult,
+)
+from ..model.exceptions import LockDisconnected, LockOperationFailed
+from ._mqtt import CANNOT_TELL, BaseMqttLock, SlotAnswer
 from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
 from .const import LOGGER
 
@@ -51,6 +54,10 @@ _Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
 )
 _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
+# User status 0xFF, which the Door Lock cluster names "Not Supported": the
+# lock cannot report its users at all.
+_Z2M_STATUS_CANNOT_TELL = "not_supported_255"
+
 
 def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     """
@@ -68,9 +75,9 @@ def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     return str(pin_raw) != ""
 
 
-def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
+def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotAnswer:
     """
-    Project one Zigbee2MQTT ``users`` entry to a SlotCredential.
+    Project one Zigbee2MQTT ``users`` entry to a SlotCredential, or ``CANNOT_TELL``.
 
     The status vocabulary comes from zigbee-herdsman-converters'
     ``lockUserStatus`` map (available/enabled/disabled); statuses outside
@@ -87,12 +94,17 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotCredential:
       all asterisks. That is the withheld state wearing a code's shape, so
       it lands in the same place -- see ``is_masked_code``.
     - ``available`` is the only status that means the slot holds nothing.
-      ``disabled`` is a user the lock is refusing, and unrecognized statuses
-      (``not_supported_*``) say nothing at all, so both project to
-      unreadable for the same reprogramming-storm reason -- and so that
+      ``disabled`` is a user the lock is refusing, and statuses the cluster
+      reserves (``not_supported_<n>``) are none it defines, so both project
+      to unreadable for the same reprogramming-storm reason -- and so that
       allocation does not read either as a free credential index.
+    - ``not_supported_255`` is the one ``not_supported_*`` the cluster does
+      define: Not Supported, a lock that cannot report its users (#1581).
+      That is no code held, nor none: ``CANNOT_TELL``, read as silence.
     """
     status = user_info.get("status")
+    if status == _Z2M_STATUS_CANNOT_TELL:
+        return CANNOT_TELL
     pin_raw = user_info.get("pin_code")
     if status == "enabled":
         if _mqtt_payload_pin_has_code_value(pin_raw):
@@ -122,27 +134,35 @@ class Zigbee2MQTTLock(BaseMqttLock):
     # silent, so that bound always speaks first.
     per_exchange_budget: ClassVar[float | None] = 15.0
 
-    _pending_codes: dict[int, asyncio.Future[SlotCredential]] = field(
+    _pending_codes: dict[int, asyncio.Future[SlotAnswer]] = field(
         init=False, default_factory=dict
     )
     # Last projected state per slot from the most recent users payload;
     # the delta gate in _process_z2m_device_payload compares against this
     # so full-cached-state republications don't repush stale entries.
-    _last_users_states: dict[int, SlotCredential] = field(
+    _last_users_states: dict[int, SlotAnswer] = field(init=False, default_factory=dict)
+    # Each slot's users entry exactly as last published, and, for a slot
+    # written since its last read, the entry it had before the write: a
+    # republish of that cannot answer the read that follows the write.
+    _users_entries: dict[int, dict[str, Any]] = field(init=False, default_factory=dict)
+    _pre_write_entries: dict[int, dict[str, Any]] = field(
         init=False, default_factory=dict
     )
     _subscribed_topic: str | None = field(init=False, default=None)
 
     @property
+    @override
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
         return True
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return True
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Subscribe to the device topic before the coordinator runs its first poll."""
         await self._async_ensure_device_subscription()
@@ -206,11 +226,13 @@ class Zigbee2MQTTLock(BaseMqttLock):
             "zigbee2mqtt_* identifier)."
         )
 
+    @override
     def _raise_not_connected(self) -> NoReturn:
         """Name the wrong-bridge misconfiguration before the generic reason."""
         self._maybe_raise_wrong_bridge_disconnect()
         super()._raise_not_connected()
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Return whether MQTT is usable and this lock maps to a Z2M device topic."""
         if not mqtt_config_entry_enabled(self.hass):
@@ -253,14 +275,16 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     action_user,
                 )
                 if self.coordinator:
-                    self.hass.async_create_task(
-                        self.coordinator.async_request_refresh()
+                    self._create_background_task(
+                        self.coordinator.async_request_refresh(),
+                        f"Refresh {self.lock.entity_id} after {action}",
                     )
             return
 
         users_data = payload.get("users")
         if users_data and isinstance(users_data, dict):
-            states: dict[int, SlotCredential] = {}
+            states: dict[int, SlotAnswer] = {}
+            entries: dict[int, dict[str, Any]] = {}
             for user_id_str, user_info in users_data.items():
                 user_id = parse_slot_num(user_id_str)
                 if user_id is None:
@@ -281,6 +305,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     continue
 
                 states[user_id] = _project_z2m_user_state(user_info)
+                entries[user_id] = user_info
 
             # The converter answers GetPinCode through the users object
             # (fz.lock_pin_code_response), not through a pin_code response
@@ -289,7 +314,19 @@ class Zigbee2MQTTLock(BaseMqttLock):
             # time (async_get_users queries slots sequentially), so cached
             # entries for other slots cannot satisfy a future they don't
             # belong to.
+            #
+            # The asked-for slot's own entry can be cached too: a report
+            # from the lock republishes the cache, ahead of the answer, with
+            # the entry as it was before a write since. Taken as the read's
+            # answer, that shows the write undone and it is sent again. So
+            # an entry still as it was before the write does not answer the
+            # read that follows it. The lock's reply can be that same entry
+            # (a write it dropped); the read then times out to silence, and
+            # the next read takes it.
+            self._users_entries.update(entries)
             for user_id, state in states.items():
+                if self._pre_write_entries.get(user_id) == entries[user_id]:
+                    continue
                 if (
                     future := self._pending_codes.pop(user_id, None)
                 ) is not None and not future.done():
@@ -323,7 +360,10 @@ class Zigbee2MQTTLock(BaseMqttLock):
                         list(changed),
                     )
                     for user_id, state in changed.items():
-                        self._confirm_slot(user_id, state)
+                        # ``CANNOT_TELL`` says no more than silence would:
+                        # not a code there, nor one changed at the keypad.
+                        if isinstance(state, SlotCredential):
+                            self._confirm_slot(user_id, state)
 
         pin_code_data = payload.get("pin_code")
         if pin_code_data and isinstance(pin_code_data, dict):
@@ -395,8 +435,15 @@ class Zigbee2MQTTLock(BaseMqttLock):
         self._clear_push_unsubs()
         self._subscribed_topic = None
 
+        @callback
         def message_received(msg: ReceiveMessage) -> None:
-            """Handle incoming MQTT messages (may run off the event loop)."""
+            """
+            Handle an incoming MQTT message, in the order the bridge sent it.
+
+            On the event loop: MQTT runs any other subscriber in the executor,
+            where two messages can be applied the other way round -- a cache
+            republish behind the lock's answer it came before.
+            """
             try:
                 payload = json.loads(msg.payload)
             except (json.JSONDecodeError, TypeError) as err:
@@ -407,7 +454,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 )
                 return
 
-            self.hass.add_job(self._process_z2m_device_payload, payload)
+            self._process_z2m_device_payload(payload)
 
         try:
             unsub = await async_subscribe(self.hass, topic, message_received)
@@ -425,6 +472,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         LOGGER.debug("Subscribed to MQTT topic %s for %s", topic, self.lock.entity_id)
 
     @callback
+    @override
     def setup_push_subscription(self) -> None:
         """
         Subscribe via background task when still unsubscribed (e.g. reconnect).
@@ -436,6 +484,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
         )
 
     @callback
+    @override
     def teardown_push_subscription(self) -> None:
         """Unsubscribe from MQTT updates."""
         had_subscription = bool(self._push_unsubs)
@@ -450,6 +499,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 future.cancel()
         self._pending_codes.clear()
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -514,10 +564,13 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self.lock.entity_id,
             code_slot,
         )
+        written = SlotCredential.known(pin)
+        self._remember_pre_write_entry(code_slot, written)
         # Optimistic coordinator update after publish (MQTT QoS 0); hard_refresh mitigates drift.
-        self._push_credential_update(code_slot, SlotCredential.known(pin))
+        self._push_credential_update(code_slot, written)
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Clear a Personal Identification Number from a code slot.
@@ -574,10 +627,34 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self.lock.entity_id,
             code_slot,
         )
+        self._remember_pre_write_entry(code_slot, SlotCredential.empty())
         # Same optimistic push as ``async_set_credential``.
         self._push_credential_update(code_slot, SlotCredential.empty())
         return True
 
+    def _remember_pre_write_entry(
+        self, code_slot: int, written: SlotCredential
+    ) -> None:
+        """
+        Keep the slot's entry from before a write, until the slot is next read.
+
+        Only one that would gainsay the write: a code, or nothing, other than
+        what was written. A copy of anything else answers the read-back as
+        the lock's reply would -- the same value, or one that cannot be
+        compared, where the write is trusted -- so it is left to answer it.
+        """
+        self._pre_write_entries.pop(code_slot, None)
+        if (entry := self._users_entries.get(code_slot)) is None:
+            return
+        state = _project_z2m_user_state(entry)
+        if (
+            isinstance(state, SlotCredential)
+            and (state.is_readable or state.is_empty)
+            and state != written
+        ):
+            self._pre_write_entries[code_slot] = entry
+
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Read Personal Identification Number codes one index at a time.
@@ -616,9 +693,7 @@ class Zigbee2MQTTLock(BaseMqttLock):
             transport_failure="failed to reach the lock",
         )
 
-    async def _async_read_slot(
-        self, slot_num: int, get_topic: str
-    ) -> SlotCredential | None:
+    async def _async_read_slot(self, slot_num: int, get_topic: str) -> SlotAnswer:
         """
         Ask the lock for one slot and wait for the answer; None means silence.
 
@@ -626,7 +701,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
         both silence: a slot the bridge described as withheld, disabled, or
         masked is data, and a slot that produced no reply at all is not.
         That is the distinction ``BaseMqttLock._async_read_slots`` needs to
-        tell a poll from a read that reached nothing.
+        tell a poll from a read that reached nothing. A reply that the lock
+        cannot tell is neither, and comes back as ``CANNOT_TELL``.
         """
         loop = asyncio.get_running_loop()
         future = loop.create_future()
@@ -644,8 +720,10 @@ class Zigbee2MQTTLock(BaseMqttLock):
             self._pending_codes.pop(slot_num, None)
             return None
 
+        credential: SlotAnswer
         try:
-            result = await asyncio.wait_for(future, timeout=10.0)
+            async with asyncio.timeout(10.0):
+                result = await future
         except TimeoutError:
             LOGGER.debug(
                 "Timeout waiting for PIN code response for %s slot %s",
@@ -672,8 +750,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
             credential = result
         finally:
             self._pending_codes.pop(slot_num, None)
+            # Only the read right after a write is owed this: whatever it
+            # heard, the next read takes the entry as it comes.
+            self._pre_write_entries.pop(slot_num, None)
         return credential
 
+    @override
     async def async_get_max_slot(self) -> int | None:
         """
         Report no opinion: the bridge is not asked.

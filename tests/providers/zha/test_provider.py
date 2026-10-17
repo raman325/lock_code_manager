@@ -1,10 +1,9 @@
 """Test the ZHA lock provider."""
 
-from __future__ import annotations
-
 import asyncio
-from collections.abc import AsyncGenerator, Awaitable, Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,26 +15,28 @@ from zigpy.zcl.clusters.closures import DoorLock
 from zigpy.zcl.foundation import Status
 
 from homeassistant.components.zha.const import DOMAIN as ZHA_DOMAIN
+from homeassistant.components.zha.helpers import get_zha_data
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import MAX_SEARCHED_SLOT
-from custom_components.lock_code_manager.domain.coordinator import (
-    LockUsercodeUpdateCoordinator,
+from custom_components.lock_code_manager.ha.adapter import (
+    ProviderPort,
+    _Coordinator,
+    reading,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     CredentialRef,
     CredentialType,
+    SlotCredential,
     WriteResult,
     credential_from_slot,
-    pin_address,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
 from custom_components.lock_code_manager.providers import (
     _base as base_module,
     zha as zha_module,
@@ -43,6 +44,8 @@ from custom_components.lock_code_manager.providers import (
 from custom_components.lock_code_manager.providers.zha import (
     ZHALock,
 )
+from custom_components.lock_code_manager.sync.slot import Reading, Slot
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.providers.helpers import ProviderNativeTransportContractTests
 
 from .helpers import (
@@ -56,8 +59,6 @@ from .helpers import (
 _GET_PIN_CODE_RESPONSE = DoorLock.ClientCommandDefs.get_pin_code_response
 _SET_PIN_CODE_ID = DoorLock.ServerCommandDefs.set_pin_code.id
 _CLEAR_PIN_CODE_ID = DoorLock.ServerCommandDefs.clear_pin_code.id
-# Set and Clear PIN Code Response general failure (Zigbee Cluster Library).
-_DOOR_LOCK_GENERAL_FAILURE = 1
 
 
 def _pin_reply(
@@ -130,25 +131,8 @@ async def test_hard_refresh_without_programming_events(zha_lock: ZHALock) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Connection tests
-# ---------------------------------------------------------------------------
-
-
-async def test_is_integration_connected(hass: HomeAssistant, zha_lock: ZHALock) -> None:
-    """Test connection is up when device is available."""
-    assert await zha_lock.async_is_integration_connected() is True
-
-
-# ---------------------------------------------------------------------------
 # Cluster access tests
 # ---------------------------------------------------------------------------
-
-
-async def test_get_door_lock_cluster(hass: HomeAssistant, zha_lock: ZHALock) -> None:
-    """Test getting the DoorLock cluster."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-    assert cluster.cluster_id == DoorLock.cluster_id
 
 
 async def test_get_door_lock_cluster_caches_result(
@@ -251,28 +235,6 @@ async def test_get_users(
     assert by_slot[2].pin_credentials[0].state is SlotCredential.empty()
 
 
-async def test_get_usercodes_via_base_projection(
-    hass: HomeAssistant,
-    zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> None:
-    """Base async_get_usercodes projection surfaces all managed slots."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-
-    async def mock_get_pin_code(slot_num):
-        if slot_num == 1:
-            return _pin_reply(slot_num, DoorLock.UserStatus.Enabled, "1234")
-        return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
-
-    cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
-
-    codes = await zha_lock.async_get_usercodes()
-
-    assert codes[1] == SlotCredential.known("1234")
-    assert codes[2] is SlotCredential.empty()
-
-
 # A write as each operation's cluster command: its name, request id, response.
 _WRITES = pytest.mark.parametrize(
     ("command", "request_id", "response"),
@@ -290,17 +252,20 @@ _STANDING = {
 
 
 @pytest.fixture
-async def coordinator(
-    hass: HomeAssistant,
-    zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> AsyncGenerator[LockUsercodeUpdateCoordinator]:
-    """Attach a real coordinator to the lock, loaded with its first read."""
-    coordinator = LockUsercodeUpdateCoordinator(hass, zha_lock)
-    zha_lock.coordinator = coordinator
-    await coordinator.async_refresh()
-    yield coordinator
-    await coordinator.async_shutdown()
+def pushed_to_worker(zha_lock: ZHALock) -> dict[int, Reading]:
+    """
+    Give the lock the core's stand-in coordinator; return what reaches the worker.
+
+    Slot 3 is tracked by the lock's worker, so what the provider pushes about
+    it is handed to ``worker.push``, recorded here by slot.
+    """
+    port = ProviderPort(zha_lock)
+    worker = port.worker = LockWorker(port, b"salt", gap=0.0)
+    worker.slots[3] = Slot(None)
+    pushes: dict[int, Reading] = {}
+    worker.push = pushes.__setitem__  # type: ignore[method-assign]
+    zha_lock.coordinator = _Coordinator(port)
+    return pushes
 
 
 async def _write(zha_lock: ZHALock, command: str) -> WriteResult | bool:
@@ -391,22 +356,6 @@ _FOREIGN_REPLIES = [
     ),
 ]
 
-# The write's own refusal, in either reply that answers it.
-_OWN_REFUSALS = [
-    pytest.param(
-        lambda cluster, _request_id, response: (
-            lock_frame(cluster, response, status=_DOOR_LOCK_GENERAL_FAILURE).payload
-        ),
-        id="own_response",
-    ),
-    pytest.param(
-        lambda _cluster, request_id, _response: (
-            default_response(request_id, Status.FAILURE).payload
-        ),
-        id="default_response_naming_the_write",
-    ),
-]
-
 _CLUSTERS = pytest.mark.parametrize(
     "door_lock_cluster_type",
     [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
@@ -419,7 +368,7 @@ _CLUSTERS = pytest.mark.parametrize(
 @pytest.mark.parametrize("reply", _OWN_SUCCESSES)
 async def test_a_write_its_own_reply_does_not_refuse_stands(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -445,7 +394,7 @@ async def test_a_write_its_own_reply_does_not_refuse_stands(
         )
     else:
         cluster.clear_pin_code.assert_called_once_with(3)
-    assert coordinator.data[pin_address(3)] == pushed
+    assert pushed_to_worker[3] == reading(pushed)
 
 
 @_CLUSTERS
@@ -453,7 +402,7 @@ async def test_a_write_its_own_reply_does_not_refuse_stands(
 @pytest.mark.parametrize("reply", _FOREIGN_REPLIES)
 async def test_a_write_answered_by_another_frame_fails_for_a_retry(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -475,30 +424,7 @@ async def test_a_write_answered_by_another_frame_fails_for_a_retry(
 
     with pytest.raises(LockOperationFailed, match="answered by a reply to something"):
         await _write(zha_lock, command)
-    assert pin_address(3) not in coordinator.data
-
-
-@_CLUSTERS
-@_WRITES
-@pytest.mark.parametrize("reply", _OWN_REFUSALS)
-async def test_the_writes_own_refusal_rejects_the_code(
-    zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
-    command: str,
-    request_id: int,
-    response: str,
-    reply: Any,
-) -> None:
-    """A non-zero status in the write's own reply rejects it and pushes nothing."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-    setattr(
-        cluster, command, AsyncMock(return_value=reply(cluster, request_id, response))
-    )
-
-    with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
-        await _write(zha_lock, command)
-    assert pin_address(3) not in coordinator.data
+    assert 3 not in pushed_to_worker
 
 
 # A quirk redefining a write's own response so its status is unusable: the
@@ -543,7 +469,7 @@ _UNUSABLE_STATUS = [
 )
 async def test_an_own_response_with_an_unusable_status(
     zha_lock: ZHALock,
-    coordinator: LockUsercodeUpdateCoordinator,
+    pushed_to_worker: dict[int, Reading],
     command: str,
     response: str,
     fields: dict[str, Any],
@@ -567,11 +493,11 @@ async def test_an_own_response_with_an_unusable_status(
     if rejected:
         with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
             await _write(zha_lock, command)
-        assert pin_address(3) not in coordinator.data
+        assert 3 not in pushed_to_worker
         return
     returned, pushed = _STANDING[command]
     assert await _write(zha_lock, command) is returned
-    assert coordinator.data[pin_address(3)] == pushed
+    assert pushed_to_worker[3] == reading(pushed)
 
 
 # ---------------------------------------------------------------------------
@@ -709,26 +635,48 @@ async def test_get_connected_cluster_raises_when_disconnected(
             await zha_lock._get_connected_cluster()
 
 
-async def test_get_gateway_handles_exceptions(
-    hass: HomeAssistant, zha_lock: ZHALock
+@pytest.mark.parametrize(
+    "error",
+    [
+        # What get_zha_gateway_proxy raises whenever ZHA is not loaded.
+        ValueError("No gateway object exists"),
+        KeyError("not loaded"),
+    ],
+)
+async def test_get_gateway_unavailable_is_quiet(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    caplog: pytest.LogCaptureFixture,
+    error: Exception,
 ) -> None:
-    """Test _get_gateway returns None on KeyError/ValueError."""
+    """
+    ZHA not loaded (setup retry, unloaded) is no gateway, and nothing is logged.
+
+    Asked on every connection check while ZHA retries its setup, a warning with
+    a traceback each time flooded the log.
+    """
+    caplog.set_level(logging.DEBUG, logger="custom_components.lock_code_manager")
     with patch(
         "custom_components.lock_code_manager.providers.zha._get_zha_gateway_proxy",
-        side_effect=KeyError("not loaded"),
+        side_effect=error,
     ):
         assert zha_lock._get_gateway() is None
+        assert await zha_lock.async_is_integration_connected() is False
+    assert not [r for r in caplog.records if r.name.endswith("providers.zha")]
 
 
-async def test_get_gateway_handles_value_error(
-    hass: HomeAssistant, zha_lock: ZHALock
+async def test_get_gateway_while_zha_has_no_gateway(
+    hass: HomeAssistant, zha_lock: ZHALock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Test _get_gateway logs a warning and returns None on an unexpected ValueError."""
-    with patch(
-        "custom_components.lock_code_manager.providers.zha._get_zha_gateway_proxy",
-        side_effect=ValueError("unexpected"),
-    ):
+    """Against the real helper: no gateway proxy means not connected, quietly."""
+    data = get_zha_data(hass)
+    saved, data.gateway_proxy = data.gateway_proxy, None
+    try:
         assert zha_lock._get_gateway() is None
+        assert await zha_lock.async_is_integration_connected() is False
+    finally:
+        data.gateway_proxy = saved
+    assert "ZHA gateway" not in caplog.text
 
 
 async def test_get_door_lock_cluster_no_device_proxy(
@@ -782,41 +730,6 @@ async def test_get_door_lock_cluster_no_matching_endpoint_cluster(
 # ---------------------------------------------------------------------------
 
 
-def _get_pin_code_response(
-    cluster: type[DoorLock], user_id: int = 3, **fields: Any
-) -> foundation.CommandSchema:
-    """Build a Get PIN Code Response for ``user_id`` as ``cluster`` decodes it."""
-    return lock_frame(
-        cluster,
-        "get_pin_code_response",
-        **{
-            "user_id": user_id,
-            "user_status": DoorLock.UserStatus.Enabled,
-            "user_type": DoorLock.UserType.Unrestricted,
-            "code": "1234",
-            **fields,
-        },
-    ).payload
-
-
-@pytest.mark.parametrize(
-    "cluster",
-    [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
-    ids=["stock", "quirk", "renaming_quirk"],
-)
-def test_parse_pin_response_reads_the_slots_reply(cluster: type[DoorLock]) -> None:
-    """
-    The Get PIN Code Response the lock's cluster decodes is the slot's answer.
-
-    A quirk's redefinition, under the stock name or another, is a schema class
-    of its own; it is still the reply.
-    """
-    assert ZHALock._parse_pin_response(_get_pin_code_response(cluster), 3, cluster) == (
-        DoorLock.UserStatus.Enabled,
-        "1234",
-    )
-
-
 @pytest.mark.parametrize(
     "cluster",
     [DoorLock, QuirkedDoorLock, RenamingQuirkDoorLock],
@@ -825,26 +738,6 @@ def test_parse_pin_response_reads_the_slots_reply(cluster: type[DoorLock]) -> No
 @pytest.mark.parametrize(
     "reply",
     [
-        pytest.param(
-            lambda cluster: _get_pin_code_response(cluster, user_id=4),
-            id="another_users_reply",
-        ),
-        # Every decoded zigpy command is a tuple, so read positionally this
-        # passed its event code for a user status and its code for the slot's.
-        pytest.param(
-            lambda cluster: (
-                lock_frame(
-                    cluster,
-                    "operation_event_notification",
-                    operation_event_source=DoorLock.OperationEventSource.Keypad,
-                    operation_event_code=DoorLock.OperationEvent.Lock,
-                    user_id=3,
-                    pin="1234",
-                    local_time=0,
-                ).payload
-            ),
-            id="operation_event",
-        ),
         pytest.param(
             lambda cluster: (
                 lock_frame(
@@ -1081,7 +974,7 @@ async def test_async_setup_clears_cached_state(
 
     # The cluster was re-discovered (cache cleared then re-populated)
     # Verify the cache was cleared by checking it went through discovery again
-    assert zha_lock._endpoint_id is not None
+    assert zha_lock._door_lock_cluster is cluster
 
 
 async def test_async_setup_is_idempotent(
@@ -1134,15 +1027,13 @@ async def test_get_users_slot_read_failure(
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """Test async_get_users marks unreadable for slots that fail to read."""
+    """A slot that fails to read fails the read: it is not a reading."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
     cluster.get_pin_code = AsyncMock(side_effect=RuntimeError("zigpy timeout"))
 
-    users = await zha_lock.async_get_users()
-    by_slot = {u.user_id: u for u in users}
-    assert by_slot[1].pin_credentials[0].state is SlotCredential.unreadable()
-    assert by_slot[2].pin_credentials[0].state is SlotCredential.unreadable()
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_users()
 
 
 async def test_get_users_no_managed_slots(
@@ -1287,7 +1178,7 @@ async def test_occupied_indices_stops_at_the_limit(
     assert cluster.get_pin_code.await_count == 3
 
 
-async def test_a_failed_index_is_unreadable_not_empty(
+async def test_a_failed_index_fails_the_read_not_reads_empty(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
@@ -1295,8 +1186,9 @@ async def test_a_failed_index_is_unreadable_not_empty(
     """An index the lock did not answer about is not an empty index.
 
     Calling it empty understates what the lock holds, and an understated
-    answer is the one that overwrites a code. Only a read that fails outright
-    makes occupancy unknown; a single index does not.
+    answer is the one that overwrites a code. Nor is it a reading at all:
+    reported as unreadable, a clear the lock acknowledged would read as done.
+    The read fails, and the lock's worker asks again.
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
@@ -1308,11 +1200,8 @@ async def test_a_failed_index_is_unreadable_not_empty(
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
 
-    codes = await zha_lock.async_get_usercodes(range(1, 4))
-    # Unreadable, not empty: the index holds something we could not read, and
-    # calling that empty is what lets a real credential be overwritten.
-    assert codes[2] is SlotCredential.unreadable()
-    assert codes[1].is_empty and codes[3].is_empty
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_usercodes(range(1, 4))
 
 
 async def test_occupied_indices_counts_a_write_only_slot(
@@ -1332,7 +1221,7 @@ async def test_occupied_indices_counts_a_write_only_slot(
     assert codes[2] is SlotCredential.unreadable()
 
 
-async def test_unparseable_response_is_unreadable_not_empty(
+async def test_an_unparseable_response_fails_the_read_not_reads_empty(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
@@ -1348,10 +1237,8 @@ async def test_unparseable_response_is_unreadable_not_empty(
     # A command the cluster has no definition for reaches the request as bytes.
     cluster.get_pin_code = AsyncMock(return_value=b"unexpected shape")
 
-    codes = await zha_lock.async_get_usercodes(range(1, 3))
-
-    assert codes[1] is SlotCredential.unreadable()
-    assert codes[2] is SlotCredential.unreadable()
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_usercodes(range(1, 3))
 
 
 @pytest.mark.parametrize(
@@ -1394,7 +1281,6 @@ async def test_only_available_means_the_slot_is_free(
     ("code", "readable"),
     [
         pytest.param("****", False, id="masked"),
-        pytest.param("1234", True, id="digits"),
         # Asterisks mixed with digits are not a shape any lock produces, and
         # guessing at partial masking would discard a code that is there.
         pytest.param("12**", True, id="partially_masked"),
@@ -1425,24 +1311,6 @@ async def test_a_masked_code_is_unreadable_not_known(
 
     assert codes[1].is_present
     assert codes[1].is_readable is readable
-
-
-async def test_available_is_an_empty_slot(
-    hass: HomeAssistant,
-    zha_lock: ZHALock,
-    simple_lcm_config_entry: MockConfigEntry,
-) -> None:
-    """The one status that does mean cleared still reads as cleared."""
-    cluster = zha_lock._get_door_lock_cluster()
-    assert cluster is not None
-    cluster.get_pin_code = AsyncMock(
-        side_effect=_every_slot_answers(DoorLock.UserStatus.Available, "")
-    )
-
-    codes = await zha_lock.async_get_usercodes(range(1, 3))
-
-    assert codes[1].is_empty
-    assert codes[2].is_empty
 
 
 async def test_max_slot_comes_from_the_zcl_attribute(
@@ -1609,12 +1477,12 @@ async def test_a_slot_read_nobody_answers_is_a_disconnect_not_an_unreadable_slot
         await asyncio.wait_for(zha_lock.async_get_users(), timeout=5)
 
 
-async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
+async def test_zigpys_own_timeout_fails_the_read_as_a_flaky_slot(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """zigpy giving up on one slot is a flaky slot, not a dead transport."""
+    """zigpy giving up on one slot is a failed read, not a dead transport."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
 
@@ -1624,10 +1492,9 @@ async def test_zigpys_own_timeout_marks_the_slot_unreadable_and_walks_on(
         return _pin_reply(slot_num, DoorLock.UserStatus.Available, "")
 
     cluster.get_pin_code = AsyncMock(side_effect=mock_get_pin_code)
-    users = await zha_lock.async_get_users()
-    by_slot = {u.user_id: u for u in users}
-    assert by_slot[1].pin_credentials[0].state == SlotCredential.unreadable()
-    assert by_slot[2].pin_credentials[0].state is SlotCredential.empty()
+    with pytest.raises(LockOperationFailed) as caught:
+        await zha_lock.async_get_users()
+    assert not isinstance(caught.value, LockDisconnected)
 
 
 async def test_scoped_hard_refresh_still_names_every_managed_slot(

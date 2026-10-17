@@ -8,8 +8,6 @@ digits. The PINs are eight digits so that a match cannot be an id or a
 timestamp that happens to contain them.
 """
 
-from __future__ import annotations
-
 import logging
 
 from freezegun.api import FrozenDateTimeFactory
@@ -29,7 +27,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_CREDENTIAL,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -115,5 +113,14 @@ async def test_no_configured_pin_reaches_a_log_record(
         for r in caplog.records
     ):
         pytest.fail("setup: nothing was logged at DEBUG")
+    # The exchange timing lines were among them (and are searched below).
+    messages = [record.getMessage() for record in caplog.records]
+    for timing in (
+        "set exchange answered in",
+        "provider set ok in",
+        "read-back exchange answered in",
+        "status out_of_sync -> in_sync",
+    ):
+        assert any(timing in message for message in messages), timing
     assert lcm_records_holding(caplog, (FIRST_PIN, SECOND_PIN, SET_PIN)) == []
     assert await hass.config_entries.async_unload(entry.entry_id)

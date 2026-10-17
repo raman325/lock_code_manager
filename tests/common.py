@@ -1,7 +1,5 @@
 """Common constants for tests."""
 
-from __future__ import annotations
-
 import asyncio
 from collections import defaultdict
 from collections.abc import (
@@ -58,6 +56,7 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PIN,
+    EVENT_HOMEASSISTANT_FINAL_WRITE,
     Platform,
 )
 from homeassistant.core import Event, HomeAssistant, callback
@@ -78,32 +77,34 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     CONF_USERS,
     DOMAIN,
-    MAX_SYNC_ATTEMPTS,
     SUBENTRY_TYPE_USER,
-    TICK_INTERVAL,
 )
-from custom_components.lock_code_manager.domain.allocation import build_lock_instance
-from custom_components.lock_code_manager.domain.config import (
+from custom_components.lock_code_manager.ha.allocation import build_lock_instance
+from custom_components.lock_code_manager.ha.runtime import (
+    CORE_KEYS,
+    REGISTRY_KEY,
+    async_setup_core,
+)
+from custom_components.lock_code_manager.model.config import (
     EntryConfig,
     async_write_entry_config,
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
     WriteResult,
-    pin_address,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     LockDisconnected,
     LockOperationFailed,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential, SyncState
-from custom_components.lock_code_manager.domain.slot_assignment import identity
-from custom_components.lock_code_manager.domain.sync import SlotSyncManager
+from custom_components.lock_code_manager.model.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
+from custom_components.lock_code_manager.sync.worker import LockWorker
 
 LOCK_1_ENTITY_ID = "lock.test_1"
 LOCK_2_ENTITY_ID = "lock.test_2"
@@ -153,16 +154,6 @@ UNCLAIMED_IDENTIFIER = "somebridge_1"
 UNCLAIMED_UNIQUE_ID = f"{UNCLAIMED_IDENTIFIER}_lock"
 
 
-def sync_manager_of(entity_obj: Any) -> SlotSyncManager:
-    """Return the Personal Identification Number sync manager an in-sync entity views."""
-    assert entity_obj._slot_coordinator is not None
-    manager = entity_obj._slot_coordinator.sync_manager(
-        entity_obj.lock.lock.entity_id, pin_address(int(entity_obj.slot_num))
-    )
-    assert manager is not None
-    return manager
-
-
 async def async_disable_and_reload(
     hass: HomeAssistant, config_entry: ConfigEntry, entity_id: str
 ) -> None:
@@ -183,25 +174,6 @@ async def async_enable_and_reload(
     await hass.config_entries.async_reload(config_entry.entry_id)
     await hass.async_block_till_done()
     assert hass.states.get(entity_id) is not None
-
-
-def all_sync_managers(config_entry: ConfigEntry) -> list[SlotSyncManager]:
-    """Return every running sync manager of an entry, across its slots."""
-    return [
-        manager
-        for coordinator in config_entry.runtime_data.slot_coordinators.values()
-        for manager in coordinator.sync_managers
-    ]
-
-
-@contextmanager
-def recording_listener(manager: SlotSyncManager, sink: list[bool | None]):
-    """Append every in-sync value the manager publishes to ``sink`` while inside."""
-    on_change = manager._on_change
-    with patch.object(
-        manager, "_on_change", lambda: (on_change(), sink.append(manager.in_sync))
-    ):
-        yield
 
 
 def async_blocking_stub(
@@ -227,11 +199,8 @@ def async_blocking_stub(
     return stub, entered, release
 
 
-def short_stop_grace(seconds: float = 0.05):
-    """Shrink the grace ``async_stop`` gives in-flight ticks before cancelling."""
-    return patch(
-        "custom_components.lock_code_manager.domain.sync.STOP_GRACE_SECONDS", seconds
-    )
+# The old sync tick's interval: the unit the time helpers still step in.
+TICK_INTERVAL = timedelta(seconds=2)
 
 
 # -- Driving time ---------------------------------------------------------
@@ -450,9 +419,25 @@ async def async_settle_background(
     await async_step_clock_until(
         hass,
         freezer,
-        lambda: not unfinished_tasks(hass),
+        lambda: not unfinished_tasks(hass) and not lock_workers_busy(hass),
         _MAX_STEPS_FOR_BACKGROUND,
         "background lock work",
+    )
+
+
+def lock_workers(hass: HomeAssistant) -> list[LockWorker]:
+    """Return the workers of every lock the instance's registry has in service."""
+    registry = hass.data.get(DOMAIN, {}).get(REGISTRY_KEY)
+    if registry is None:
+        return []
+    return [entry.worker for entry in registry._locks.values()]
+
+
+def lock_workers_busy(hass: HomeAssistant) -> bool:
+    """Return whether any lock worker still has a job queued or running."""
+    return any(
+        worker.started and worker._queue._unfinished_tasks  # type: ignore[attr-defined]
+        for worker in lock_workers(hass)
     )
 
 
@@ -460,15 +445,6 @@ def _live_timers(loop: asyncio.AbstractEventLoop) -> list[asyncio.TimerHandle]:
     """Return the event loop's scheduled timers that are not cancelled."""
     scheduled: list[asyncio.TimerHandle] = loop._scheduled  # type: ignore[attr-defined]
     return [handle for handle in scheduled if not handle.cancelled()]
-
-
-def _is_sync_tick(handle: asyncio.TimerHandle) -> bool:
-    """Return whether ``handle`` is a sync manager's interval timer."""
-    # Home Assistant's interval tracker arms its own bound method, and its
-    # ``action`` is the bound tick of the manager that started it.
-    tracker = getattr(handle._callback, "__self__", None)  # type: ignore[attr-defined]
-    action = getattr(tracker, "action", None)
-    return isinstance(getattr(action, "__self__", None), SlotSyncManager)
 
 
 async def _async_jump_clock(freezer: FrozenDateTimeFactory, seconds: float) -> None:
@@ -534,9 +510,9 @@ async def async_advance_sync_ticks(
     """
     loop = asyncio.get_running_loop()
     for _ in range(ticks):
-        if not (due := [h.when() for h in _live_timers(loop) if _is_sync_tick(h)]):
-            pytest.fail("no sync tick scheduled: is a Lock Code Manager entry loaded?")
-        await _async_step_timers_to(freezer, max(*due, loop.time()))
+        await _async_step_timers_to(
+            freezer, loop.time() + TICK_INTERVAL.total_seconds()
+        )
         if settle:
             await async_settle_background(hass, freezer)
 
@@ -686,54 +662,6 @@ def mock_lock(
     return lock
 
 
-async def async_trip_slot_breaker(
-    hass: HomeAssistant,
-    freezer: FrozenDateTimeFactory,
-    config_entry: ConfigEntry,
-    slot: int,
-    *,
-    lock_entity_id: str = LOCK_1_ENTITY_ID,
-    operation: Literal["set", "clear"] = "set",
-) -> LockFault:
-    """
-    Suspend a slot through its breaker, with real failures on real ticks.
-
-    Makes every ``operation`` on ``slot`` fail with ``LockOperationFailed``
-    and advances sync ticks until the slot's in-sync entity reports
-    ``suspended``. Each failure is one the sync charged on a tick of its
-    own, so the breaker's window and count are what the code under test made
-    of them -- nothing is set on the breaker by hand. The slot must already
-    be out of sync, so the next tick writes; change its PIN or the lock's
-    code first.
-
-    The slot's breaker only: ``LockDisconnected`` charges the lock's breaker
-    instead, which a successful read resets, so failing writes alone that
-    way never suspend. To reach the lock's breaker, fail every operation:
-    ``lock.fail(None, error=LockDisconnected)`` and ``async_tick_until``.
-
-    Returns the fault, still installed: the lock keeps failing until the test
-    clears it. Fails the test if the slot is not suspended within a couple of
-    ticks past ``MAX_SYNC_ATTEMPTS``, naming how many failures it saw. A tick
-    that fails to settle fails the test with its own message.
-    """
-    lock = mock_lock(config_entry, lock_entity_id)
-    entity_id = in_sync_entity_id(hass, config_entry, slot, lock_entity_id)
-    fault = lock.fail(operation, slot)
-    taken = await _async_tick_until(
-        hass,
-        freezer,
-        lambda: sync_status(hass, entity_id) == SyncState.SUSPENDED.value,
-        MAX_SYNC_ATTEMPTS + 2,
-    )
-    if taken is None:
-        fault.clear()
-        pytest.fail(
-            f"slot {slot} on {lock_entity_id} not suspended after {fault.hits} "
-            f"failed {operation}s; was it out of sync before the first tick?"
-        )
-    return fault
-
-
 @contextmanager
 def reading_for():
     """
@@ -749,7 +677,7 @@ def reading_for():
         return build_lock_instance(hass, dev_reg, ent_reg, config_entry, lock_entity_id)
 
     with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
         _spy,
     ):
         yield read_for
@@ -1240,6 +1168,13 @@ class MockLCMLock(BaseLock):
         # Reported regardless of ``codes``, so a slot keeps reading occupied
         # after a clear -- which is the state a clear can never confirm.
         self.write_only: set[int] = set()
+        # Slots this lock answers every read without saying anything about,
+        # the way an API-only Z-Wave JS UI lock does with a slot it cannot
+        # read. Told to the core as that provider tells it.
+        self.unanswered: set[int] = set()
+        # Slots this lock answers it cannot tell what they hold, as a Zigbee
+        # lock's user status Not Supported does (#1581).
+        self.cannot_tell: set[int] = set()
         self.service_calls: defaultdict[str, list] = defaultdict(list)
         self.call_order: list[str] = []
         # When each set, clear, and read reached the lock, on the monotonic
@@ -1555,17 +1490,11 @@ class MockLCMLock(BaseLock):
             await fault.async_after("set")
         return result
 
-    async def async_clear_usercode(
-        self, code_slot: int, *, adopt_untagged: bool = True
-    ) -> bool:
+    async def async_clear_usercode(self, code_slot: int) -> bool:
         """
         Clear a usercode on a code slot.
 
         Returns True if the value was changed, False if already cleared.
-
-        ``adopt_untagged`` is accepted and ignored: this lock is slot-only, so
-        it has no users to adopt. Matching the base signature is what lets the
-        release path pass it without special-casing the double.
         """
         fault = await self._async_reach_lock(
             "clear", (code_slot,), code_slot, changes=self._changes(code_slot, None)
@@ -1603,6 +1532,8 @@ class MockLCMLock(BaseLock):
         # empty managed slot would hide the read the pending-write machinery
         # waits on.
         result = {**dict.fromkeys(scope, SlotCredential.empty()), **codes}
+        self.last_cannot_tell_slots = frozenset(self.cannot_tell)
+        self.last_silent_slots = frozenset(self.unanswered | self.cannot_tell)
         if fault is not None:
             await fault.async_after("get")
         return result
@@ -1915,6 +1846,47 @@ def user_subentries(slots: dict[int, dict]) -> tuple[ConfigSubentryData, ...]:
         )
         for slot_num, fields in slots.items()
     )
+
+
+async def async_setup_lcm_entry(
+    hass: HomeAssistant, data: dict = TWO_SLOTS_ON_LOCK_1, unique_id: str = "lcm"
+) -> MockConfigEntry:
+    """Add a Lock Code Manager entry holding ``data`` and set it up."""
+    entry = MockConfigEntry(domain=DOMAIN, data=data, unique_id=unique_id)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def async_restart_lcm(
+    hass: HomeAssistant, *entries: ConfigEntry, settle: bool = True
+) -> None:
+    """
+    Restart Lock Code Manager's core: everything it kept in memory goes.
+
+    The entries unload, every worker stops (a clear still going included,
+    as when Home Assistant stops), the store is written as at Home
+    Assistant's final write, and the core starts again from what it holds.
+    The entries' locks are rebuilt; ``when_mock_lock_built`` keeps what a
+    real lock would hold across it.
+
+    Pass ``settle=False`` when the locks' first reads wait on a frozen clock
+    the caller steps: settling here would wait on them without moving it.
+    """
+    for entry in entries:
+        assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+    await hass.data[DOMAIN][REGISTRY_KEY].stop()
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_FINAL_WRITE)
+    await hass.async_block_till_done()
+    for key in CORE_KEYS:
+        hass.data[DOMAIN].pop(key, None)
+    await async_setup_core(hass)
+    for entry in entries:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    if settle:
+        await hass.async_block_till_done()
 
 
 def current_entry(

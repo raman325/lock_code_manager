@@ -1,7 +1,5 @@
 """Http views to control the config manager."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from datetime import timedelta
@@ -47,6 +45,7 @@ from homeassistant.core import (
 )
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util, slugify
 
@@ -99,21 +98,21 @@ from .const import (
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
-from .domain.config import parse_slot_unique_id
-from .domain.credentials import pin_address
-from .domain.locks import get_managed_locks
-from .domain.models import SlotCode, SlotCredential
-from .domain.queries import (
-    entries_configuring,
-    find_config_entry_by_title,
-    get_entry_config,
-    slots_configured_on,
-)
-from .domain.services import (
+from .ha.locks import get_managed_locks
+from .ha.runtime import lock_codes, lock_reachable, signal_lock_changed
+from .ha.services import (
     async_clear_slot_condition,
     async_clear_usercode,
     async_set_slot_condition,
     async_set_usercode,
+)
+from .model.config import parse_slot_unique_id
+from .model.credentials import SlotCode
+from .model.queries import (
+    entries_configuring,
+    find_config_entry_by_title,
+    get_entry_config,
+    slots_configured_on,
 )
 from .providers import BaseLock
 
@@ -128,7 +127,7 @@ CALENDAR_ATTR_END_TIME = "end_time"
 
 
 def _slot_code_payload(
-    code: str | SlotCredential | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     code_key: str = ATTR_CODE,
@@ -137,18 +136,9 @@ def _slot_code_payload(
     """
     Build the masked/revealed payload fields for a code on a lock.
 
-    SlotCode sentinels pass through as strings ("empty"/"unreadable_code"),
-    regular codes are revealed verbatim or masked to ``None`` plus a length,
-    and ``None`` stays ``None``. A ``SlotCredential`` is collapsed to its
-    label (sentinel or PIN) before serialization.
+    SlotCode sentinels pass through as their labels, a PIN is revealed
+    verbatim or masked to ``None`` plus a length, and ``None`` stays ``None``.
     """
-    if isinstance(code, SlotCredential):
-        label = code.as_label()
-        if isinstance(label, SlotCode):
-            return {code_key: str(label)}
-        if reveal:
-            return {code_key: label}
-        return {code_key: None, length_key: len(label)}
     if isinstance(code, SlotCode):
         return {code_key: str(code)}
     if reveal or code is None:
@@ -470,7 +460,7 @@ async def get_config_entry_data(
 
 def _serialize_slot(
     slot: Any,
-    code: str | SlotCredential | None,
+    code: str | SlotCode | None,
     *,
     reveal: bool,
     name: str | None = None,
@@ -654,9 +644,8 @@ def _get_lock_friendly_name(hass: HomeAssistant, lock: BaseLock) -> str:
 def _serialize_lock_coordinator(
     hass: HomeAssistant, lock: BaseLock, *, reveal: bool = False
 ) -> dict[str, Any]:
-    """Serialize coordinator data for a lock."""
-    coordinator = lock.coordinator
-    data = coordinator.credentials_by_slot() if coordinator is not None else {}
+    """Serialize what the lock holds, as its worker knows it."""
+    data = lock_codes(hass, lock.lock.entity_id)
     managed_slots = slots_configured_on(hass, lock.lock.entity_id)
     slot_entity_ids = _get_slot_entity_ids(hass, lock.lock.entity_id)
     slot_metadata = _get_slot_metadata(hass, slot_entity_ids)
@@ -697,7 +686,7 @@ def _serialize_lock_coordinator(
         ATTR_LOCK_NAME: _get_lock_friendly_name(hass, lock),
         CONF_SLOTS: slots,
     }
-    if coordinator and coordinator.unreachable:
+    if lock_reachable(hass, lock.lock.entity_id) is False:
         result[ATTR_SYNC_STATUS] = "suspended"
     return result
 
@@ -716,10 +705,10 @@ async def subscribe_lock_codes(
     msg: dict[str, Any],
 ) -> None:
     """
-    Subscribe to coordinator data and LCM entity state updates for a lock.
+    Subscribe to the lock's codes and LCM entity state updates for a lock.
 
     Triggers updates when:
-    - Lock coordinator data changes (codes on lock)
+    - The lock's worker learns of a change (codes on lock)
     - LCM entity states change (enabled, active, name, configured PIN)
     """
     lock_entity_id = msg[ATTR_LOCK_ENTITY_ID]
@@ -732,8 +721,6 @@ async def subscribe_lock_codes(
             f"Lock {lock_entity_id} is not managed by Lock Code Manager",
         )
         return
-
-    coordinator = lock.coordinator
 
     @callback
     def _send_update() -> None:
@@ -762,9 +749,9 @@ async def subscribe_lock_codes(
     )
     unsub_state = _refresh_state_tracking()
 
-    # Track coordinator updates (lock code changes).
-    unsub_coordinator = (
-        coordinator.async_add_listener(_send_update) if coordinator else lambda: None
+    # Track what the lock's worker learns (lock code changes).
+    unsub_coordinator = async_dispatcher_connect(
+        hass, signal_lock_changed(lock_entity_id), _send_update
     )
 
     def _unsub_all() -> None:
@@ -909,9 +896,8 @@ def _build_lock_status(
         if in_sync_state:
             sync_status = in_sync_state.attributes.get(ATTR_SYNC_STATUS)
 
-    # Get code from coordinator — SlotCode sentinels pass through as strings
-    coordinator = lock.coordinator
-    raw_code = coordinator.credential(pin_address(slot_num)) if coordinator else None
+    # What the lock's worker knows of the slot
+    raw_code = lock_codes(hass, lock_entity_id).get(slot_num)
 
     lock_status: dict[str, Any] = {
         ATTR_ENTITY_ID: lock_entity_id,
@@ -1088,7 +1074,7 @@ async def subscribe_code_slot(
 
     Provides real-time updates when:
     - Slot entities change (name, PIN, enabled, active)
-    - Lock coordinator data changes (codes on locks)
+    - The locks' workers learn of a change (codes on locks)
     - In-sync status changes
     - Calendar entity state changes (for event-based access control)
     """
@@ -1204,13 +1190,16 @@ async def subscribe_code_slot(
 
     # Track coordinator updates for all locks
     unsub_coordinators: list[Any] = []
-    entry_locks = config_entry.runtime_data.locks
     entry_lock_ids = get_entry_config(config_entry).locks
 
+    # Every lock the entry lists, held yet or not: a card can subscribe before
+    # the entry has its locks (#933).
     for lock_entity_id in entry_lock_ids:
-        lock = entry_locks.get(lock_entity_id)
-        if lock and lock.coordinator:
-            unsub_coordinators.append(lock.coordinator.async_add_listener(_send_update))
+        unsub_coordinators.append(
+            async_dispatcher_connect(
+                hass, signal_lock_changed(lock_entity_id), _send_update
+            )
+        )
 
     def _unsub_all() -> None:
         unsub_state()

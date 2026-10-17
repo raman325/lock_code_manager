@@ -11,13 +11,11 @@ reaches the projection, so it must also be total. Example-based tests in
 these pin the invariants over the whole input space.
 """
 
-from __future__ import annotations
-
 import json
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.credentials import SlotCredential
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
     _project_user_code_result,
     _unwrap_mqtt_value,

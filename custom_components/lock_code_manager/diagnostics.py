@@ -1,39 +1,36 @@
 """Diagnostics support for Lock Code Manager."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import DOMAIN, SENSITIVE_ENTITY_KEYS
-from .domain.config import build_slot_device_identifier, slot_unique_id_key
-from .domain.credentials import pin_address
-from .domain.models import SlotCode, SlotCredential
-from .domain.queries import get_entry_config
-from .domain.util import mask_pin
+from .const import DATA, DOMAIN, SENSITIVE_ENTITY_KEYS, LockCodeManagerData
+from .ha.runtime import lock_codes, lock_registry
+from .model.config import build_slot_device_identifier, slot_unique_id_key
+from .model.credentials import SlotCode
+from .model.pin_masking import mask_pin
+from .model.queries import get_entry_config
 from .providers._base import BaseLock
 
 
 def _get_instance_id(hass: HomeAssistant) -> str:
     """Return the HA instance UUID for PIN masking."""
-    return hass.data.get(DOMAIN, {}).get("instance_id", "")
+    return hass.data.get(DATA, LockCodeManagerData()).get("instance_id", "")
 
 
 def _mask_code(
-    code: SlotCredential | None, slot_num: int | str, instance_id: str
+    code: str | SlotCode | None, slot_num: int | str, instance_id: str
 ) -> str | None:
     """Mask a PIN code for diagnostics output."""
     if code is None:
         return None
-    label = code.as_label()
-    if isinstance(label, SlotCode):
-        return label.value
-    if not label:
+    if isinstance(code, SlotCode):
+        return code.value
+    if not code:
         return "empty"
-    return mask_pin(label, slot_num, instance_id)
+    return mask_pin(code, slot_num, instance_id)
 
 
 def _is_sensitive(entry: er.RegistryEntry) -> bool:
@@ -91,27 +88,31 @@ def _lock_diagnostic(
     ent_reg: er.EntityRegistry,
 ) -> dict[str, Any]:
     """Build diagnostic data for a single lock."""
-    coordinator = lock.coordinator
-    coordinator_data = (
-        {
-            str(slot): _mask_code(code, slot, instance_id)
-            for slot, code in coordinator.credentials_by_slot().items()
-        }
-        if coordinator and coordinator.data
-        else {}
-    )
-
+    lock_entity_id = lock.lock.entity_id
+    worker = lock_registry(hass).worker(lock_entity_id)
     result: dict[str, Any] = {
-        "entity_id": lock.lock.entity_id,
+        "entity_id": lock_entity_id,
         "domain": lock.domain,
         "supports_push": lock.supports_push,
         "supports_code_slot_events": lock.supports_code_slot_events,
-        "coordinator": {
-            "last_update_success": (
-                coordinator.last_update_success if coordinator else None
-            ),
-            "lock_unreachable": (coordinator.unreachable if coordinator else None),
-            "data": coordinator_data,
+        "worker": None
+        if worker is None
+        else {
+            "reachable": worker.reachable,
+            "offline": worker.offline,
+            "data": {
+                str(slot): _mask_code(code, slot, instance_id)
+                for slot, code in lock_codes(hass, lock_entity_id).items()
+            },
+            "slots": {
+                str(slot_num): {
+                    "status": worker.status(slot_num)[0].value,
+                    "hold": slot.hold.value if slot.hold else None,
+                    "tries": slot.tries,
+                    "release": slot.release,
+                }
+                for slot_num, slot in worker.slots.items()
+            },
         },
     }
 
@@ -148,17 +149,11 @@ def _slot_diagnostic(
 
     result["locks"] = {
         lock_id: (
-            {
-                "coordinator_code": _mask_code(
-                    lock.coordinator.credential(pin_address(slot_num)),
-                    slot_num,
-                    instance_id,
-                )
-            }
-            if lock.coordinator and lock.coordinator.data
+            {"code": _mask_code(code, slot_num, instance_id)}
+            if (code := lock_codes(hass, lock_id).get(slot_num)) is not None
             else {}
         )
-        for lock_id, lock in locks.items()
+        for lock_id in locks
         if entry_config.has_lock(lock_id)
     }
 

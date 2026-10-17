@@ -9,8 +9,6 @@ right, and neither fails loudly: the recorder logs a warning and the
 history is simply not there any more.
 """
 
-from __future__ import annotations
-
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.recorder.common import (

@@ -15,8 +15,20 @@ Features:
 - Give each person a name and a PIN; Lock Code Manager works out which slot
   on which lock they land in
 - Synchronize PIN codes across multiple locks and providers
-- Automatic sync — codes are set and cleared as needed, with retry and
-  drift detection
+- Automatic sync — codes are set and cleared as needed, and every write is
+  read back from the lock to confirm it, with retries and drift detection
+- Never touches codes it didn't create: new users go only in free slots, a
+  lock that already holds codes in the configuration's slots is refused until
+  you clear them, clearing or removing a user never deletes a lock user
+  without Lock Code Manager's tag, and on Matter only PINs Home Assistant
+  created are removed
+- Shows what each lock reports for each slot, including when a lock can't
+  tell (masked, unanswered, disabled on the lock, not reported). What Lock
+  Code Manager wrote is remembered across restarts, so codes a lock masks
+  aren't rewritten on every start
+- [Repairs](https://github.com/raman325/lock_code_manager/wiki/Repair-Issues)
+  tell you when a code can't be set or cleared, a lock is offline, or a
+  lock was re-paired
 - Condition entities control when a code is active:
   - `calendar` — active during events
   - `binary_sensor` / `switch` / `input_boolean` — active when on
@@ -42,10 +54,10 @@ Supported lock integrations and code sources:
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | ✅ | ✅ | Some locks mask PINs |
-| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events |
-| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock |
+| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events; see ⁵ for locks that cannot report PINs |
+| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock; see ⁵ for locks that cannot report PINs |
 | [Z-Wave JS UI][wiki-zwave-js-ui] (MQTT)³ | Varies | ✅ | ✅ | Locks bridged via zwave-js-ui's MQTT gateway; some locks mask PINs |
-| [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec |
+| [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec; only PINs Home Assistant created are removed |
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
 | [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | A credential store rather than a device: records uses reported by the `use_credential` action, and lets you try Lock Code Manager without a real lock |
@@ -84,6 +96,24 @@ and your locks together. A configuration needs no lock at all for this. See
 [External Keypads][wiki-external-keypads] for ESPHome recipes, including a device that
 asks for itself and never publishes the code to an entity, and
 [Unsupported Integrations][wiki-unsupported] for what a real provider would need.
+
+⁵ **Locks that can't report their codes** — Some locks take PINs but cannot report
+them: they never answer a read, or answer that user status is not supported
+(`not_supported_255` in Zigbee2MQTT; status 0xFF through ZHA, which is handled the same way).
+Lock Code Manager still sets and keeps the codes it manages on such a lock, but it
+cannot see a code programmed at the lock itself. So when it picks slots for new users
+(starting from slot 1), or when such a lock is added to an existing configuration, which
+then writes that configuration's codes to it, it may write over one. Setup, adding users,
+adding a lock and swapping one in (reauth) tell you when a lock cannot report its codes, and
+which slots will be used. On these locks, add codes through Lock Code Manager only, or keep
+any others in the highest slots. A lock that reports its free slots and answers not
+supported only for occupied ones has those left alone, once Lock Code Manager has seen it
+report a free slot; it remembers that across restarts. If a lock that can't report its codes
+is treated as one that can, so new users can't be placed, run **Hard refresh usercodes** with
+**Forget that the lock can report codes** (`forget_reporting`) enabled. Only do this for a
+lock that can't report its codes: a lock that reports its free slots is then no longer known to
+report, and until Lock Code Manager sees it report a free slot again it may place a new user
+over a code set at the keypad.
 
 [zigbee2mqtt]: https://www.zigbee2mqtt.io/
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration

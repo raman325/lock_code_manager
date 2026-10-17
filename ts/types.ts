@@ -3,15 +3,49 @@ import { EntityRegistryEntry } from './ha_type_stubs';
 /** Sentinel code values from backend SlotCode enum */
 export const SLOT_CODE_EMPTY = 'empty';
 export const SLOT_CODE_UNREADABLE = 'unreadable_code';
+/** The lock answered without saying anything about the slot */
+export const SLOT_CODE_UNANSWERED = 'unanswered';
+/** The lock holds a code for the slot that is not in force */
+export const SLOT_CODE_DISABLED = 'disabled_on_lock';
+/** A managed slot whose reading was set aside to read it again */
+export const SLOT_CODE_CHECKING = 'checking';
+/** The lock answered that it can't tell what the slot holds */
+export const SLOT_CODE_NOT_REPORTED = 'not_reported';
+
+const SLOT_CODE_SENTINELS: ReadonlySet<number | string | null> = new Set([
+    SLOT_CODE_EMPTY,
+    SLOT_CODE_UNREADABLE,
+    SLOT_CODE_UNANSWERED,
+    SLOT_CODE_DISABLED,
+    SLOT_CODE_CHECKING,
+    SLOT_CODE_NOT_REPORTED
+]);
+
+/** True if code is a backend label rather than a PIN */
+export function isSlotSentinel(code: number | string | null): boolean {
+    return SLOT_CODE_SENTINELS.has(code);
+}
 
 /** True if code represents a cleared/empty slot */
 export function isSlotEmpty(code: number | string | null): boolean {
     return code === null || code === '' || code === SLOT_CODE_EMPTY;
 }
 
-/** True if code represents an occupied slot (readable, masked, or unreadable) */
+/**
+ * True if code represents an occupied slot (readable, masked, unreadable, or
+ * disabled on the lock). A lock that didn't answer, or can't report the slot, has
+ * said nothing about it, nor has one whose slot is being checked, so none of them
+ * counts as occupied.
+ */
 export function isSlotOccupied(code: number | string | null, codeLength?: number): boolean {
-    if (code === SLOT_CODE_UNREADABLE) return true;
+    if (
+        code === SLOT_CODE_UNANSWERED ||
+        code === SLOT_CODE_NOT_REPORTED ||
+        code === SLOT_CODE_CHECKING
+    ) {
+        return false;
+    }
+    if (code === SLOT_CODE_UNREADABLE || code === SLOT_CODE_DISABLED) return true;
     if (isSlotEmpty(code)) return !!codeLength;
     return true;
 }
@@ -152,7 +186,10 @@ export interface LockCoordinatorSlotData {
     active?: boolean;
     /**
      * Code on the lock. Values: actual PIN string/number, null (no data),
-     * "empty" (slot cleared), "unreadable_code" (code exists but unreadable)
+     * "empty" (slot cleared), "unreadable_code" (code exists but unreadable),
+     * "unanswered" (the lock said nothing of the slot), "disabled_on_lock"
+     * (the lock holds a code that is not in force), "checking" (a managed
+     * slot being read again), "not_reported" (the lock can't report the slot)
      */
     code: number | string | null;
     /** Present when masked (code is null but slot has a readable code) */
@@ -247,7 +284,7 @@ export interface LockCodeManagerSlotCardConfig {
 }
 
 export interface SlotCardLockStatus {
-    /** Code on the lock: actual PIN, null, "empty" (cleared), or "unreadable_code" (unreadable) */
+    /** Code on the lock: actual PIN, null, or a SLOT_CODE_* label */
     code: string | null;
     /** Code length when masked (readable code, not revealed) */
     code_length?: number;

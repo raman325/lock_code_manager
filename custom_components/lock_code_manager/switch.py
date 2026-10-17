@@ -1,8 +1,7 @@
 """Switch for lock_code_manager."""
 
-from __future__ import annotations
-
 import logging
+from typing import override
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import CONF_ENABLED
@@ -11,10 +10,10 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import subentry_id_for_slot
-from .domain.slot_coordinator import PinRequiredError
 from .entity import BaseLockCodeManagerEntity
+from .ha.entry import LockCodeManagerConfigEntry
+from .ha.slot_coordinator import PinRequiredError
+from .model.queries import subentry_id_for_slot
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,10 +48,12 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
     """Switch entity for lock code manager."""
 
     @property
+    @override
     def is_on(self) -> bool:
         """Return native value."""
         return self._state
 
+    @override
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on switch."""
         coordinator = self._require_slot_coordinator()
@@ -62,6 +63,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
             raise HomeAssistantError(str(err)) from err
         self.async_write_ha_state()
 
+    @override
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off switch."""
         coordinator = self._require_slot_coordinator()

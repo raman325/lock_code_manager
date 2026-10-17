@@ -1,13 +1,12 @@
 """Full lifecycle E2E tests for Z-Wave JS lock provider."""
 
-from __future__ import annotations
-
+import asyncio
 from collections import Counter
 from collections.abc import Iterable
 import copy
 from datetime import timedelta
 import itertools
-import re
+import logging
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -37,7 +36,12 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.config_entries import ConfigEntryDisabler, ConfigEntryState
+from homeassistant.config_entries import (
+    SOURCE_USER,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+    ConfigSubentry,
+)
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_NAME,
@@ -50,6 +54,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
     STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
 )
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
@@ -58,30 +63,41 @@ from homeassistant.helpers.event import async_track_state_change_event
 from custom_components.lock_code_manager.const import (
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
+    CONF_NUM_USERS,
+    CONF_SLOT,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
 )
-from custom_components.lock_code_manager.domain.coordinator import (
-    LockUsercodeUpdateCoordinator,
+from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
+from custom_components.lock_code_manager.ha.runtime import (
+    lock_codes,
+    lock_registry,
+    locks_that_cannot_report,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    SlotCredential,
     WriteResult,
-    pin_address,
 )
-from custom_components.lock_code_manager.domain.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.queries import subentry_id_for_slot
-from custom_components.lock_code_manager.domain.util import per_lock_issue_id
+from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
+from custom_components.lock_code_manager.model.locks import per_lock_issue_id
+from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers._base import MIN_OPERATION_DELAY
+from custom_components.lock_code_manager.providers._util import parse_tag
 from custom_components.lock_code_manager.providers.zwave_js import ZWaveJSLock
+from custom_components.lock_code_manager.sync.slot import Holds
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.common import (
     async_advance_clock,
     async_advance_sync_ticks,
+    async_configure_flow,
+    async_set_slot_pin,
     async_switch_slot,
     async_tick_until,
     code_entity_id,
     in_sync_entity_id,
+    lcm_issue_ids,
     slot_entity_id,
     user_subentries,
 )
@@ -93,12 +109,52 @@ from tests.providers.zwave_js.conftest import (
 from tests.providers.zwave_js.fake_node import (
     USER_CREDENTIAL_CC_ID,
     FakeZWaveLock,
+    UserReportType,
     supervised_lock_state,
     user_credential_lock_state,
 )
 from tests.providers.zwave_js.helpers import (
     make_uc_value_event,
 )
+
+
+def _codes(hass: HomeAssistant, lock: ZWaveJSLock) -> dict[int, str | SlotCode]:
+    """Return what the lock's worker has seen of every slot on it."""
+    return lock_codes(hass, lock.lock.entity_id)
+
+
+def _record_pushes(
+    hass: HomeAssistant, lock: ZWaveJSLock
+) -> list[tuple[int, SlotCredential]]:
+    """Record what the provider pushes to the lock's worker, slot by slot."""
+    worker = lock_registry(hass).worker(lock.lock.entity_id)
+    assert worker is not None
+    port = worker.port
+    pushed: list[tuple[int, SlotCredential]] = []
+    forward = port.pushed
+
+    def _pushed(slot: int, credential: SlotCredential) -> None:
+        pushed.append((slot, credential))
+        forward(slot, credential)
+
+    port.pushed = _pushed  # type: ignore[method-assign]
+    return pushed
+
+
+def _users_tagged_for(lock: FakeZWaveLock, slot: int) -> set[int]:
+    """Return the ids of the lock's users whose name carries LCM's tag for ``slot``."""
+    return {
+        user_id
+        for user_id, user in lock.users.items()
+        if parse_tag(user.user_name)[0] == slot
+    }
+
+
+def _first_push(
+    pushed: list[tuple[int, SlotCredential]], slot: int
+) -> SlotCredential | None:
+    """Return the first credential pushed for ``slot`` (later ones are read-backs)."""
+    return next((credential for number, credential in pushed if number == slot), None)
 
 
 def async_capture_events(
@@ -113,168 +169,6 @@ def async_capture_events(
 
     hass.bus.async_listen(event_name, capture_events)
     return events
-
-
-class TestFullSetupLifecycle:
-    """Verify LCM correctly discovers and sets up the Z-Wave JS provider."""
-
-    async def test_provider_discovered_as_zwave_js(
-        self,
-        hass: HomeAssistant,
-        lcm_config_entry,
-        lock_entity: er.RegistryEntry,
-    ) -> None:
-        """Verify LCM discovers the Z-Wave JS lock and creates a ZWaveJSLock."""
-        lock = lcm_config_entry.runtime_data.locks.get(lock_entity.entity_id)
-        assert lock is not None
-        assert isinstance(lock, ZWaveJSLock)
-
-    async def test_coordinator_created(
-        self,
-        hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-    ) -> None:
-        """The coordinator is created and attached to the provider."""
-        assert e2e_zwave_lock.coordinator is not None
-
-    async def test_push_subscription_established(
-        self,
-        hass: HomeAssistant,
-        e2e_zwave_lock: ZWaveJSLock,
-    ) -> None:
-        """The provider subscribes to Z-Wave JS value updates during setup."""
-        assert e2e_zwave_lock._push_unsubs
-
-
-class TestSetAndClearUsercodes:
-    """Verify set/clear operations invoke the unified access-control primitives."""
-
-    async def test_set_usercode_calls_lock_helpers(
-        self,
-        hass: HomeAssistant,
-        zwave_js_lock: ZWaveJSLock,
-        mock_access_control: MagicMock,
-        mock_lock_helpers: dict,
-        zwave_integration: MockConfigEntry,
-    ) -> None:
-        """Setting a code drives async_set_user then async_set_credential via lock_helpers."""
-        lcm_entry = MockConfigEntry(
-            domain=DOMAIN,
-            data={
-                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-                CONF_SLOTS: {"4": {}},
-            },
-        )
-        lcm_entry.add_to_hass(hass)
-        zwave_js_lock._min_operation_delay = 0.0
-        mock_access_control.get_user_cached.return_value = None
-        mock_lock_helpers["async_set_user"].return_value = {"user_id": 4}
-
-        result = await zwave_js_lock.async_set_usercode(4, "5678", "Test User")
-
-        assert result is WriteResult.CONFIRMED
-        mock_lock_helpers["async_set_user"].assert_called_once()
-        mock_lock_helpers["async_set_credential"].assert_called_once()
-
-    async def test_clear_usercode_calls_lock_helpers(
-        self,
-        hass: HomeAssistant,
-        zwave_js_lock: ZWaveJSLock,
-        mock_access_control: MagicMock,
-        mock_lock_helpers: dict,
-        zwave_integration: MockConfigEntry,
-    ) -> None:
-        """Clearing a slot resolves the owner then calls async_delete_credential."""
-        lcm_entry = MockConfigEntry(
-            domain=DOMAIN,
-            data={
-                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-                CONF_SLOTS: {"2": {}},
-            },
-        )
-        lcm_entry.add_to_hass(hass)
-        zwave_js_lock._min_operation_delay = 0.0
-        mock_access_control.get_users_cached.return_value = [
-            UserData(
-                user_id=2,
-                active=True,
-                user_type=UserCredentialUserType.GENERAL,
-                user_name="bob",
-            ),
-        ]
-        mock_access_control.get_all_credentials_cached.return_value = [
-            CredentialData(
-                user_id=2,
-                type=UserCredentialType.PIN_CODE,
-                slot=2,
-                data="1234",
-            ),
-        ]
-
-        result = await zwave_js_lock.async_clear_usercode(2)
-
-        assert result is True
-        mock_lock_helpers["async_delete_credential"].assert_called_once()
-
-
-class TestGetUsercodes:
-    """Verify reading usercodes from the access_control API."""
-
-    async def test_get_usercodes_returns_codes_from_access_control(
-        self,
-        hass: HomeAssistant,
-        zwave_js_lock: ZWaveJSLock,
-        mock_access_control: MagicMock,
-        mock_lock_helpers: dict,
-        zwave_integration: MockConfigEntry,
-    ) -> None:
-        """
-        async_get_usercodes projects access_control users and credentials to slots.
-
-        The access_control fixture is seeded with two users at slots 1 and 2.
-        The result maps each slot to the readable Personal Identification Number.
-        """
-        lcm_entry = MockConfigEntry(
-            domain=DOMAIN,
-            data={
-                CONF_LOCKS: [zwave_js_lock.lock.entity_id],
-                CONF_SLOTS: {"1": {}, "2": {}},
-            },
-        )
-        lcm_entry.add_to_hass(hass)
-        mock_access_control.get_users_cached.return_value = [
-            UserData(
-                user_id=1,
-                active=True,
-                user_type=UserCredentialUserType.GENERAL,
-                user_name="alice",
-            ),
-            UserData(
-                user_id=2,
-                active=True,
-                user_type=UserCredentialUserType.GENERAL,
-                user_name="bob",
-            ),
-        ]
-        mock_access_control.get_all_credentials_cached.return_value = [
-            CredentialData(
-                user_id=1,
-                type=UserCredentialType.PIN_CODE,
-                slot=1,
-                data="9999",
-            ),
-            CredentialData(
-                user_id=2,
-                type=UserCredentialType.PIN_CODE,
-                slot=2,
-                data="1234",
-            ),
-        ]
-
-        codes = await zwave_js_lock.async_get_usercodes()
-
-        assert codes[1] == SlotCredential.known("9999")
-        assert codes[2] == SlotCredential.known("1234")
 
 
 class TestEvents:
@@ -318,13 +212,14 @@ class TestEvents:
 
         fired.assert_called_once_with(code_slot=1, to_locked=True)
 
-    async def test_push_credential_added_reaches_coordinator(
+    async def test_push_credential_added_reaches_the_worker(
         self,
         hass: HomeAssistant,
         e2e_zwave_lock: ZWaveJSLock,
         lock_schlage_be469: Node,
     ) -> None:
-        """A credential-added node event for a Personal Identification Number updates the coordinator."""
+        """A credential-added node event for a Personal Identification Number reaches the worker."""
+        pushed = _record_pushes(hass, e2e_zwave_lock)
         event = ZwaveEvent(
             type="credential added",
             data={
@@ -343,11 +238,8 @@ class TestEvents:
         await hass.async_block_till_done()
 
         # Credential events push unreadable (the lock doesn't expose the Personal
-        # Identification Number value in the event; a coordinator refresh reads it).
-        assert (
-            e2e_zwave_lock.coordinator.data.get(pin_address(1))
-            == SlotCredential.unreadable()
-        )
+        # Identification Number value in the event; the worker's read gets it).
+        assert _first_push(pushed, 1) == SlotCredential.unreadable()
 
 
 # A push lock is read only when asked, and Home Assistant debounces the asking:
@@ -369,6 +261,30 @@ def _slot_states(
         ).state,
         hass.states.get(code_entity_id(hass, entry, slot, lock_entity.entity_id)).state,
     )
+
+
+def _record_slot_states(
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    lock_entity: er.RegistryEntry,
+    slot: int,
+) -> list[tuple[str, str]]:
+    """Record a slot's in-sync and code sensor states each time either changes."""
+    seen: list[tuple[str, str]] = []
+
+    @callback
+    def _record(event: Event[EventStateChangedData]) -> None:
+        seen.append(_slot_states(hass, entry, lock_entity, slot))
+
+    async_track_state_change_event(
+        hass,
+        [
+            in_sync_entity_id(hass, entry, slot, lock_entity.entity_id),
+            code_entity_id(hass, entry, slot, lock_entity.entity_id),
+        ],
+        _record,
+    )
+    return seen
 
 
 async def _async_change_pin(
@@ -449,6 +365,7 @@ class TestSharedLock:
         lcm_config_entry: MockConfigEntry,
         lock_entity: er.RegistryEntry,
         lock_schlage_be469: Node,
+        mock_access_control: MagicMock,
         mock_lock_helpers: dict,
     ) -> None:
         """
@@ -460,6 +377,8 @@ class TestSharedLock:
         set (#863) would be taken at its word: the slot reported empty while it
         holds the code, and the code written again.
         """
+        # The lock holds the second entry's code: its reads say so.
+        _lock_holds_on_slot_3(mock_access_control, "5555")
         second_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_second")
         second_entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(second_entry.entry_id)
@@ -483,7 +402,7 @@ class TestSharedLock:
             )
         )
         await hass.async_block_till_done()
-        assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("5555")
+        assert _codes(hass, lock).get(3) == "5555"
 
         await async_trigger_sync_tick(hass, in_sync, set_dirty=False)
         assert hass.states.get(in_sync).state == "on"
@@ -567,56 +486,9 @@ class TestSharedLock:
         )
         await hass.async_block_till_done()
 
-        assert lock.coordinator.data.get(pin_address(1)) == SlotCredential.empty()
+        assert _codes(hass, lock).get(1) == SlotCode.EMPTY
 
         await hass.config_entries.async_unload(second_entry.entry_id)
-
-    @pytest.mark.parametrize(
-        "state",
-        [
-            ConfigEntryState.SETUP_IN_PROGRESS,
-            ConfigEntryState.SETUP_RETRY,
-            ConfigEntryState.UNLOAD_IN_PROGRESS,
-            ConfigEntryState.NOT_LOADED,
-        ],
-        ids=[
-            "setting_up",
-            "retrying_setup",
-            "unloading_to_reload",
-            "between_unload_and_setup",
-        ],
-    )
-    async def test_an_enabled_entry_not_loaded_keeps_its_slots(
-        self,
-        hass: HomeAssistant,
-        lcm_config_entry: MockConfigEntry,
-        lock_entity: er.RegistryEntry,
-        lock_schlage_be469: Node,
-        state: ConfigEntryState,
-    ) -> None:
-        """
-        An enabled entry's slots stay its own through setup and a reload.
-
-        It syncs them before its setup finishes, and a reload unloads and sets
-        it up again without anybody releasing them, so a stale Available on
-        such a slot is still ignored while its code is wanted.
-        """
-        joining_entry = _entry_on_slot_3(lock_entity, "test_zwave_js_e2e_joining")
-        joining_entry.add_to_hass(hass)
-        joining_entry.mock_state(hass, state)
-        lock = get_zwave_lock(hass, lcm_config_entry, lock_entity)
-
-        lock_schlage_be469.receive_event(
-            make_uc_value_event(lock_schlage_be469.node_id, "userCode", 3, "5555")
-        )
-        lock_schlage_be469.receive_event(
-            make_uc_value_event(
-                lock_schlage_be469.node_id, "userIdStatus", 3, CodeSlotStatus.AVAILABLE
-            )
-        )
-        await hass.async_block_till_done()
-
-        assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("5555")
 
     @pytest.mark.parametrize(
         "state",
@@ -656,7 +528,7 @@ class TestSharedLock:
         )
         await hass.async_block_till_done()
 
-        assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.empty()
+        assert _codes(hass, lock).get(3) == SlotCode.EMPTY
 
 
 def _lock_holds_on_slot_3(access_control: MagicMock, pin: str) -> None:
@@ -666,7 +538,8 @@ def _lock_holds_on_slot_3(access_control: MagicMock, pin: str) -> None:
             user_id=3,
             active=True,
             user_type=UserCredentialUserType.GENERAL,
-            user_name="slot3",
+            # Lock Code Manager's own user: an untagged one is someone else's.
+            user_name="lcm:3:slot3",
         )
     ]
     access_control.get_all_credentials_cached.return_value = [
@@ -675,12 +548,13 @@ def _lock_holds_on_slot_3(access_control: MagicMock, pin: str) -> None:
 
 
 async def _assert_a_refresh_reads_the_lock(
-    lock: ZWaveJSLock, access_control: MagicMock
+    hass: HomeAssistant, lock: ZWaveJSLock, access_control: MagicMock
 ) -> None:
-    """Assert the lock's coordinator still reads the lock when refreshed."""
+    """Assert the lock's worker still reads the lock when asked."""
     _lock_holds_on_slot_3(access_control, "7777")
-    await lock.coordinator.async_refresh()
-    assert lock.coordinator.data.get(pin_address(3)) == SlotCredential.known("7777")
+    worker = lock_registry(hass).worker(lock.lock.entity_id)
+    assert worker is not None
+    assert (await worker.read([3]))[3] == Holds("7777")
 
 
 class TestSharedCoordinatorLifetime:
@@ -706,7 +580,7 @@ class TestSharedCoordinatorLifetime:
         await hass.async_block_till_done()
         assert second_entry.runtime_data.locks[lock_entity.entity_id] is lock
 
-        await _assert_a_refresh_reads_the_lock(lock, mock_access_control)
+        await _assert_a_refresh_reads_the_lock(hass, lock, mock_access_control)
 
         await hass.config_entries.async_unload(second_entry.entry_id)
 
@@ -728,7 +602,7 @@ class TestSharedCoordinatorLifetime:
         await hass.async_block_till_done()
         assert get_zwave_lock(hass, lcm_config_entry, lock_entity) is lock
 
-        await _assert_a_refresh_reads_the_lock(lock, mock_access_control)
+        await _assert_a_refresh_reads_the_lock(hass, lock, mock_access_control)
 
         await hass.config_entries.async_unload(second_entry.entry_id)
 
@@ -766,10 +640,12 @@ class TestSharedCoordinatorLifetime:
                 fake_zwave_lock_entry.entry_id
             )
         await hass.async_block_till_done()
+        seen = _record_slot_states(hass, second_entry, lock_entity, 3)
         fake_zwave_lock.program(3, "0000")
         await hass.async_block_till_done()
 
-        assert _slot_states(hass, second_entry, lock_entity, 3) == (STATE_OFF, "0000")
+        # The change is seen, and the worker puts the code back at once.
+        assert (STATE_OFF, "0000") in seen
         await _async_settle_in_sync(hass, freezer, second_entry, lock_entity, 3)
         assert fake_zwave_lock.holds(3) == "5555"
 
@@ -817,7 +693,7 @@ class TestSharedCoordinatorLifetime:
     @pytest.mark.parametrize(
         "creating_entry_last", [True, False], ids=["creating_last", "creating_first"]
     )
-    async def test_the_coordinator_shuts_down_once_the_last_entry_unloads(
+    async def test_the_worker_stops_once_the_last_entry_unloads(
         self,
         hass: HomeAssistant,
         zwave_integration: MockConfigEntry,
@@ -827,17 +703,13 @@ class TestSharedCoordinatorLifetime:
         creating_entry_last: bool,
     ) -> None:
         """
-        The coordinator runs until the last entry using the lock unloads, then stops.
+        The lock's worker runs until the last entry using the lock unloads, then stops.
 
-        Watched from before the coordinator exists, so a shutdown registered
-        while it is built is counted with the one Lock Code Manager runs.
+        Watched from before the worker exists, so every stop is counted.
         """
         with patch.object(
-            LockUsercodeUpdateCoordinator,
-            "async_shutdown",
-            autospec=True,
-            side_effect=LockUsercodeUpdateCoordinator.async_shutdown,
-        ) as shutdown:
+            LockWorker, "stop", autospec=True, side_effect=LockWorker.stop
+        ) as stop:
             creating_entry = MockConfigEntry(
                 domain=DOMAIN,
                 data={
@@ -852,6 +724,7 @@ class TestSharedCoordinatorLifetime:
                 assert await hass.config_entries.async_setup(entry.entry_id)
                 await hass.async_block_till_done()
             lock = get_zwave_lock(hass, creating_entry, lock_entity)
+            worker = lock_registry(hass).worker(lock_entity.entity_id)
             first, last = (
                 (second_entry, creating_entry)
                 if creating_entry_last
@@ -860,62 +733,19 @@ class TestSharedCoordinatorLifetime:
 
             assert await hass.config_entries.async_unload(first.entry_id)
             await hass.async_block_till_done()
-            shutdown.assert_not_called()
-            await _assert_a_refresh_reads_the_lock(lock, mock_access_control)
+            stop.assert_not_called()
+            assert lock_registry(hass).worker(lock_entity.entity_id) is worker
+            await _assert_a_refresh_reads_the_lock(hass, lock, mock_access_control)
 
             assert await hass.config_entries.async_unload(last.entry_id)
             await hass.async_block_till_done()
-            shutdown.assert_awaited_once_with(lock.coordinator)
+            stop.assert_awaited_once()
+            assert stop.await_args.args[0] is worker
+            assert lock_registry(hass).worker(lock_entity.entity_id) is None
 
 
 class TestColdStartRace:
     """Regression tests for issue #1321: LCM setup racing zwave_js startup."""
-
-    async def test_lcm_setup_survives_zwave_entry_not_loaded(
-        self,
-        hass: HomeAssistant,
-        zwave_integration: MockConfigEntry,
-        lock_entity: er.RegistryEntry,
-        mock_access_control,
-        mock_lock_helpers: dict,
-    ) -> None:
-        """LCM setup while zwave_js is still loading degrades and recovers.
-
-        Reproduces issue #1321: the zwave_js config entry has not reached
-        LOADED when LCM sets up (slow boot). The lock must not be dropped;
-        it stays registered in a degraded state and recovers automatically
-        when the zwave_js entry finishes loading.
-        """
-        assert await hass.config_entries.async_unload(zwave_integration.entry_id)
-        await hass.async_block_till_done()
-
-        lcm_entry = MockConfigEntry(
-            domain=DOMAIN,
-            data={
-                CONF_LOCKS: [lock_entity.entity_id],
-                CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS,
-            },
-            unique_id="test_zwave_js_cold_start",
-        )
-        lcm_entry.add_to_hass(hass)
-        assert await hass.config_entries.async_setup(lcm_entry.entry_id)
-        await hass.async_block_till_done()
-
-        # The lock survived setup in a degraded state instead of being dropped.
-        lock = lcm_entry.runtime_data.locks.get(lock_entity.entity_id)
-        assert lock is not None
-        assert isinstance(lock, ZWaveJSLock)
-        assert lock.coordinator is not None
-        assert lock._setup_succeeded is False
-
-        # zwave_js finishes loading -> the LOADED transition drives recovery.
-        assert await hass.config_entries.async_setup(zwave_integration.entry_id)
-        await hass.async_block_till_done()
-
-        assert lock._setup_succeeded is True
-        assert lock._push_unsubs
-
-        await hass.config_entries.async_unload(lcm_entry.entry_id)
 
     async def test_entities_come_up_once_zwave_js_loads(
         self,
@@ -957,10 +787,12 @@ class TestColdStartRace:
         )
         assert _slot_states(hass, lcm_entry, lock_entity, 2) == (STATE_ON, "1234")
 
-        # The lock's reports reach the slot: it is listened to, not just read.
+        # The lock's reports reach the slot: it is listened to, not just read
+        # (the worker then puts the code back at once).
+        seen = _record_slot_states(hass, lcm_entry, lock_entity, 2)
         fake_zwave_lock.program(2, "4321")
         await hass.async_block_till_done()
-        assert _slot_states(hass, lcm_entry, lock_entity, 2) == (STATE_OFF, "4321")
+        assert (STATE_OFF, "4321") in seen
 
         await hass.config_entries.async_unload(lcm_entry.entry_id)
 
@@ -998,10 +830,7 @@ class TestUserCodeReports:
         )
         await hass.async_block_till_done()
 
-        assert (
-            fake_e2e_lock.coordinator.data.get(pin_address(UNWANTED_SLOT))
-            == SlotCredential.empty()
-        )
+        assert _codes(hass, fake_e2e_lock).get(UNWANTED_SLOT) == SlotCode.EMPTY
 
     @pytest.mark.parametrize(
         "code",
@@ -1024,14 +853,13 @@ class TestUserCodeReports:
         empty, sync would rewrite the slot forever. The code field is read
         as it always was.
         """
+        pushed = _record_pushes(hass, fake_e2e_lock)
         fake_zwave_lock.send_user_code_report(
             WANTED_SLOT, CodeSlotStatus.AVAILABLE, code
         )
         await hass.async_block_till_done()
 
-        assert fake_e2e_lock.coordinator.data.get(
-            pin_address(WANTED_SLOT)
-        ) == SlotCredential.known(code)
+        assert _first_push(pushed, WANTED_SLOT) == SlotCredential.known(code)
 
     @pytest.mark.parametrize(
         ("code", "expected"),
@@ -1052,10 +880,11 @@ class TestUserCodeReports:
         expected: SlotCredential,
     ) -> None:
         """An Enabled slot holds its code, or a code it will not say."""
+        pushed = _record_pushes(hass, fake_e2e_lock)
         fake_zwave_lock.send_user_code_report(code_slot, CodeSlotStatus.ENABLED, code)
         await hass.async_block_till_done()
 
-        assert fake_e2e_lock.coordinator.data.get(pin_address(code_slot)) == expected
+        assert _first_push(pushed, code_slot) == expected
 
     @pytest.mark.parametrize(
         "code_after_clear",
@@ -1157,12 +986,11 @@ class TestUserCodeReports:
             hass, freezer, fake_zwave_lock_entry, lock_entity, 2
         )
 
+        seen = _record_slot_states(hass, fake_zwave_lock_entry, lock_entity, 2)
         fake_zwave_lock.program(2, "4321")
         await hass.async_block_till_done()
-        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
-            STATE_OFF,
-            "4321",
-        )
+        # Seen, then put back at once.
+        assert (STATE_OFF, "4321") in seen
 
         await _async_settle_in_sync(
             hass, freezer, fake_zwave_lock_entry, lock_entity, 2
@@ -1284,11 +1112,28 @@ class TestDuplicateRefusedByUserCodeLock:
         """How the lock shows a code it holds."""
         return request.param
 
+    @pytest.fixture(
+        params=[None, "15.25.1"], ids=["unsupervised", "supervised_older_driver"]
+    )
+    def supervised_driver(self, request: pytest.FixtureRequest) -> str | None:
+        """
+        The driver behind a lock that supervises its Sets, or None if it does not.
+
+        Before 15.25.2 the driver cached nothing of a supervised Set and read
+        nothing back after a failed one (#1651/#1652).
+        """
+        return request.param
+
     @pytest.fixture
     def lock_schlage_be469_state(
-        self, lock_schlage_be469_state: dict[str, Any], code_display: str
+        self,
+        lock_schlage_be469_state: dict[str, Any],
+        code_display: str,
+        supervised_driver: str | None,
     ) -> dict[str, Any]:
         """The node's value database as the lock filled it at inclusion."""
+        if supervised_driver is not None:
+            lock_schlage_be469_state = supervised_lock_state(lock_schlage_be469_state)
         for value in lock_schlage_be469_state["values"]:
             if (
                 value["commandClass"] == CommandClass.USER_CODE
@@ -1301,12 +1146,17 @@ class TestDuplicateRefusedByUserCodeLock:
         return lock_schlage_be469_state
 
     @pytest.fixture
-    def fake_zwave_lock_options(self, code_display: str) -> dict[str, Any]:
+    def fake_zwave_lock_options(
+        self, code_display: str, supervised_driver: str | None
+    ) -> dict[str, Any]:
         """The lock holds the entry's PINs, and 5555 at slot 5."""
-        return {
+        options: dict[str, Any] = {
             "code_display": code_display,
             "codes": {1: "9999", 2: "1234", 5: "5555"},
         }
+        if supervised_driver is not None:
+            options["driver_version"] = supervised_driver
+        return options
 
     async def _async_settle(
         self,
@@ -1362,7 +1212,8 @@ class TestDuplicateRefusedByUserCodeLock:
             DOMAIN, f"slot_disabled_{fake_zwave_lock_entry.entry_id}_2"
         )
         assert issue is not None
-        assert "duplicate" in issue.translation_placeholders["reason"]
+        # The worker passes on only that the PIN was refused, not why.
+        assert "refused" in issue.translation_placeholders["reason"]
         assert fake_zwave_lock.sets[written:] == [(2, "5555")]
         # Disabled, the slot wants no code, and its old one is cleared.
         assert fake_zwave_lock.holds(2) is None
@@ -1404,19 +1255,26 @@ class TestDuplicateRefusedByUserCodeLock:
         hass: HomeAssistant,
         fake_zwave_lock: FakeZWaveLock,
         fake_e2e_lock: ZWaveJSLock,
+        supervised_driver: str | None,
     ) -> None:
         """
         The refused PIN does not stay on the slot while it is being disabled.
 
         A masking lock's write is announced with the code written, as if
-        the lock took it; the slot shows what the lock reports holding.
+        the lock took it; the slot shows what the lock reports holding. An
+        older driver takes a supervised Fail at its word and announces
+        nothing.
         """
+        pushed = _record_pushes(hass, fake_e2e_lock)
         with pytest.raises(DuplicateCodeError):
             await fake_e2e_lock.async_set_usercode(2, "5555")
+        await hass.async_block_till_done()
 
-        assert fake_e2e_lock.coordinator.credentials_by_slot()[2] == (
-            SlotCredential.unreadable()
+        assert _first_push(pushed, 2) == (
+            None if supervised_driver else SlotCredential.unreadable()
         )
+        # The worker then reads the slot: it shows what the lock holds.
+        assert _codes(hass, fake_e2e_lock).get(2) != "5555"
         assert fake_zwave_lock.holds(2) == "1234"
 
     async def test_a_pin_no_other_slot_holds_is_taken(
@@ -1528,8 +1386,15 @@ async def _async_setup_entry_on_slots(
     lock_entity: er.RegistryEntry,
     pins: dict[int, str],
     unique_id: str = "test_zwave_js_slots",
+    *,
+    settle: bool = True,
 ) -> MockConfigEntry:
-    """Set up an entry on the Z-Wave JS lock, one user per slot with these PINs."""
+    """
+    Set up an entry on the Z-Wave JS lock, one user per slot with these PINs.
+
+    ``settle=False`` for a paced test: settling waits for the lock's worker,
+    whose pacing waits on the frozen clock.
+    """
     entry = MockConfigEntry(
         domain=DOMAIN,
         data={CONF_LOCKS: [lock_entity.entity_id]},
@@ -1543,7 +1408,8 @@ async def _async_setup_entry_on_slots(
     )
     entry.add_to_hass(hass)
     await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
+    if settle:
+        await hass.async_block_till_done()
     return entry
 
 
@@ -1606,7 +1472,7 @@ class TestPacing:
         Writes back to back at startup dropped Kwikset locks off the mesh.
         """
         setup = hass.async_create_task(
-            _async_setup_entry_on_slots(hass, lock_entity, NEW_PINS)
+            _async_setup_entry_on_slots(hass, lock_entity, NEW_PINS, settle=False)
         )
         # Setup itself waits out the delay between its reads.
         await async_advance_clock(hass, freezer, 5 * MIN_OPERATION_DELAY, settle=False)
@@ -1690,10 +1556,14 @@ class TestInterviewedAsleep:
             )
 
         assert _setup_failure(hass, lock_entity) is None
-        assert any(
-            message["command"] == "endpoint.invoke_cc_api"
-            and message["methodName"] == "getUsersCount"
-            for message in fake_zwave_lock.commands
+        # Asked once: the count is re-read after it, not re-asked.
+        assert (
+            sum(
+                message["command"] == "endpoint.invoke_cc_api"
+                and message["methodName"] == "getUsersCount"
+                for message in fake_zwave_lock.commands
+            )
+            == 1
         )
         for slot, config in ZWAVE_JS_LCM_CONFIG_SLOTS.items():
             assert fake_zwave_lock.holds(slot) == config[CONF_PIN]
@@ -1950,7 +1820,8 @@ class TestSlotBeyondTheLock:
 
         issue = _suspension(hass, entry, lock_entity, 2)
         assert issue is not None
-        assert "out of range" in issue.translation_placeholders["reason"]
+        # The repair's reason is the core's own; it no longer names the cause.
+        assert issue.translation_key == "slot_suspended"
         assert self._attempts(fake_zwave_lock, 2) == 0
         await hass.config_entries.async_unload(entry.entry_id)
 
@@ -1982,7 +1853,8 @@ class TestSlotBeyondTheLock:
 
         issue = _suspension(hass, fake_zwave_lock_entry, lock_entity, 2)
         assert issue is not None
-        assert "ZW0322" in issue.translation_placeholders["reason"]
+        # The repair's reason is the core's own; it no longer names ZW0322.
+        assert issue.translation_key == "slot_suspended"
         assert self._attempts(fake_zwave_lock, 2) - before == 1
 
 
@@ -1998,10 +1870,11 @@ class TestLossyLink:
         lock_entity: er.RegistryEntry,
     ) -> None:
         """
-        Regression for #1397: the repair counts the reads that went unanswered.
+        Regression for #1397: a lock whose replies are lost ends in a repair.
 
-        The code landed every time; only the replies were lost. "The lock may
-        be rejecting the code" sent the user after the wrong cause.
+        The code landed every time; only the replies were lost. The repair no
+        longer counts the unanswered reads (the core's reason is fixed text),
+        but the slot is held instead of being written for ever.
         """
         for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
             await _async_settle_in_sync(
@@ -2020,12 +1893,6 @@ class TestLossyLink:
             what="slot 2 suspended",
         )
 
-        reason = _suspension(
-            hass, fake_zwave_lock_entry, lock_entity, 2
-        ).translation_placeholders["reason"]
-        counted = re.search(r"(\d+) read requests went unanswered", reason)
-        assert counted is not None
-        assert 0 < int(counted[1]) <= fake_zwave_lock.statistics["timeoutResponse"]
         assert fake_zwave_lock.holds(2) == "4321"
 
 
@@ -2057,9 +1924,10 @@ class TestReadBack:
         await async_advance_sync_ticks(hass, freezer, 10)
 
         assert fake_zwave_lock.sets[written:] == [(2, "4321")]
-        assert fake_zwave_lock.cached(
-            CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2
-        ) == ("4321")
+        assert (
+            fake_zwave_lock.cached(CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2)
+            == "4321"
+        )
         assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
             STATE_ON,
             "4321",
@@ -2074,10 +1942,12 @@ class TestSupervisedWrites:
     did not read the slot after a failure.
     """
 
-    @pytest.fixture(params=[False, True], ids=["driver_15_25_2", "older_driver"])
+    @pytest.fixture(
+        params=["15.25.2", "15.25.1"], ids=["driver_15_25_2", "older_driver"]
+    )
     def fake_zwave_lock_options(self, request: pytest.FixtureRequest) -> dict[str, Any]:
         """Which driver the lock sits behind."""
-        return {"driver_before_15_25_2": request.param}
+        return {"driver_version": request.param}
 
     @pytest.fixture
     def lock_schlage_be469_state(
@@ -2117,14 +1987,6 @@ class TestSupervisedWrites:
             "4321",
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "#1654: the provider pushes the PIN it wrote over what its own "
-            "post-write read found, so a supervised Success the lock did not "
-            "apply shows in sync"
-        ),
-    )
     async def test_a_write_the_lock_reported_but_never_applied_is_put_right(
         self,
         hass: HomeAssistant,
@@ -2190,6 +2052,71 @@ class TestSupervisedWrites:
         )
 
 
+class TestReadAfterAWrite:
+    """
+    A supervised User Code write is read back once, by the worker, on every driver.
+
+    Before zwave-js/zwave-js#8927 (15.25.2) the driver cached nothing a
+    supervised Set wrote. The worker's read-back is a fresh get_credential,
+    so it puts that cache right with no read of the provider's own.
+    """
+
+    @pytest.fixture(
+        params=["15.31.1", "15.25.2", "15.25.1", "not-a-version"],
+        ids=["driver_15_31_1", "driver_15_25_2", "older_driver", "unknown_driver"],
+    )
+    def fake_zwave_lock_options(self, request: pytest.FixtureRequest) -> dict[str, Any]:
+        """Put the lock behind a driver."""
+        return {"driver_version": request.param}
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    async def test_a_write_is_read_back_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A new PIN reaches the lock and the driver's cache, and is in sync."""
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(
+                hass, freezer, fake_zwave_lock_entry, lock_entity, slot
+            )
+        sent = len(fake_zwave_lock.commands)
+
+        await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
+        await _async_settle_in_sync(
+            hass, freezer, fake_zwave_lock_entry, lock_entity, 2
+        )
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert (
+            fake_zwave_lock.cached(CommandClass.USER_CODE, LOCK_USERCODE_PROPERTY, 2)
+            == "4321"
+        )
+        assert _slot_states(hass, fake_zwave_lock_entry, lock_entity, 2) == (
+            STATE_ON,
+            "4321",
+        )
+        # The write, then the worker's read-back confirming the slot.
+        assert [
+            message["command"].rsplit(".", 1)[1]
+            for message in fake_zwave_lock.commands[sent:]
+            if message["command"]
+            in (
+                "endpoint.access_control.set_credential",
+                "endpoint.access_control.get_credential",
+            )
+        ] == ["set_credential", "get_credential"]
+
+
 class TestDuplicateRefusedByUserCredentialLock:
     """A User Credential lock holding 5555 at slot 5, which refuses duplicates in band."""
 
@@ -2222,9 +2149,8 @@ class TestDuplicateRefusedByUserCredentialLock:
         """
         Regression for #848: a duplicate is not retried forever.
 
-        The slot is disabled and the repair names the duplicate. A lock that
-        shows its codes is not asked: the duplicate is seen first. One that
-        hashes them refuses the write.
+        The slot is disabled with a repair, whether the lock shows its codes
+        (caught before sending) or hashes them (refused in band).
         """
         for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
             await _async_settle_in_sync(
@@ -2249,7 +2175,10 @@ class TestDuplicateRefusedByUserCredentialLock:
             DOMAIN, f"slot_disabled_{fake_zwave_lock_entry.entry_id}_2"
         )
         assert issue is not None
-        assert "duplicate" in issue.translation_placeholders["reason"]
+        # The worker passes on only that the PIN was refused, not why.
+        assert "refused" in issue.translation_placeholders["reason"]
+        # A lock that shows its codes is caught before the PIN is sent; one
+        # that hashes them refuses it in band.
         assert fake_zwave_lock.sets[written:] == ([(2, "5555")] if hash_length else [])
         assert fake_zwave_lock.holds(2) is None
 
@@ -2257,13 +2186,6 @@ class TestDuplicateRefusedByUserCredentialLock:
 class TestOpenBugs:
     """Open Z-Wave JS bugs, each pinned by a strict xfail."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "#1640: a push during the joining entry's debounced first read "
-            "cancels it, and its slots stay unavailable"
-        ),
-    )
     async def test_a_joining_entry_s_slots_come_up_though_the_lock_pushes(
         self,
         hass: HomeAssistant,
@@ -2291,13 +2213,6 @@ class TestOpenBugs:
         await hass.config_entries.async_unload(second_entry.entry_id)
         assert state == (STATE_ON, "5555")
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "#1641: a lock that re-announces Available with an empty or masked "
-            "code after each set gets the PIN rewritten forever"
-        ),
-    )
     @pytest.mark.parametrize("code", ["", "0000", "****"])
     async def test_a_pin_the_lock_keeps_dropping_is_suspended_not_rewritten_forever(
         self,
@@ -2313,11 +2228,12 @@ class TestOpenBugs:
             await _async_settle_in_sync(
                 hass, freezer, fake_zwave_lock_entry, lock_entity, slot
             )
+        sets = len(fake_zwave_lock.sets)
         await _async_change_pin(hass, fake_zwave_lock_entry, 2, "4321")
         for _ in range(20):
-            sets = len(fake_zwave_lock.sets)
             await async_advance_sync_ticks(hass, freezer)
             if len(fake_zwave_lock.sets) > sets:
+                sets = len(fake_zwave_lock.sets)
                 # A few seconds after each set, the lock says the slot is Available.
                 fake_zwave_lock.send_user_code_report(2, CodeSlotStatus.AVAILABLE, code)
                 await hass.async_block_till_done()
@@ -2326,14 +2242,6 @@ class TestOpenBugs:
         assert len([s for s in fake_zwave_lock.sets if s[0] == 2]) <= 5
         assert _suspension(hass, fake_zwave_lock_entry, lock_entity, 2) is not None
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: the stale-Available guard asks whether a PIN is configured, "
-            "not whether the slot is active, so a slot whose condition is off "
-            "keeps the code it dropped and never comes back in sync"
-        ),
-    )
     async def test_a_slot_whose_condition_is_off_is_cleared_once(
         self,
         hass: HomeAssistant,
@@ -2393,6 +2301,238 @@ class TestOpenBugs:
         assert states == (STATE_ON, "")
 
 
+def _switch(hass: HomeAssistant, entry: MockConfigEntry, slot: int) -> str:
+    return hass.states.get(
+        slot_entity_id(hass, SWITCH_DOMAIN, entry, slot, CONF_ENABLED)
+    ).state
+
+
+def _disabled_reason(hass: HomeAssistant, entry: MockConfigEntry, slot: int) -> str:
+    issue = ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_disabled_{entry.entry_id}_{slot}"
+    )
+    assert issue is not None
+    return issue.translation_placeholders["reason"]
+
+
+class TestDuplicates:
+    """The restored duplicate refusal, met through the real Z-Wave JS stack."""
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """The lock holds the entry's PINs, and the homeowner's 5555 at slot 5."""
+        return {"codes": {1: "9999", 2: "1234", 5: "5555"}}
+
+    async def _settle(self, hass, freezer, entry, lock_entity) -> None:
+        await async_advance_sync_ticks(hass, freezer, 5)
+        for slot in (1, 2):
+            entity_id = in_sync_entity_id(hass, entry, slot, lock_entity.entity_id)
+            assert hass.states.get(entity_id).state == STATE_ON
+
+    async def test_the_homeowner_s_code_refusal_says_which_slot_has_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The repair says why the slot was turned off: a duplicate, and of what.
+
+        It reads "... has been disabled. Lock ...: cannot set code on slot 2
+        -- PIN duplicates unmanaged slot 5". Saying only that the lock
+        "refused" the PIN leaves the user re-enabling it, it turned off again,
+        and nothing saying the homeowner's own code is in the way.
+        """
+        entry = fake_zwave_lock_entry
+        await self._settle(hass, freezer, entry, lock_entity)
+
+        await async_set_slot_pin(hass, entry, 2, "5555")
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert _switch(hass, entry, 2) == STATE_OFF
+        reason = _disabled_reason(hass, entry, 2)
+        assert "duplicate" in reason.lower()
+        assert "slot 5" in reason
+
+    async def test_swapping_two_users_pins_recovers_once_both_are_set(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Swapping two users' PINs in place turns the first slot edited off.
+
+        Re-enabling it once the other slot moved on puts both in sync and
+        clears the repair.
+        """
+        entry = fake_zwave_lock_entry
+        await self._settle(hass, freezer, entry, lock_entity)
+
+        await async_set_slot_pin(hass, entry, 1, "1234")  # slot 2's PIN
+        await async_advance_sync_ticks(hass, freezer, 5)
+        assert _switch(hass, entry, 1) == STATE_OFF
+        assert lcm_issue_ids(hass, "slot_disabled")
+
+        await async_set_slot_pin(hass, entry, 2, "9999")
+        await async_advance_sync_ticks(hass, freezer, 5)
+        await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert fake_zwave_lock.holds(1) == "1234"
+        assert fake_zwave_lock.holds(2) == "9999"
+        assert not lcm_issue_ids(hass, "slot_disabled")
+        assert not lcm_issue_ids(hass, "slot_suspended")
+
+    async def test_moving_a_pin_to_another_user_after_changing_the_first(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Slot 1 gets a new PIN, then slot 2 takes slot 1's old one: no refusal."""
+        entry = fake_zwave_lock_entry
+        await self._settle(hass, freezer, entry, lock_entity)
+
+        await async_set_slot_pin(hass, entry, 1, "4321")
+        await async_set_slot_pin(hass, entry, 2, "9999")
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert fake_zwave_lock.holds(1) == "4321"
+        assert fake_zwave_lock.holds(2) == "9999"
+        assert not lcm_issue_ids(hass, "slot_disabled")
+
+
+class TestZWaveReload:
+    """The lock's integration reloading underneath a loaded entry."""
+
+    async def test_a_keypad_change_after_zwave_js_reloads_is_put_back(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """After a Z-Wave JS reload, the lock's reports still reach the worker."""
+        entry = fake_zwave_lock_entry
+        await async_advance_sync_ticks(hass, freezer, 5)
+        assert fake_zwave_lock.holds(2) == "1234"
+
+        assert await hass.config_entries.async_reload(zwave_integration.entry_id)
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 30)
+
+        fake_zwave_lock.program(2, "4321")
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.holds(2) == "1234"
+        assert (
+            hass.states.get(
+                in_sync_entity_id(hass, entry, 2, lock_entity.entity_id)
+            ).state
+            == STATE_ON
+        )
+
+    async def test_a_pin_change_after_zwave_js_reloads_is_written(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """A PIN changed after the lock's integration reloaded reaches the lock."""
+        entry = fake_zwave_lock_entry
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert await hass.config_entries.async_reload(zwave_integration.entry_id)
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 30)
+
+        await async_set_slot_pin(hass, entry, 2, "4321")
+        await async_advance_sync_ticks(hass, freezer, 10)
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert not lcm_issue_ids(hass, "slot_suspended")
+        assert not lcm_issue_ids(hass, "lock_offline")
+
+
+class TestLockLeavesOneOfTwoEntries:
+    """A lock two entries share, taken out of one of them."""
+
+    async def _second(self, hass, lock_entity) -> MockConfigEntry:
+
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            unique_id="second_entry",
+            subentries_data=user_subentries(
+                {3: {CONF_NAME: "slot3", CONF_PIN: "5555", CONF_ENABLED: True}}
+            ),
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        return entry
+
+    @pytest.mark.parametrize("dead", [False, True], ids=["alive", "dead"])
+    async def test_the_other_entry_keeps_syncing_and_the_codes_go(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        dead: bool,
+    ) -> None:
+
+        first = fake_zwave_lock_entry
+        second = await self._second(hass, lock_entity)
+        await async_advance_sync_ticks(hass, freezer, 10)
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert fake_zwave_lock.holds(3) == "5555"
+
+        if dead:
+            fake_zwave_lock.mark_dead()
+            await hass.async_block_till_done()
+        hass.config_entries.async_update_entry(
+            first, options={CONF_LOCKS: [], CONF_SLOTS: ZWAVE_JS_LCM_CONFIG_SLOTS}
+        )
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 10)
+        if dead:
+            await async_advance_clock(hass, freezer, 3 * 60 * 60)
+            fake_zwave_lock.mark_alive()
+            await hass.async_block_till_done()
+            await async_advance_clock(hass, freezer, 60 * 60)
+
+        # The removed entry's codes are cleared; the other entry's stays.
+        assert fake_zwave_lock.holds(1) is None
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(3) == "5555"
+        fake_zwave_lock.program(3, "4321")
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 10)
+        assert fake_zwave_lock.holds(3) == "5555"
+        assert (
+            hass.states.get(
+                in_sync_entity_id(hass, second, 3, lock_entity.entity_id)
+            ).state
+            == STATE_ON
+        )
+        assert lcm_issue_ids(hass) == []
+
+
 _BOTH = "User Code lock advertising User Credential"
 
 
@@ -2433,20 +2573,29 @@ class TestUserRemoved:
         freezer: FrozenDateTimeFactory,
         fake_zwave_lock: FakeZWaveLock,
         fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
     ) -> None:
         """
-        Removing a user takes their PIN off the lock.
+        The release of a removed slot clears it, and its user with it.
 
-        A User Code slot is its own nameless user and never carries Lock
-        Code Manager's tag, so a release that adopts no untagged user found
-        no owner and sent nothing: the deleted user's PIN kept opening the
-        door.
+        On a User Code lock there is no lock-side user to carry LCM's tag,
+        so a release that adopts no untagged user found no owner and sent
+        nothing: the deleted user's PIN still opens the door, the worker
+        reads it back twice and raises ``slot_clear_failed`` -- which
+        acknowledging only repeats. On a User Credential lock the release
+        cleared only the PIN, leaving LCM's tagged user, carrying the
+        slot's name, behind.
         """
+
         entry = fake_zwave_lock_entry
         await async_advance_sync_ticks(hass, freezer, 5)
         assert fake_zwave_lock.holds(2) == "1234"
         if fake_zwave_lock.node.label == _BOTH:
             assert not fake_zwave_lock.uses_user_credential_cc
+        has_users = fake_zwave_lock.uses_user_credential_cc
+        assert bool(_users_tagged_for(fake_zwave_lock, 2)) == has_users
+        kept = _users_tagged_for(fake_zwave_lock, 1)
+        cleared = len(fake_zwave_lock.clears)
 
         assert hass.config_entries.async_remove_subentry(
             entry, subentry_id_for_slot(entry, 2)
@@ -2456,3 +2605,795 @@ class TestUserRemoved:
 
         assert fake_zwave_lock.holds(2) is None
         assert fake_zwave_lock.holds(1) == "9999"
+        assert not lcm_issue_ids(hass, "slot_suspended")
+        assert not _users_tagged_for(fake_zwave_lock, 2)
+        assert _users_tagged_for(fake_zwave_lock, 1) == kept
+        if not has_users:
+            # A User Code lock has no user to delete: the slot is cleared.
+            assert fake_zwave_lock.clears[cleared:] == [2]
+
+
+class TestSomeoneElsesCodeAtATurnedOffSlot:
+    """A User Credential lock: a homeowner's untagged user at a turned-off slot's index (#1695)."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_the_slot_reads_clear_and_the_code_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The code is someone else's, not the slot's: in sync, untouched, no repair.
+
+        The clear finds no user tagged for the slot and leaves the code alone
+        (#1518), so a slot reading it as its own never came in sync and was
+        held with a repair nothing could resolve.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_foreign",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        # The homeowner adds a user with a PIN at credential slot 3.
+        fake_zwave_lock.program(3, "5555")
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 5)
+
+        assert _slot_states(hass, entry, lock_entity, 3) == (STATE_ON, "")
+        assert fake_zwave_lock.holds(3) == "5555"
+        assert lcm_issue_ids(hass) == []
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_new_slot_is_not_offered_over_it(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The slot reads it as empty; what the lock holds is still occupied (#1693).
+
+        Offered to a new slot, its write would adopt the user at that index
+        and overwrite the homeowner's code with Lock Code Manager's.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(ZWAVE_JS_LCM_CONFIG_SLOTS),
+            unique_id="test_zwave_js_foreign_occupancy",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+        # The homeowner adds a user with a PIN at credential slot 5.
+        fake_zwave_lock.program(5, "5555")
+        await hass.async_block_till_done()
+
+        occupancy = await async_read_occupancy(
+            hass, None, [lock_entity.entity_id], [4, 5, 6]
+        )
+        assert occupancy.locks[0].occupied == {5}
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestReleaseAtSomeoneElsesUser:
+    """A User Credential lock: a homeowner's untagged user at a released slot's index."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_the_homeowner_s_user_and_code_stay(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Releasing a slot never deletes a user LCM did not tag (#1518/#1694).
+
+        The homeowner's user sits at the slot's index and holds a PIN at its
+        credential slot: exactly what the set path adopts as a pre-tag LCM
+        user. Deleting a user deletes its credentials, so a release that
+        adopted it would delete a code LCM never created.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_release_foreign",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        # The homeowner adds a user with a PIN at credential slot 3.
+        fake_zwave_lock.program(3, "5555")
+        await hass.async_block_till_done()
+        await async_advance_sync_ticks(hass, freezer, 5)
+        homeowner = fake_zwave_lock.credentials[(int(UserCredentialType.PIN_CODE), 3)][
+            0
+        ]
+        assert homeowner == 3
+        assert parse_tag(fake_zwave_lock.users[homeowner].user_name)[0] is None
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 3)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert homeowner in fake_zwave_lock.users
+        assert fake_zwave_lock.holds(3) == "5555"
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert fake_zwave_lock.holds(2) == "1234"
+        await hass.config_entries.async_unload(entry.entry_id)
+
+    async def test_a_user_named_with_the_slot_number_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A homeowner's user named ``3`` is not LCM's slot 3 user.
+
+        A bare slot number is LCM's tag only on a lock whose name limit
+        cannot fit ``lcm:<slot>:``; this one fits it, so LCM never names a
+        user ``3`` here. Slot 3 was never turned on, yet its release is sent
+        once: deleting that user would delete its code, at another index.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_release_digit_named",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        # The homeowner's user 7, named "3" in the vendor app, PIN at index 7.
+        fake_zwave_lock.program(7, "5555")
+        fake_zwave_lock.users[7].user_name = "3"
+        fake_zwave_lock._u3c_persist_user(7, UserReportType.USER_MODIFIED)
+        await hass.async_block_till_done()
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 3)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.users[7].user_name == "3"
+        assert fake_zwave_lock.holds(7) == "5555"
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert fake_zwave_lock.holds(2) == "1234"
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestReleaseOnAShortNameLock:
+    """A User Credential lock whose name limit cannot fit ``lcm:<slot>:``."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """Five characters: ``lcm:2:`` does not fit, ``2`` does."""
+        return {"max_user_name_length": 5}
+
+    async def test_lcm_s_slot_numbered_user_is_deleted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """LCM names its user ``2`` here, so releasing slot 2 deletes it."""
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        assert _users_tagged_for(fake_zwave_lock, 2)
+        assert all(
+            user.user_name.isdecimal() for user in fake_zwave_lock.users.values()
+        )
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert not _users_tagged_for(fake_zwave_lock, 2)
+        assert _users_tagged_for(fake_zwave_lock, 1)
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(1) == "9999"
+
+
+class TestReleaseKeepsWhatLCMDidNotWrite:
+    """A User Credential lock: LCM's tagged user may hold credentials LCM never wrote."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """A lock that also takes RFID tags and DESFire cards."""
+        return {
+            "other_credential_types": (
+                UserCredentialType.RFID_CODE,
+                UserCredentialType.DESFIRE,
+            )
+        }
+
+    async def test_a_user_holding_only_lcm_s_pin_is_deleted(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Nothing but LCM's PIN on the user: the user goes, and the PIN with it."""
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (user_id,) = _users_tagged_for(fake_zwave_lock, 2)
+        assert [
+            key
+            for key, (owner, _) in fake_zwave_lock.credentials.items()
+            if owner == user_id
+        ] == [(int(UserCredentialType.PIN_CODE), 2)]
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert user_id not in fake_zwave_lock.users
+        assert not any(
+            owner == user_id for owner, _ in fake_zwave_lock.credentials.values()
+        )
+        assert fake_zwave_lock.holds(2) is None
+        assert fake_zwave_lock.holds(1) == "9999"
+
+    @pytest.mark.parametrize(
+        "kind",
+        [UserCredentialType.RFID_CODE, UserCredentialType.DESFIRE],
+        ids=["rfid", "desfire"],
+    )
+    async def test_a_credential_added_in_the_vendor_app_stays(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        kind: UserCredentialType,
+    ) -> None:
+        """
+        LCM's PIN goes; the user and the card someone added to it stay.
+
+        Deleting the user would cascade to the card. DESFire is a type LCM
+        has no name for, so ``async_get_users`` drops it: the release must
+        still see it.
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (user_id,) = _users_tagged_for(fake_zwave_lock, 2)
+        name = fake_zwave_lock.users[user_id].user_name
+        fake_zwave_lock.enroll(user_id, kind, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.holds(2) is None
+        assert (int(UserCredentialType.PIN_CODE), 2) not in fake_zwave_lock.credentials
+        # Kept, and no longer LCM's: its tag is gone, its display stays.
+        assert name == "lcm:2:slot2"
+        assert fake_zwave_lock.users[user_id].user_name == "slot2"
+        assert _users_tagged_for(fake_zwave_lock, 2) == set()
+        assert fake_zwave_lock.credentials[(int(kind), 5)] == (user_id, "04A2B3C4")
+        assert fake_zwave_lock.holds(1) == "9999"
+
+    async def test_the_slot_used_again_never_writes_onto_the_kept_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Slot 2 given to someone new gets a user of its own.
+
+        With LCM's tag still on the kept user, the new PIN would be written
+        onto it: the homeowner's card would open the door as the new user.
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (kept,) = _users_tagged_for(fake_zwave_lock, 2)
+        fake_zwave_lock.enroll(kept, UserCredentialType.RFID_CODE, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        [subentry] = user_subentries(
+            {2: {CONF_NAME: "guest", CONF_PIN: "4321", CONF_ENABLED: True}}
+        )
+        hass.config_entries.async_add_subentry(entry, ConfigSubentry(**subentry))
+        await hass.async_block_till_done()
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+
+        (anchor,) = _users_tagged_for(fake_zwave_lock, 2)
+        assert anchor != kept
+        assert fake_zwave_lock.users[anchor].user_name == "lcm:2:guest"
+        pin_key = (int(UserCredentialType.PIN_CODE), 2)
+        assert fake_zwave_lock.credentials[pin_key] == (anchor, "4321")
+        assert fake_zwave_lock.users[kept].user_name == "slot2"
+        assert [
+            key
+            for key, (owner, _) in fake_zwave_lock.credentials.items()
+            if owner == kept
+        ] == [(int(UserCredentialType.RFID_CODE), 5)]
+
+    async def test_a_display_that_reads_as_a_tag_is_not_kept(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Slot 2's user is called ``3``: left as ``3``, it would claim slot 3.
+
+        So the kept user is left with no name (the lock names it itself).
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (kept,) = _users_tagged_for(fake_zwave_lock, 2)
+        # As LCM names it for a user called ``3``.
+        fake_zwave_lock.users[kept].user_name = "lcm:2:3"
+        fake_zwave_lock._u3c_persist_user(kept, UserReportType.USER_MODIFIED)
+        fake_zwave_lock.enroll(kept, UserCredentialType.RFID_CODE, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.users[kept].user_name == f"User-{kept}"
+        assert parse_tag(fake_zwave_lock.users[kept].user_name)[0] is None
+
+    async def test_a_failed_rename_still_releases_the_slot(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """LCM's PIN is gone, so the release is done; the stuck tag is logged."""
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (kept,) = _users_tagged_for(fake_zwave_lock, 2)
+        fake_zwave_lock.enroll(kept, UserCredentialType.RFID_CODE, 5, "04A2B3C4")
+        await hass.async_block_till_done()
+        fake_zwave_lock.fail("user", kept)
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert (int(UserCredentialType.PIN_CODE), 2) not in fake_zwave_lock.credentials
+        assert fake_zwave_lock.users[kept].user_name == "lcm:2:slot2"
+        rfid_key = (int(UserCredentialType.RFID_CODE), 5)
+        assert fake_zwave_lock.credentials[rfid_key] == (kept, "04A2B3C4")
+        [warning] = [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "could not rename" in record.message
+        ]
+        assert lock_entity.entity_id in warning.message
+        assert "slot 2" in warning.message
+        # Done: nothing left owed or held for the slot.
+        assert lcm_issue_ids(hass) == []
+        worker = lock_registry(hass).worker(lock_entity.entity_id)
+        assert worker is None or 2 not in worker.slots
+
+
+class TestReleaseOfARenamedUser:
+    """A User Credential lock: LCM's user, renamed in the vendor's app."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_nothing_is_deleted_and_a_warning_says_why(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        The tag is gone, so the release cannot tell the user is LCM's.
+
+        It deletes nothing -- an untagged user is as likely the homeowner's
+        -- and warns that a code may remain, naming the lock and the slot.
+        """
+        entry = fake_zwave_lock_entry
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 2)
+        (user_id,) = _users_tagged_for(fake_zwave_lock, 2)
+        fake_zwave_lock.users[user_id].user_name = "Alice"
+        fake_zwave_lock._u3c_persist_user(user_id, UserReportType.USER_MODIFIED)
+        await hass.async_block_till_done()
+        sent = len(fake_zwave_lock.commands)
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 2)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.users[user_id].user_name == "Alice"
+        assert fake_zwave_lock.holds(2) == "1234"
+        assert not [
+            message["command"]
+            for message in fake_zwave_lock.commands[sent:]
+            if message["command"]
+            in (
+                "endpoint.access_control.delete_user",
+                "endpoint.access_control.delete_credential",
+            )
+        ]
+        (warning,) = [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "carries LCM's tag" in record.message
+        ]
+        assert lock_entity.entity_id in warning.message
+        assert "released slot 2," in warning.message
+
+    async def test_a_slot_never_turned_on_warns_nothing(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        Slot 3 was only ever off: LCM wrote no code there to lose.
+
+        No user carries its tag, as none ever did; that is no warning.
+        """
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: False},
+                }
+            ),
+            unique_id="test_zwave_js_never_on",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+        assert _users_tagged_for(fake_zwave_lock, 3) == set()
+        caplog.set_level(logging.DEBUG, "custom_components.lock_code_manager")
+
+        assert hass.config_entries.async_remove_subentry(
+            entry, subentry_id_for_slot(entry, 3)
+        )
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert not [
+            record
+            for record in caplog.records
+            if record.levelname == "WARNING" and "carries LCM's tag" in record.message
+        ]
+        assert any(
+            record.levelname == "DEBUG"
+            and "released slot 3, which LCM never wrote" in record.message
+            for record in caplog.records
+        )
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestRestartMidWrite:
+    """The entry going down (a restart, a reload) with a write out to the lock."""
+
+    async def test_a_write_cut_off_by_a_reload_lands_after_it(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """The new PIN reaches the lock once the entry is back; no repair is left."""
+
+        entry = fake_zwave_lock_entry
+        await async_advance_sync_ticks(hass, freezer, 5)
+        with fake_zwave_lock.hang("set", 2) as fault:
+            await hass.services.async_call(
+                TEXT_DOMAIN,
+                SERVICE_SET_VALUE,
+                {ATTR_VALUE: "4321"},
+                target={
+                    ATTR_ENTITY_ID: slot_entity_id(hass, "text", entry, 2, CONF_PIN)
+                },
+                blocking=True,
+            )
+            await fault.async_wait_held()
+            reload = hass.async_create_task(
+                hass.config_entries.async_reload(entry.entry_id)
+            )
+            for _ in range(20):
+                await asyncio.sleep(0)
+        assert await reload
+        await hass.async_block_till_done()
+        await async_advance_clock(hass, freezer, 10 * 60)
+
+        assert fake_zwave_lock.holds(2) == "4321"
+        assert (
+            hass.states.get(
+                in_sync_entity_id(hass, entry, 2, lock_entity.entity_id)
+            ).state
+            == STATE_ON
+        )
+        assert lcm_issue_ids(hass) == []
+
+
+class TestReEnableAfterUnconfirmedClear:
+    """A slot turned back on after its clear's read-back failed."""
+
+    @pytest.fixture(name="lock_schlage_be469_state")
+    def supervised_state_fixture(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC: the clear is not verified."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    async def test_the_slot_shows_pending_not_unknown(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Found on a production test: a slot turned back on went unavailable.
+
+        The user was turned off and the clear landed. The lock reported the
+        slot empty, then the read-back failed with a transient Z-Wave error
+        (ZW1405). Turned back on a few seconds later, the slot's sensors went
+        unavailable and the card showed the lock as unknown until the PIN
+        was back. They stay available, out of sync (pending) until then.
+        """
+        entry = fake_zwave_lock_entry
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        with fake_zwave_lock.fail(
+            "get",
+            1,
+            times=1,
+            error_code=1405,
+            error_message="The node failed to decode the message. (ZW1405)",
+        ) as fault:
+            fail = fault.async_before
+
+            async def _report_then_fail() -> None:
+                # The lock's report of the empty slot gets through, then the
+                # read-back fails.
+                fake_zwave_lock.report(1)
+                await fail()
+
+            fault.async_before = _report_then_fail  # type: ignore[method-assign]
+            await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+            # Less than the slot's wait before it tries again.
+            await async_advance_clock(hass, freezer, 8)
+        assert fault.hits == 1
+        assert fake_zwave_lock.holds(1) is None
+        assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "")
+
+        states = _record_slot_states(hass, entry, lock_entity, 1)
+        await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        await async_advance_clock(hass, freezer, 60)
+
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert states[0] == (STATE_OFF, "")
+        assert all(STATE_UNAVAILABLE not in seen for seen in states), states
+        assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "9999")
+
+
+class TestReEnableWhileClearing:
+    """A user turned off, then back on before the clear is confirmed."""
+
+    @pytest.fixture(name="lock_schlage_be469_state")
+    def supervised_state_fixture(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The BE469 dump, advertising Supervision CC: the clear is not verified."""
+        return supervised_lock_state(lock_schlage_be469_state)
+
+    @pytest.mark.parametrize(
+        "clear_out",
+        [
+            # Production test 2 (and test 3's slower locks): back on while the
+            # clear is still with the lock. The lock reports the slot Available
+            # once the clear lands.
+            pytest.param(True, id="clear_out"),
+            # Production test 3's first lock: back on once its clear is in.
+            pytest.param(False, id="clear_in"),
+        ],
+    )
+    async def test_the_slot_shows_pending_then_takes_the_pin_once(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+        clear_out: bool,
+    ) -> None:
+        """
+        Found on a production test: turned back on, the slot went unavailable.
+
+        Wanting the PIN again while the clear was unconfirmed set the slot's
+        reading aside, to read it before writing (``Slot.doubt``), and the
+        sensors went unavailable while it was checked: the card showed "?".
+        They stay available: off (pending) with an unknown code, then in sync
+        with the PIN, written once.
+        """
+        entry = fake_zwave_lock_entry
+        for slot in ZWAVE_JS_LCM_CONFIG_SLOTS:
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+        sets = list(fake_zwave_lock.sets)
+        states = _record_slot_states(hass, entry, lock_entity, 1)
+
+        with fake_zwave_lock.hang("clear", 1) as fault:
+            await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+            await fault.async_wait_held()
+            if clear_out:
+                await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        # The clear lands, and the lock says so.
+        fake_zwave_lock.report(1)
+        if not clear_out:
+            await async_advance_clock(hass, freezer, 8)
+            assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "")
+            await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
+        await async_advance_clock(hass, freezer, 60)
+
+        assert fake_zwave_lock.clears == [1]
+        assert fake_zwave_lock.sets == [*sets, (1, "9999")]
+        assert fake_zwave_lock.holds(1) == "9999"
+        assert (STATE_OFF, STATE_UNKNOWN if clear_out else "") in states, states
+        assert all(STATE_UNAVAILABLE not in seen for seen in states), states
+        assert _slot_states(hass, entry, lock_entity, 1) == (STATE_ON, "9999")
+
+
+class TestEmptySlotsAreReported:
+    """A lock that can read its codes is never taken for one that cannot (#1581)."""
+
+    async def test_setup_on_empty_slots_says_nothing_of_the_lock(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Every slot the flow reads is empty: that is the lock describing them.
+
+        The read projects only the slots an entry manages, and a new entry
+        manages none, so the empty slots it asked about come back unnamed --
+        answered all the same, not silent.
+        """
+        fake_zwave_lock.program(1, None)
+        fake_zwave_lock.program(2, None)
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": SOURCE_USER}
+        )
+        flow_id = result["flow_id"]
+        await async_configure_flow(
+            hass, flow_id, {CONF_NAME: "zwave", CONF_LOCKS: [lock_entity.entity_id]}
+        )
+        await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+        assert result["step_id"] == "code_slot", result.get("errors")
+        for user, pin in (("user1", "1234"), ("user2", "5678")):
+            result = await async_configure_flow(
+                hass, flow_id, {CONF_NAME: user, CONF_PIN: pin, CONF_ENABLED: True}
+            )
+
+        assert result["type"] == "create_entry"
+        assert result["description"] is None
+        assert locks_that_cannot_report(hass, [lock_entity.entity_id]) == []
+        entry = hass.config_entries.async_get_entry(result["result"].entry_id)
+        assert {
+            subentry.title: subentry.data[CONF_SLOT]
+            for subentry in entry.subentries.values()
+        } == {"user1": 1, "user2": 2}
+        assert await hass.config_entries.async_unload(entry.entry_id)

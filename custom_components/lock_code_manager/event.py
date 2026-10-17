@@ -1,13 +1,12 @@
 """Event entity for lock_code_manager."""
 
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, override
 
 from homeassistant.components.event import EventEntity
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -16,10 +15,12 @@ from .const import (
     BUS_EVENT_CREDENTIAL_USED,
     EVENT_CREDENTIAL_USED,
 )
-from .domain.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
-from .domain.models import LockCodeManagerConfigEntry
-from .domain.queries import get_entry_config, subentry_id_for_slot
 from .entity import BaseLockCodeManagerEntity
+from .ha.entry import LockCodeManagerConfigEntry
+from .ha.runtime import signal_lock_changed
+from .model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
+from .model.queries import get_entry_config, subentry_id_for_slot
+from .providers import BaseLock
 
 
 async def async_setup_entry(
@@ -84,7 +85,32 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         # being refused by it -- see :meth:`event_types`.
         self._recorded_types: set[CredentialType] = set()
 
+    @callback
+    @override
+    def _handle_add_locks(self, locks: list[BaseLock]) -> None:
+        """Follow the added locks: what they can report widens the kinds."""
+        super()._handle_add_locks(locks)
+        self._watch_locks(locks)
+
+    @callback
+    def _watch_locks(self, locks: list[BaseLock]) -> None:
+        """
+        Write the state, kinds included, whenever one of ``locks`` reports a change.
+
+        A lock's capabilities are probed lazily -- by its first write, say --
+        and nothing else writes this entity's state until a use is recorded.
+        """
+        for lock in locks:
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    signal_lock_changed(lock.lock.entity_id),
+                    self.async_write_ha_state,
+                )
+            )
+
     @property
+    @override
     def event_types(self) -> list[str]:
         """
         Return the credential kinds a use recorded here can be.
@@ -118,6 +144,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         return sorted(advertised | MANAGED_CREDENTIAL_TYPES | self._recorded_types)
 
     @property
+    @override
     def available(self) -> bool:
         """
         Return True whenever the entry is loaded.
@@ -183,11 +210,13 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         self._trigger_event(credential_type, event.data)
         self.async_write_ha_state()
 
+    @override
     async def async_added_to_hass(self) -> None:
         """Handle entity added to hass."""
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         # EventEntity.async_added_to_hass restores __last_event_type from stored data
         await EventEntity.async_added_to_hass(self)
+        self._watch_locks(self.locks)
 
         # The unified event is the only source. Every use reaches it --
         # observed by a lock or reported through the ``use_credential``

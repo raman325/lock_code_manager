@@ -1,10 +1,16 @@
 """Constants for lock_code_manager."""
 
-from __future__ import annotations
-
-from datetime import timedelta
+import asyncio
+from typing import TYPE_CHECKING, Final, TypedDict
 
 from homeassistant.const import Platform
+from homeassistant.util.hass_dict import HassKey
+
+if TYPE_CHECKING:
+    from .ha.adapter import ProviderPort
+    from .ha.lock_store import LockStore
+    from .sync.registry import LockRegistry
+    from .sync.worker import LockWorker
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
@@ -57,12 +63,34 @@ ATTR_MANAGED = "managed"
 # which on the condition commands means the condition entity itself.
 ATTR_USER_ENTITY_ID = "user_entity_id"
 
-# One repair for the whole entity-ID rename, however many entries moved.
-ENTITY_IDS_RENAMED_ISSUE = "entity_ids_renamed"
-# Where the migration accumulates those renames while entries migrate.
-RENAMES_KEY = "migration_renames"
+# Where the migration accumulates the entity-ID renames while entries migrate.
+RENAMES_KEY: Final = "migration_renames"
+
+
+class LockCodeManagerData(TypedDict, total=False):
+    """
+    What the integration keeps in ``hass.data[DOMAIN]``.
+
+    The core's keys are named in ``ha.runtime``.
+    """
+
+    resources: bool
+    instance_id: str
+    migration_renames: dict[str, str]
+    lock_registry: LockRegistry[ProviderPort]
+    locks_leaving: set[str]
+    slots_given_up: dict[tuple[str, int], tuple[str, LockWorker[ProviderPort] | None]]
+    slot_issues: dict[str, set[str]]
+    lock_store: LockStore
+    locks_reporting: dict[str, bool]
+    locks_rebuilding: set[str]
+    rebuild_lock: asyncio.Lock
+
+
+DATA: HassKey[LockCodeManagerData] = HassKey(DOMAIN)
 
 ATTR_CLEAR_CREDENTIALS = "clear_credentials"
+ATTR_FORGET_REPORTING = "forget_reporting"
 ATTR_SLOT = "slot"
 ATTR_SLOT_NUM = "slot_num"
 # Marks the final event of a slot subscription: the user is gone, and the
@@ -216,43 +244,9 @@ CONDITION_ENTITY_DOMAINS = [
 # These create switch/binary_sensor entities but their states don't map to access control
 EXCLUDED_CONDITION_PLATFORMS = frozenset({"scheduler"})
 
-# Coordinator backoff
-BACKOFF_FAILURE_THRESHOLD: int = 3
-BACKOFF_INITIAL_SECONDS: int = 60
-BACKOFF_MAX_SECONDS: int = 1800  # 30 minutes
-
-# Poll failure alerting
-POLL_FAILURE_ALERT_THRESHOLD: int = 12
-
-# How long a write waits to be seen on the lock before it is given up and
-# re-synced. The coordinator reads the lock back on its own schedule while it
-# waits, so this does not have to span a polled lock's scan interval -- and
-# must not be long: a write the lock never keeps is given up by the first
-# look at or after the deadline, so one failed cycle is this plus up to
-# CONFIRM_READ_INTERVAL plus the read and the re-set, and the breaker only
-# trips when three such failures land inside SYNC_ATTEMPT_WINDOW.
+# How long a cloud lock (Schlage) may keep reading back the table from before
+# a write: the provider's ``read_lag``.
 PENDING_WRITE_TTL: float = 60.0
-# How often the coordinator reads the lock back while a write is pending: four
-# looks inside one time to live, so a write that landed late is seen well
-# before the deadline and a lock that never keeps it is asked, not hammered.
-CONFIRM_READ_INTERVAL: float = PENDING_WRITE_TTL / 4
-
-# Sync timing
-TICK_INTERVAL = timedelta(seconds=2)
-# How long ``SlotSyncManager.async_stop`` lets an in-flight tick finish before
-# cancelling it, measured from when the call took the lock's turn. An
-# operational cancel needs the whole OPERATION_TIMEOUT (see providers/_base.py)
-# because nothing follows it but a retry; a stop is different because a
-# reload reads the slot before it writes, so a single command cut here is
-# simply redone. What the window protects is a sequence: Schlage and Matter
-# delete a credential before writing its replacement, and a cancel between
-# the two leaves the door with no working PIN. Those are cloud and local
-# calls that answer in seconds when healthy. Providers that legitimately
-# take longer on a degraded link (ZHA retries, the zwave-js-ui API timeout)
-# write in one command, so a cut there loses nothing the reload cannot redo.
-STOP_GRACE_SECONDS: float = 30.0
-MAX_SYNC_ATTEMPTS = 3
-SYNC_ATTEMPT_WINDOW = timedelta(minutes=5)
 
 
 # Defaults

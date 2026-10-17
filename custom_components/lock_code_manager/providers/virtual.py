@@ -1,27 +1,25 @@
 """Module for Virtual locks."""
 
-from __future__ import annotations
-
 from collections.abc import Collection
 from dataclasses import dataclass, field
 import logging
-from typing import Literal, TypedDict
+from typing import Literal, TypedDict, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..domain.credentials import (
+from ..model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
     User,
     WriteResult,
     user_from_slot,
 )
-from ..domain.models import SlotCredential
 from ._base import BaseLock
 from ._util import parse_slot_num
 
@@ -43,11 +41,13 @@ class VirtualLock(BaseLock):
     _data: dict[str, CodeSlotData] = field(default_factory=dict, init=False, repr=False)
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return "virtual"
 
     @property
+    @override
     def supports_code_slot_events(self) -> bool:
         """
         Return False: a virtual lock observes nothing.
@@ -58,6 +58,7 @@ class VirtualLock(BaseLock):
         """
         return False
 
+    @override
     async def async_get_capabilities(self) -> LockCapabilities:
         """
         Advertise every credential type with no limits of any kind.
@@ -87,10 +88,12 @@ class VirtualLock(BaseLock):
             },
         )
 
+    @override
     async def async_is_integration_connected(self) -> bool:
         """Virtual locks are always connected."""
         return True
 
+    @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """Set up lock by provider."""
         self._store = Store(
@@ -98,6 +101,7 @@ class VirtualLock(BaseLock):
         )
         await self.async_hard_refresh_codes()
 
+    @override
     async def async_unload(self, remove_permanently: bool) -> None:
         """Unload lock."""
         # Chain the base teardown before touching the store: it releases the
@@ -111,6 +115,7 @@ class VirtualLock(BaseLock):
         else:
             await self._store.async_save(self._data)
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -118,6 +123,7 @@ class VirtualLock(BaseLock):
         self._data = data if (data := await self._store.async_load()) else {}
         return await self.async_get_usercodes()
 
+    @override
     async def async_set_credential(
         self,
         user_id: int,
@@ -140,6 +146,7 @@ class VirtualLock(BaseLock):
         self._data[slot_key] = new_data
         return WriteResult.CONFIRMED
 
+    @override
     async def async_delete_credential(self, ref: CredentialRef) -> bool:
         """
         Delete the credential addressed by ``ref``; return whether it changed.
@@ -152,6 +159,7 @@ class VirtualLock(BaseLock):
         self._data.pop(slot_key)
         return True
 
+    @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
         """
         Return users by reading all stored and managed slots.

@@ -12,11 +12,9 @@ The first is worse, so unreadable is treated as unknown rather than free --
 but only for the locks that constrain the numbering at all.
 """
 
-from __future__ import annotations
-
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.domain.occupancy import (
+from custom_components.lock_code_manager.model.occupancy import (
     LockOccupancy,
     Occupancy,
 )
@@ -30,13 +28,11 @@ def occupancies(draw: st.DrawFn) -> Occupancy:
     """An occupancy report across a few locks, any of which may be unreadable."""
     reports = []
     for lock in draw(st.lists(LOCKS, max_size=3, unique=True)):
-        follows_slot = draw(st.booleans())
         managed = draw(st.booleans())
         readable = draw(st.booleans())
         reports.append(
             LockOccupancy(
                 lock_entity_id=lock,
-                credential_index_follows_slot=follows_slot,
                 managed=managed,
                 occupied=frozenset(draw(st.sets(SLOTS, max_size=4)))
                 if readable
@@ -47,17 +43,15 @@ def occupancies(draw: st.DrawFn) -> Occupancy:
 
 
 @given(occupancy=occupancies())
-def test_only_constraining_locks_can_block_allocation(occupancy: Occupancy) -> None:
-    """A lock blocks only if Lock Code Manager writes to it by slot number.
+def test_only_managed_locks_can_block_allocation(occupancy: Occupancy) -> None:
+    """A lock blocks only if Lock Code Manager writes to it.
 
-    An unsupported platform, or one that allocates its own credential index,
-    says nothing about whether slot n is free. Refusing on those would block
-    allocation forever for any setup that includes one.
+    An unsupported platform says nothing about whether slot n is free.
+    Refusing on one would block allocation forever for any setup that
+    includes it.
     """
     blocking = [
-        lock
-        for lock in occupancy.locks
-        if lock.occupied is None and lock.managed and lock.credential_index_follows_slot
+        lock for lock in occupancy.locks if lock.occupied is None and lock.managed
     ]
 
     # Stated in BOTH directions. The forward one alone is vacuous: an
@@ -68,32 +62,34 @@ def test_only_constraining_locks_can_block_allocation(occupancy: Occupancy) -> N
 
 
 @given(occupancy=occupancies())
-def test_unavailable_never_includes_a_number_from_an_unconstraining_lock(
+def test_unavailable_never_includes_a_number_from_an_unmanaged_lock(
     occupancy: Occupancy,
 ) -> None:
-    """Codes on a lock we do not address by slot must not reserve a number.
+    """Codes on a lock nothing is written to must not reserve a number.
 
     Reserving them would push real users past the advertised capacity of the
-    locks that DO follow the slot number.
+    locks that ARE written to.
     """
-    unconstraining = {
+    unmanaged_numbers = {
         number
         for lock in occupancy.locks
-        if not (lock.managed and lock.credential_index_follows_slot)
+        if not lock.managed
         for number in (lock.occupied or ())
     }
-    constraining = {
+    managed_numbers = {
         number
         for lock in occupancy.locks
-        if lock.managed and lock.credential_index_follows_slot
+        if lock.managed
         for number in (lock.occupied or ())
     }
 
-    assert not (occupancy.unavailable - constraining) & (unconstraining - constraining)
+    assert not (occupancy.unavailable - managed_numbers) & (
+        unmanaged_numbers - managed_numbers
+    )
 
 
 @given(occupancy=occupancies())
-def test_every_occupied_number_on_a_constraining_lock_is_unavailable(
+def test_every_occupied_number_on_a_managed_lock_is_unavailable(
     occupancy: Occupancy,
 ) -> None:
     """The direction that matters: nothing occupied is ever offered.
@@ -101,7 +97,7 @@ def test_every_occupied_number_on_a_constraining_lock_is_unavailable(
     Issuing one writes a user's code over a credential already on the door.
     """
     for lock in occupancy.locks:
-        if lock.managed and lock.credential_index_follows_slot and lock.occupied:
+        if lock.managed and lock.occupied:
             assert lock.occupied <= occupancy.unavailable
 
 

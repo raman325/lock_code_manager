@@ -32,13 +32,13 @@ from custom_components.lock_code_manager.const import (
     EVENT_CREDENTIAL_USED,
     SERVICE_USE_CREDENTIAL,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
 )
-from custom_components.lock_code_manager.domain.events import (
+from custom_components.lock_code_manager.model.events import (
     BUS_EVENT_CREDENTIAL_USED,
     CredentialOperation,
 )
@@ -482,28 +482,6 @@ async def test_available_even_when_every_lock_is_not(
     await hass.async_block_till_done()
 
     assert hass.states.get(SLOT_1_EVENT_ENTITY).state != STATE_UNAVAILABLE
-
-
-async def test_the_event_says_which_kind_of_credential_was_used(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """
-    Only PIN is exercised today, so the point is that it is stated at all.
-
-    A consumer that reads the kind now keeps working when a second kind
-    arrives, rather than having assumed there was only ever one.
-    """
-    events: list[Event] = []
-    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
-
-    lock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(1, False)
-    await hass.async_block_till_done()
-
-    assert events
-    assert events[0].data[ATTR_CREDENTIAL_TYPE] == CredentialType.PIN
 
 
 async def test_event_entity_is_named(

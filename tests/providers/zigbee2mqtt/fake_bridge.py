@@ -16,7 +16,8 @@ What it models:
 
 - The lock's PIN table, one ``(userstatus, pincodevalue)`` per user id, in
   the Door Lock cluster's terms (``CN:340-344``: 0 available, 1 enabled,
-  3 disabled).
+  3 disabled). Any other status is published as ``not_supported_<status>``
+  (``FZ:388-390``).
 - ``/set`` with ``pin_code`` (``TZ:430-455``): no code clears the user
   (``clearPinCode``); a code sets it enabled, or disabled when
   ``user_enabled`` is false (``setPinCode``). A user outside
@@ -42,8 +43,6 @@ whose converters (``YA:160-167``) do not read a code back after a
 programming event.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 import json
 from typing import Any
@@ -57,6 +56,8 @@ from homeassistant.core import HomeAssistant
 AVAILABLE = 0
 ENABLED = 1
 DISABLED = 3
+# The cluster's "Not Supported": the lock cannot report its users.
+NOT_SUPPORTED = 0xFF
 _STATUS_NAMES = {AVAILABLE: "available", ENABLED: "enabled", DISABLED: "disabled"}
 
 # lockSourceName (CN:290-296).
@@ -78,11 +79,27 @@ class FakeZ2MBridge:
     # Reads never answered (a bridge or lock that cannot read codes back);
     # writes still land.
     silent: bool = False
+    # Reads answered, but every one with user status Not Supported and no
+    # code (#1581); writes still land.
+    cannot_tell: bool = False
+    # Reads of an empty user answered available, of any other Not Supported:
+    # a lock that reports which slots are free and not what the rest hold.
+    cannot_tell_codes: bool = False
     # The lock reports an attribute after each write, so Zigbee2MQTT
     # republishes its cache, users entries as last read included (#1335).
     # The report goes out once the write's publish has returned, as a real
     # one arrives: after the provider's own view of the write.
     report_after_write: bool = False
+    # The first read of a user after each write to it goes unanswered: a
+    # flaky mesh losing the read-back (#1397 shape); later reads answer.
+    drop_read_backs: bool = False
+    # Writes reach the lock and it drops them, saying nothing: its table
+    # stays as it was.
+    drop_writes: bool = False
+    # Seconds the lock takes to answer a read. While it does, it reports an
+    # attribute, so Zigbee2MQTT republishes its cache ahead of the answer:
+    # the asked-for user's entry as last read, before any write since.
+    answer_after: float = 0.0
     # user id -> (userstatus, pincodevalue): the lock's own table.
     users: dict[int, tuple[int, str | None]] = field(default_factory=dict)
     # Zigbee2MQTT's cached state for the device. ``state`` matches the
@@ -90,6 +107,8 @@ class FakeZ2MBridge:
     cache: dict[str, Any] = field(default_factory=lambda: {"state": "LOCKED"})
     # What the provider sent: (topic suffix, body).
     requests: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    # Users written whose next read is lost, while ``drop_read_backs``.
+    _lose_next_get: set[int] = field(default_factory=set)
 
     def install(self) -> None:
         """Answer the provider's publishes from now on."""
@@ -152,12 +171,18 @@ class FakeZ2MBridge:
             return DEFAULT
         if suffix == "set":
             self._set_pin_code(user, request)
+            if self.drop_read_backs:
+                self._lose_next_get.add(user)
+        elif suffix == "get" and user in self._lose_next_get:
+            self._lose_next_get.discard(user)
         elif suffix == "get":
             self._answer_get_pin_code(user)
         return DEFAULT
 
     def _set_pin_code(self, user: int, request: dict[str, Any]) -> None:
         """Apply ``setPinCode``/``clearPinCode`` (``TZ:442-454``)."""
+        if self.drop_writes:
+            return
         code = request.get("pin_code")
         if code is None:
             self.users[user] = (AVAILABLE, None)
@@ -170,12 +195,19 @@ class FakeZ2MBridge:
     def _answer_get_pin_code(self, user: int) -> None:
         """Answer ``getPinCode`` through ``lock_pin_code_response`` (``FZ:380-400``)."""
         status, code = self.users.get(user, (AVAILABLE, None))
+        if self.cannot_tell or (self.cannot_tell_codes and status != AVAILABLE):
+            status, code = NOT_SUPPORTED, None
         entry: dict[str, Any] = {
             "status": _STATUS_NAMES.get(status, f"not_supported_{status}")
         }
         if self.expose_pin and code:
             entry["pin_code"] = code
-        self._publish_entity_state({"users": {str(user): entry}})
+        update = {"users": {str(user): entry}}
+        if not self.answer_after:
+            self._publish_entity_state(update)
+            return
+        self.report()
+        self.hass.loop.call_later(self.answer_after, self._publish_entity_state, update)
 
     def _publish_event(self, action: str, user: Any, source: int) -> None:
         """Publish an event's ``action`` fields, as both event converters build them."""

@@ -1,7 +1,5 @@
 """A fault for the service-backed lock fakes (Schlage, Akuvox)."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 from typing import Self
 

@@ -17,6 +17,7 @@ import { LitElement, TemplateResult, html, nothing } from 'lit';
 import { property, state } from 'lit/decorators.js';
 import { until } from 'lit/directives/until.js';
 
+import { DEFAULT_CODE_DISPLAY } from './const';
 import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { slotCardStyles } from './slot-card.styles';
@@ -29,8 +30,6 @@ import {
     SlotCardConditions,
     SlotCardData
 } from './types';
-
-const DEFAULT_CODE_DISPLAY: CodeDisplayMode = 'masked_with_reveal';
 
 /** HTMLElement extended with HA's runtime-injected `hass` property. */
 interface HassElement extends HTMLElement {

@@ -33,7 +33,6 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.lock_code_manager.config_flow import _check_common_slots
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -44,21 +43,23 @@ from custom_components.lock_code_manager.const import (
     MAX_SEARCHED_SLOT,
     SUBENTRY_TYPE_USER,
 )
-from custom_components.lock_code_manager.domain.allocation import (
+from custom_components.lock_code_manager.ha.allocation import (
     LockQuerySkipped,
     build_lock_instance,
 )
-from custom_components.lock_code_manager.domain.credentials import (
+from custom_components.lock_code_manager.model.credentials import (
+    Credential,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
+    SlotCredential,
+    User,
 )
-from custom_components.lock_code_manager.domain.exceptions import (
+from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerError,
     LockDisconnected,
 )
-from custom_components.lock_code_manager.domain.models import SlotCredential
-from custom_components.lock_code_manager.domain.queries import get_entry_config
+from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     BASE_CONFIG,
@@ -485,31 +486,6 @@ async def test_options_flow_edits_the_locks(
     assert entry_users(entry) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
 
 
-async def test_config_flow_reauth(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-):
-    """Test reauth flow for updating locks."""
-    lock_code_manager_config_entry.async_start_reauth(
-        hass, context={"lock_entity_id": LOCK_1_ENTITY_ID}
-    )
-    await hass.async_block_till_done()
-    flows = list(
-        lock_code_manager_config_entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    )
-    assert len(flows) == 1
-    [result] = flows
-
-    assert result["step_id"] == "reauth_confirm"
-    flow_id = result["flow_id"]
-
-    result = await async_configure_flow(
-        hass, flow_id, {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
-    )
-
-    assert result["type"] == "abort"
-    assert result["reason"] == "locks_updated"
-
-
 async def test_config_flow_reauth_form_refetch(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ):
@@ -559,9 +535,10 @@ async def test_reauth_wins_over_stale_options(
     hass.config_entries.async_update_entry(entry, options=stale_options)
 
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    result = await async_configure_flow(
-        hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
-    )
+    with _holding():
+        result = await async_configure_flow(
+            hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+        )
     assert result["reason"] == "locks_updated"
     await hass.async_block_till_done()
 
@@ -591,21 +568,6 @@ async def test_config_flow_slots_already_configured(
     assert result["type"] == "create_entry"
     taken = set(get_entry_config(lock_code_manager_config_entry).slot_numbers)
     assert not set(flow_slots(result).values()) & taken
-
-
-async def test_config_flow_two_entries_same_locks(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-):
-    """Test two entries that use same locks but different slots set up successfully."""
-    flow_id = await _start_yaml_config_flow(hass)
-
-    with _holding():
-        result = await async_configure_flow(
-            hass,
-            flow_id,
-            {CONF_USERS: {"User 3": {CONF_ENABLED: False, CONF_PIN: "0123"}}},
-        )
-    assert result["type"] == "create_entry"
 
 
 async def test_config_flow_ui_scheduler_entity_excluded(
@@ -1112,7 +1074,7 @@ async def test_setup_refuses_when_a_lock_has_no_provider(
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
     with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
         side_effect=LockQuerySkipped(LOCK_1_ENTITY_ID, managed=True),
     ):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
@@ -1132,7 +1094,7 @@ async def test_setup_ignores_a_lock_on_an_unsupported_platform(
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
     with patch(
-        "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+        "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
         side_effect=LockQuerySkipped(LOCK_1_ENTITY_ID, managed=False),
     ):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
@@ -1192,12 +1154,14 @@ async def test_reauth_reads_the_locks_for_the_entry_it_is_repairing(
     [flow] = lock_code_manager_config_entry.async_get_active_flows(
         hass, {SOURCE_REAUTH}
     )
+    assert flow["step_id"] == "reauth_confirm"
 
     with reading_for() as read_for:
         result = await async_configure_flow(
             hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
         )
 
+    assert result["type"] == "abort"
     assert result["reason"] == "locks_updated"
     assert read_for, "reauth accepted the new locks without reading them"
     assert all(read is lock_code_manager_config_entry for read in read_for)
@@ -1389,6 +1353,7 @@ async def test_config_flow_capacity_check_skipped_when_lock_allocates_index(
             return_value=False,
         ),
         patch.object(MockLCMLock, "async_get_capabilities", capabilities),
+        patch.object(MockLCMLock, "async_get_users", AsyncMock(return_value=[])),
     ):
         result = await async_configure_flow(
             hass,
@@ -1492,10 +1457,7 @@ async def test_config_flow_ui_rejects_duplicate_name(
             },
             "name_not_unique",
         ),
-        (
-            {"   ": {CONF_ENABLED: True, CONF_PIN: "1234"}},
-            "name_required",
-        ),
+        # name_required is test_a_blank_yaml_name_names_the_slot_it_came_from.
     ],
 )
 async def test_config_flow_yaml_enforces_name_rules(
@@ -1628,7 +1590,7 @@ async def test_claims_above_the_window_do_not_widen_the_read(
 
     with (
         patch(
-            "custom_components.lock_code_manager.domain.allocation.slots_configured_on",
+            "custom_components.lock_code_manager.ha.allocation.slots_configured_on",
             return_value=set(range(90, 100)),
         ),
         patch.object(MockLCMLock, "async_get_usercodes", _read),
@@ -1639,22 +1601,22 @@ async def test_claims_above_the_window_do_not_widen_the_read(
     assert windows == [3], "another entry's distant claims widened the read"
 
 
-async def test_a_lock_that_allocates_its_own_index_is_not_asked(
+async def test_a_lock_that_allocates_its_own_index_skips_what_writing_would_adopt(
     hass: HomeAssistant, mock_lock_config_entry
 ):
-    """Occupancy is not read from a lock whose contents cannot constrain it.
-
-    Where the lock picks its own credential index, what it holds says nothing
-    about which slot number is free -- so asking spends a round trip, or one
-    per index on some providers, on an answer nothing reads.
     """
-    reads: list[int] = []
+    Allocation skips an index a self-indexing lock would adopt (#1684).
 
-    async def _read(self, slots=None):
-        scope = list(self.managed_slots if slots is None else slots)
-        reads.append(max(scope, default=0))
-        return dict.fromkeys(scope, SlotCredential.empty())
+    Writing slot n on such a lock (Matter) adopts an untagged user holding a
+    PIN at credential index n, renaming them and writing over their PIN. A
+    user tagged as Lock Code Manager's is its own, and is not in the way.
+    """
 
+    def _user(user_id: int, name: str, index: int) -> User:
+        credential = Credential(CredentialType.PIN, index, SlotCredential.unreadable())
+        return User(user_id=user_id, name=name, credentials=[credential])
+
+    users = [_user(1, "Mom", 1), _user(2, "lcm:2:Old", 2)]
     flow_id = await _start_config_flow(hass)
     await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
 
@@ -1665,12 +1627,17 @@ async def test_a_lock_that_allocates_its_own_index_is_not_asked(
             new_callable=PropertyMock,
             return_value=False,
         ),
-        patch.object(MockLCMLock, "async_get_usercodes", _read),
+        patch.object(MockLCMLock, "async_get_users", AsyncMock(return_value=users)),
     ):
-        result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+        await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
+        for name, pin in (("Raman", "1111"), ("Priya", "2222")):
+            result = await async_configure_flow(
+                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: pin}
+            )
 
-    assert result["step_id"] == "code_slot"
-    assert reads == [], "a lock that cannot constrain the numbering was read"
+    assert result["type"] == "create_entry"
+    # 1 is Mom's; 2 is free, its tagged user being Lock Code Manager's own.
+    assert sorted(flow_slots(result).values()) == [2, 3]
 
 
 @pytest.mark.parametrize(
@@ -1694,7 +1661,7 @@ async def test_a_lock_that_fails_unexpectedly_is_unknown_not_empty(
 
     if target == "build_lock_instance":
         patcher = patch(
-            "custom_components.lock_code_manager.domain.allocation.build_lock_instance",
+            "custom_components.lock_code_manager.ha.allocation.build_lock_instance",
             side_effect=boom,
         )
     else:
@@ -1985,7 +1952,7 @@ async def test_the_smallest_lock_bounds_the_search(
     # lock stops at 4.
     assert result["errors"] == {"base": "numbers_needed_exceed_capacity"}
     assert result["description_placeholders"]["num_slots"] == "4"
-    assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+    assert result["description_placeholders"]["error_lock"] == LOCK_2_ENTITY_ID
 
 
 async def test_a_count_past_the_range_is_refused_before_reading(
@@ -2016,7 +1983,7 @@ async def test_a_count_past_the_range_is_refused_before_reading(
     assert result["type"] == "form"
     assert result["errors"] == {"base": "too_many_users"}
     assert result["description_placeholders"]["num_slots"] == "5"
-    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+    assert result["description_placeholders"]["error_lock"] == LOCK_1_ENTITY_ID
     assert reads == [], "the lock was read past its own range"
 
 
@@ -2060,6 +2027,7 @@ async def test_a_lock_that_allocates_its_own_index_does_not_bound_the_search(
             return_value=False,
         ),
         patch.object(MockLCMLock, "async_get_max_slot", AsyncMock(return_value=2)),
+        patch.object(MockLCMLock, "async_get_users", AsyncMock(return_value=[])),
     ):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 8})
 
@@ -2090,7 +2058,7 @@ async def test_no_lock_that_can_answer_leaves_our_own_limit(
 
     assert result["errors"] == {"base": "search_limit_reached"}
     assert result["description_placeholders"]["max_slot"] == str(MAX_SEARCHED_SLOT)
-    assert "lock" not in result["description_placeholders"]
+    assert "error_lock" not in result["description_placeholders"]
 
 
 async def test_a_lock_that_reports_its_range_is_the_one_named(
@@ -2115,7 +2083,7 @@ async def test_a_lock_that_reports_its_range_is_the_one_named(
 
     assert result["errors"] == {"base": "too_many_users"}
     assert result["description_placeholders"]["num_slots"] == "4"
-    assert result["description_placeholders"]["lock"] == min(
+    assert result["description_placeholders"]["error_lock"] == min(
         [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
     )
 
@@ -2172,9 +2140,7 @@ async def test_a_skipped_lock_read_names_the_entry_that_asked(
                 hass, dev_reg, ent_reg, config_entry, "lock.never_registered"
             )
         [record] = [
-            record
-            for record in caplog.records
-            if record.name.endswith("domain.allocation")
+            record for record in caplog.records if record.name.endswith("ha.allocation")
         ]
         asked_by, lock_entity_id = record.args
         assert lock_entity_id == "lock.never_registered"
@@ -2246,34 +2212,6 @@ async def test_a_lock_whose_config_entry_is_gone_is_skipped(
 
     # Ours, so it still bounds the numbers even unread.
     assert raised.value.managed is True
-
-
-async def test_reauth_reports_a_slot_another_entry_already_manages(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-) -> None:
-    """
-    Swapping a lock can collide an existing slot set with another entry's.
-
-    Nobody picks numbers any more, but reauth moves an entry's existing
-    numbers onto a different lock, where they may already be spoken for.
-    """
-    _entry_with_users(
-        hass,
-        [LOCK_2_ENTITY_ID],
-        {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
-        title="other",
-        unique_id="other",
-    )
-
-    errors, placeholders = _check_common_slots(
-        hass,
-        [LOCK_2_ENTITY_ID],
-        get_entry_config(lock_code_manager_config_entry).slot_numbers,
-        lock_code_manager_config_entry,
-    )
-
-    assert errors == {"base": "slots_already_configured"}
-    assert placeholders["entry_title"] == "other"
 
 
 async def test_an_entry_may_reuse_a_number_it_just_released(
@@ -2441,6 +2379,171 @@ async def test_options_flow_refuses_a_lock_too_small_for_the_existing_slots(
     _assert_options_error_renders(result)
 
 
+async def _async_add_lock_2(hass: HomeAssistant) -> dict[str, Any]:
+    """Add lock 2 to an entry on lock 1 whose users hold slots 1 and 2."""
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+            "User 2": {CONF_ENABLED: True, CONF_PIN: "5678"},
+        },
+    )
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    return await hass.config_entries.options.async_configure(
+        started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+    )
+
+
+async def test_options_flow_refuses_a_lock_holding_codes_in_the_entrys_slots(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Regression for #1684: an added lock's codes are not written over.
+
+    The entry's numbers were issued before the lock joined it, so a code set
+    at its keypad in one of them is named, and the lock refused. Lock 1 holds
+    the same numbers and is not named: it is already the entry's.
+    """
+    with _holding(2, 3):
+        result = await _async_add_lock_2(hass)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "existing_codes"}
+    assert result["description_placeholders"] == {
+        "error_lock": LOCK_2_ENTITY_ID,
+        "slots": "2",
+    }
+    _assert_options_error_renders(result)
+
+
+async def test_options_flow_adds_a_lock_whose_slots_are_free(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A code outside the entry's numbers does not keep a lock out."""
+    with _holding(3):
+        result = await _async_add_lock_2(hass)
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+
+async def _async_reauth_onto(
+    hass: HomeAssistant, locks: list[str]
+) -> tuple[MockConfigEntry, dict[str, Any]]:
+    """Reauth an entry on lock 1, its users at slots 1 and 2, onto ``locks``."""
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1234"},
+            "User 2": {CONF_ENABLED: True, CONF_PIN: "5678"},
+        },
+    )
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+    return entry, await async_configure_flow(hass, flow["flow_id"], {CONF_LOCKS: locks})
+
+
+async def test_reauth_refuses_a_lock_holding_codes_in_the_entrys_slots(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A lock swapped in by reauth is checked as one the options flow adds (#1693).
+
+    Lock 1 holds the same numbers and is not named: it is already the entry's.
+    """
+    with _holding(2, 3):
+        entry, result = await _async_reauth_onto(
+            hass, [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+        )
+
+    assert result["step_id"] == "reauth_confirm"
+    assert result["errors"] == {"base": "existing_codes"}
+    # The error names the lock it refuses; the description, the missing one.
+    assert result["description_placeholders"]["error_lock"] == LOCK_2_ENTITY_ID
+    assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+    assert result["description_placeholders"]["slots"] == "2"
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
+async def test_reauth_reports_a_slot_another_entry_already_manages(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    Swapping a lock can collide an existing slot set with another entry's.
+
+    Reauth moves an entry's numbers onto a different lock, where they may
+    already be spoken for. The error names that lock; the description still
+    names the one that is missing.
+    """
+    _entry_with_users(
+        hass,
+        [LOCK_2_ENTITY_ID],
+        {"Someone": {CONF_ENABLED: True, CONF_PIN: "4321"}},
+        title="other",
+        unique_id="other",
+    )
+
+    entry, result = await _async_reauth_onto(hass, [LOCK_2_ENTITY_ID])
+
+    assert result["errors"] == {"base": "slots_already_configured"}
+    placeholders = result["description_placeholders"]
+    assert placeholders["error_lock"] == LOCK_2_ENTITY_ID
+    assert placeholders["entry_title"] == "other"
+    assert placeholders["lock"] == LOCK_1_ENTITY_ID
+    assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+
+async def test_reauth_says_when_the_lock_swapped_in_cannot_report(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """#1581: told first that a keypad code in the entry's slots is replaced."""
+
+    def _cannot_tell(lock) -> None:
+        lock.codes = {}
+        lock.cannot_tell = {1, 2}
+
+    with when_mock_lock_built(_cannot_tell):
+        entry, result = await _async_reauth_onto(hass, [LOCK_2_ENTITY_ID])
+        assert result["step_id"] == "cannot_report"
+        assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+        assert result["description_placeholders"]["slots"] == "1, 2"
+        assert entry.data[CONF_LOCKS] == [LOCK_1_ENTITY_ID]
+
+        result = await async_configure_flow(hass, result["flow_id"], {})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.data[CONF_LOCKS] == [LOCK_2_ENTITY_ID]
+
+
+async def test_reauth_swaps_in_a_lock_that_reports_free_slots(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A lock that can report and holds nothing in the way is saved at once."""
+    with _holding(3):
+        entry, result = await _async_reauth_onto(hass, [LOCK_2_ENTITY_ID])
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "locks_updated"
+    assert entry.data[CONF_LOCKS] == [LOCK_2_ENTITY_ID]
+
+
+async def test_options_flow_refuses_a_lock_it_cannot_read(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """An added lock that cannot be read is refused, as setup refuses it."""
+    with when_mock_lock_built(lambda lock: lock.fail("get")):
+        result = await _async_add_lock_2(hass)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+    assert result["description_placeholders"] == {"locks": LOCK_2_ENTITY_ID}
+    _assert_options_error_renders(result)
+
+
 def _assert_options_error_renders(result) -> None:
     """
     Assert the options form has a sentence for its error, and all it names.
@@ -2533,7 +2636,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         # Only the numbers both entries hold: the other entry's third user does
         # not collide with anyone here.
         assert result["description_placeholders"] == {
-            "lock": LOCK_2_ENTITY_ID,
+            "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
             "common_slots": "1, 2",
         }
@@ -2572,7 +2675,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
 
         assert result["errors"] == {"base": "slots_already_configured"}
         assert result["description_placeholders"] == {
-            "lock": LOCK_2_ENTITY_ID,
+            "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
             "common_slots": "1",
         }
@@ -2618,9 +2721,11 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["errors"] == {"base": "slots_already_configured"}
 
         started = await hass.config_entries.options.async_init(entry.entry_id)
-        result = await hass.config_entries.options.async_configure(
-            started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
-        )
+        # Nothing at the keypad either, which would refuse it on its own.
+        with _holding():
+            result = await hass.config_entries.options.async_configure(
+                started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+            )
 
         assert result["type"] == "create_entry"
         assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
@@ -2655,7 +2760,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
 
         assert result["type"] == "form"
         assert result["errors"] == {"base": "slots_already_configured"}
-        assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+        assert result["description_placeholders"]["error_lock"] == LOCK_1_ENTITY_ID
 
         result = await hass.config_entries.options.async_configure(
             started["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID]}
@@ -2696,7 +2801,7 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["type"] == "form"
         assert result["errors"] == {"base": "slots_already_configured"}
         assert result["description_placeholders"] == {
-            "lock": LOCK_2_ENTITY_ID,
+            "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
             "common_slots": "1",
         }
@@ -2912,9 +3017,12 @@ async def test_reauth_completes_around_a_grandfathered_unclaimed_lock(
     await hass.async_block_till_done()
 
     [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-    result = await async_configure_flow(
-        hass, flow["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID, unclaimed.entity_id]}
-    )
+    with _holding():
+        result = await async_configure_flow(
+            hass,
+            flow["flow_id"],
+            {CONF_LOCKS: [LOCK_2_ENTITY_ID, unclaimed.entity_id]},
+        )
 
     assert result["type"] == "abort"
     assert result["reason"] == "locks_updated"
@@ -2940,7 +3048,7 @@ def test_every_allocation_refusal_has_a_sentence(category: tuple[str, ...]) -> N
     second place to forget.
     """
     source = (
-        Path("custom_components/lock_code_manager/domain/allocation.py")
+        Path("custom_components/lock_code_manager/ha/allocation.py")
         .read_text()
         .replace("\n", " ")
     )
@@ -2990,6 +3098,8 @@ async def test_ui_allocation_runs_as_a_progress_step(
         assert result["step_id"] == "ui"
         assert result["progress_action"] == "allocating"
 
+        # The read runs in the lock's worker, a loop turn or two later.
+        await async_run_until_quiet()
         assert sum(fault.held for fault in faults) == 1
         for fault in faults:
             fault.clear()
@@ -3230,9 +3340,17 @@ async def test_a_second_request_while_an_unread_entry_is_saved_is_turned_away(
             await let_it_save.wait()
         return await finish_flow(self, flow, result)
 
+    result = await hass.config_entries.flow.async_configure(flow_id, users)
+    if result["type"] == "progress":
+        # The lock is read in its worker, so allocation is answered a turn
+        # later; the request that takes its answer is the one that saves.
+        await hass.async_block_till_done()
+        users_again: dict | None = None
+    else:
+        users_again = users
     with patch.object(ConfigEntriesFlowManager, "async_finish_flow", _slow_first_save):
         saved = hass.async_create_task(
-            hass.config_entries.flow.async_configure(flow_id, users)
+            hass.config_entries.flow.async_configure(flow_id, users_again)
         )
         await async_run_until_quiet()
         assert saving.is_set(), "the submitting request did not save the entry"
@@ -3265,6 +3383,8 @@ async def test_a_refusal_after_a_held_read_comes_back_to_the_users_form(
         assert result["type"] == "progress"
         assert result["step_id"] == "yaml"
 
+        # The read runs in the lock's worker, a loop turn or two later.
+        await async_run_until_quiet()
         assert sum(fault.held for fault in faults) == 1
         for fault in faults:
             fault.clear()
@@ -3299,6 +3419,8 @@ async def test_a_refusal_after_a_held_read_comes_back_to_the_count_form(
         assert result["type"] == "progress"
         assert result["step_id"] == "ui"
 
+        # The read runs in the lock's worker, a loop turn or two later.
+        await async_run_until_quiet()
         assert sum(fault.held for fault in faults) == 1
         for fault in faults:
             fault.clear()
@@ -3327,10 +3449,17 @@ async def test_a_refusal_answered_at_once_can_be_submitted_again(
 
     with when_mock_lock_built(lambda lock: lock.fail("get")):
         result = await hass.config_entries.flow.async_configure(flow_id, users)
+        if result["type"] == "progress":
+            # Read in the lock's worker: answered a turn later, not at once.
+            await hass.async_block_till_done()
+            result = await hass.config_entries.flow.async_configure(flow_id)
     assert result["type"] == "form"
     assert result["errors"] == {"base": "occupancy_unknown"}
 
     result = await hass.config_entries.flow.async_configure(flow_id, users)
+    if result["type"] == "progress":
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
     assert result["type"] == "create_entry"
 
 
@@ -3629,16 +3758,19 @@ class TestFlowsOnAFailedEntry:
         entry = await self._async_failed_entry(
             hass, options={CONF_LOCKS: [LOCK_2_ENTITY_ID]}
         )
-        if flow_kind == "reauth":
-            [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
-            result = await async_configure_flow(
-                hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-            )
-        else:
-            init = await hass.config_entries.options.async_init(entry.entry_id)
-            result = await async_configure_options(
-                hass, init["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
-            )
+        # The stale options are what the entry holds, so lock 1 is one being
+        # added, and is read for codes in the way.
+        with _holding():
+            if flow_kind == "reauth":
+                [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+                result = await async_configure_flow(
+                    hass, flow["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+                )
+            else:
+                init = await hass.config_entries.options.async_init(entry.entry_id)
+                result = await async_configure_options(
+                    hass, init["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+                )
         await hass.async_block_till_done()
         assert result["reason"] == "locks_updated"
         assert entry.state is ConfigEntryState.LOADED

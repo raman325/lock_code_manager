@@ -1,10 +1,8 @@
 """Tests for diagnostics."""
 
-from __future__ import annotations
-
 import copy
 
-from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, SERVICE_TURN_OFF
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
@@ -13,19 +11,23 @@ from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
 )
-from custom_components.lock_code_manager.domain.credentials import pin_address
-from custom_components.lock_code_manager.domain.models import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    SlotCredential,
+)
 
 from .common import (
     BASE_CONFIG,
     LOCK_1_ENTITY_ID,
     async_enable_and_reload,
+    async_switch_slot,
+    mock_lock,
     pin_in_sync_entity_id,
     write_entry_config,
 )
 
 # SlotCode sentinel values as they appear after _mask_code
-_SENTINEL_VALUES = {"empty", "unreadable_code", None}
+_SENTINEL_VALUES = {*(code.value for code in SlotCode), None}
 
 
 async def test_config_entry_diagnostics(
@@ -47,13 +49,23 @@ async def test_config_entry_diagnostics(
     assert LOCK_1_ENTITY_ID in result["locks"]
     lock_diag = result["locks"][LOCK_1_ENTITY_ID]
     assert lock_diag["entity_id"] == LOCK_1_ENTITY_ID
-    assert "coordinator" in lock_diag
-    assert "data" in lock_diag["coordinator"]
+    worker_diag = lock_diag["worker"]
+    assert worker_diag["reachable"] is True
+    assert worker_diag["offline"] is False
+    assert "data" in worker_diag
+    assert worker_diag["slots"]["1"] == {
+        "status": "in_sync",
+        "hold": None,
+        "tries": 0,
+        "release": False,
+    }
 
-    # PINs should be masked (not raw values)
-    for code in lock_diag["coordinator"]["data"].values():
-        if code not in _SENTINEL_VALUES:
-            assert code.startswith("pin#")
+    # PINs should be masked (not raw values), on every lock
+    assert worker_diag["data"]["1"].startswith("pin#")
+    for each_lock in result["locks"].values():
+        for code in each_lock["worker"]["data"].values():
+            if code not in _SENTINEL_VALUES:
+                assert code.startswith("pin#"), f"Unmasked PIN in diagnostics: {code}"
 
     # Should have slot data
     assert len(result["slots"]) > 0
@@ -62,9 +74,12 @@ async def test_config_entry_diagnostics(
     assert "pin" in slot_diag
     assert "entities" in slot_diag
 
-    # Configured PINs should also be masked
-    if slot_diag["pin"] not in _SENTINEL_VALUES:
-        assert slot_diag["pin"].startswith("pin#")
+    # Configured PINs should also be masked, on every slot
+    for each_slot in result["slots"].values():
+        if each_slot["pin"] not in _SENTINEL_VALUES:
+            assert each_slot["pin"].startswith("pin#"), (
+                f"Unmasked configured PIN: {each_slot['pin']}"
+            )
 
 
 async def test_device_diagnostics_slot_device(
@@ -110,7 +125,7 @@ async def test_device_diagnostics_lock_device(
             hass, lock_code_manager_config_entry, lock.device_entry
         )
         assert result["entity_id"] == LOCK_1_ENTITY_ID
-        assert "coordinator" in result
+        assert "worker" in result
     else:
         # No device entry — device diagnostics falls through to config entry
         dev_reg = dr.async_get(hass)
@@ -146,28 +161,6 @@ async def test_device_diagnostics_for_a_device_that_is_not_a_slot(
     # Falls through to config entry diagnostics (superset)
     assert "locks" in result
     assert "slots" in result
-
-
-async def test_mask_code_values(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-) -> None:
-    """Test that all PIN values in diagnostics are masked deterministically."""
-    result = await async_get_config_entry_diagnostics(
-        hass, lock_code_manager_config_entry
-    )
-
-    for lock_diag in result["locks"].values():
-        for code in lock_diag["coordinator"]["data"].values():
-            if code not in _SENTINEL_VALUES:
-                assert code.startswith("pin#"), f"Unmasked PIN in diagnostics: {code}"
-
-    for slot_diag in result["slots"].values():
-        if slot_diag["pin"] not in _SENTINEL_VALUES:
-            assert slot_diag["pin"].startswith("pin#"), (
-                f"Unmasked configured PIN: {slot_diag['pin']}"
-            )
 
 
 async def test_sensitive_entities_redacted(
@@ -223,20 +216,25 @@ async def test_mask_code_covers_missing_and_edge_case_credentials(
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ) -> None:
-    """``_mask_code`` covers three distinct branches of its label-to-string mapping.
+    """``_mask_code`` covers distinct branches of its label-to-string mapping.
 
-    A slot absent from coordinator data, a cleared slot (SlotCode.EMPTY),
+    A slot being checked (SlotCode.CHECKING), a cleared slot (SlotCode.EMPTY),
     and a present-but-empty-string PIN (the falsy-label fallback) all
     surface differently in diagnostics output.
     """
     entry = lock_code_manager_config_entry
-    lock_1 = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    coordinator = lock_1.coordinator
-    assert coordinator is not None
+    lock_1 = mock_lock(entry)
 
-    # Add slot 3 to config but never write a code for it on lock 1 --
-    # coordinator.data has no entry for slot 3 even though it is non-empty.
+    # Slot 1: cleared on the lock -> SlotCode.EMPTY sentinel.
+    await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
+    await hass.async_block_till_done()
+    assert 1 not in lock_1.codes
+
+    # Add slot 3 to config, but lock 1 never answers a read of it: on a lock
+    # that has answered, slot 3 is being checked.
+    lock_1.fail("get", 3)
     new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][1][CONF_ENABLED] = False  # as switched off above
     new_config[CONF_SLOTS][3] = {
         CONF_NAME: "test3",
         CONF_PIN: "9999",
@@ -244,22 +242,19 @@ async def test_mask_code_covers_missing_and_edge_case_credentials(
     }
     write_entry_config(hass, entry, new_config)
     await hass.async_block_till_done()
-    assert pin_address(3) not in coordinator.data
 
-    # Slot 1: cleared on the lock -> SlotCode.EMPTY sentinel.
-    coordinator.push_update({1: SlotCredential.empty()})
-    # Slot 2: present but with an empty-string PIN -- the falsy-label
-    # fallback distinct from the SlotCode.EMPTY sentinel above.
-    coordinator.push_update({2: SlotCredential.known("")})
+    # Slot 9, which nobody manages: present but with an empty-string PIN --
+    # the falsy-label fallback distinct from the SlotCode.EMPTY sentinel above.
+    lock_1._push_credential_update(9, SlotCredential.known(""))
     await hass.async_block_till_done()
 
     result = await async_get_config_entry_diagnostics(hass, entry)
 
-    lock_1_data = result["locks"][LOCK_1_ENTITY_ID]["coordinator"]["data"]
+    lock_1_data = result["locks"][LOCK_1_ENTITY_ID]["worker"]["data"]
     assert lock_1_data["1"] == "empty"
-    assert lock_1_data["2"] == "empty"
+    assert lock_1_data["9"] == "empty"
+    assert lock_1_data["3"] == "checking"
 
-    # Slot 3's per-lock entry is built via _slot_diagnostic's .get() lookup,
-    # which returns None for a slot the coordinator has never seen.
-    slot_3_lock_1 = result["slots"]["3"]["locks"][LOCK_1_ENTITY_ID]
-    assert slot_3_lock_1["coordinator_code"] is None
+    assert result["slots"]["1"]["locks"][LOCK_1_ENTITY_ID] == {"code": "empty"}
+    assert result["slots"]["3"]["locks"][LOCK_1_ENTITY_ID] == {"code": "checking"}
+    lock_1.clear_faults()

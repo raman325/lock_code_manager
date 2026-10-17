@@ -12,8 +12,6 @@ setup -- not from the slot coordinators, which would test the implementation
 against itself.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 from hypothesis import given, strategies as st
@@ -45,7 +43,7 @@ from custom_components.lock_code_manager.const import (
     REASON_UNKNOWN_CODE,
     REASON_USER_DISABLED,
 )
-from custom_components.lock_code_manager.domain.validation import validate_credential
+from custom_components.lock_code_manager.ha.validation import validate_credential
 
 from ..common import slot_entity_id
 

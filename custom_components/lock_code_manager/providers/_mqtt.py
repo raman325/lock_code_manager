@@ -31,22 +31,36 @@ the other a per-device topic, and zwave-js-ui also runs an api transport with
 its own lifetime), the payload projections, and the api client.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import ClassVar, NoReturn, final
+from enum import Enum
+from typing import ClassVar, Final, Literal, NoReturn, final, override
 
 from homeassistant.components.mqtt import DOMAIN as MQTT_DOMAIN
 from homeassistant.components.mqtt.util import mqtt_config_entry_enabled
 from homeassistant.core import callback
 
-from ..domain.credentials import User, user_from_slot
-from ..domain.exceptions import LockDisconnected
-from ..domain.models import SlotCredential
+from ..model.credentials import SlotCredential, User, user_from_slot
+from ..model.exceptions import LockDisconnected
 from ._base import BaseLock
 from .const import LOGGER
+
+
+class _CannotTell(Enum):
+    """The type of ``CANNOT_TELL``."""
+
+    CANNOT_TELL = "cannot_tell"
+
+
+# A slot read the lock answered, to say it cannot tell what the slot holds
+# (Zigbee's user status 0xFF, "not supported"). The same reading as silence --
+# nothing is known about the slot -- but an answer: the read reached the lock.
+CANNOT_TELL: Final = _CannotTell.CANNOT_TELL
+
+# What one slot's read came back with: a credential the lock described,
+# ``CANNOT_TELL``, or None for silence.
+SlotAnswer = SlotCredential | Literal[_CannotTell.CANNOT_TELL] | None
 
 
 @dataclass(repr=False, eq=False)
@@ -67,11 +81,13 @@ class BaseMqttLock(BaseLock):
     _reads_have_succeeded: bool = field(init=False, default=False)
 
     @property
+    @override
     def domain(self) -> str:
         """Return integration domain."""
         return MQTT_DOMAIN
 
     @property
+    @override
     def usercode_scan_interval(self) -> timedelta:
         """
         Return scan interval for usercodes.
@@ -86,6 +102,7 @@ class BaseMqttLock(BaseLock):
         return timedelta(minutes=5)
 
     @property
+    @override
     def hard_refresh_interval(self) -> timedelta | None:
         """
         Return interval for hard refresh.
@@ -96,6 +113,7 @@ class BaseMqttLock(BaseLock):
         """
         return timedelta(hours=1)
 
+    @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
@@ -107,11 +125,12 @@ class BaseMqttLock(BaseLock):
         lock's own answer, so the two are the same operation.
         """
         # No cache to project from: a scoped refresh re-reads every managed slot
-        # plus ``slots``, so the coordinator's replace still names them all.
+        # plus ``slots``, so the result still names them all.
         return await self.async_get_usercodes(
             None if slots is None else self.managed_slots | frozenset(slots)
         )
 
+    @override
     async def async_is_device_available(self) -> bool:
         """
         Return whether the lock entity reports an operational state.
@@ -148,12 +167,11 @@ class BaseMqttLock(BaseLock):
         device itself has to answer, leaving it on makes that fail up front
         as a disconnect instead of ten seconds later as a timeout.
 
-        Two of the three checks repeat what ``_execute_rate_limited`` asked a
-        moment earlier, and the repetition is load-bearing rather than
-        leftover: the unmanaged-code sweep and slot allocation call the
-        provider's operations directly, without that wrapper, so a helper
-        trimmed to what the wrapper does not cover would leave those two paths
-        addressing a lock that is not there.
+        The checks live here, in every operation, rather than in a caller:
+        the unmanaged-code sweep and slot allocation call the provider's
+        operations directly, outside the lock's worker, so leaving them to a
+        caller would leave those two paths addressing a lock that is not
+        there.
         """
         if not mqtt_config_entry_enabled(self.hass):
             raise LockDisconnected("MQTT component not available")
@@ -219,12 +237,14 @@ class BaseMqttLock(BaseLock):
                     self.lock.entity_id,
                 )
 
-        self.hass.async_create_task(_subscribe_or_log())
+        self._create_background_task(
+            _subscribe_or_log(), f"MQTT push subscribe for {self.lock.entity_id}"
+        )
 
     async def _async_read_slots(
         self,
         code_slots: Collection[int],
-        read_slot: Callable[[int], Awaitable[SlotCredential | None]],
+        read_slot: Callable[[int], Awaitable[SlotAnswer]],
         *,
         transport_failure: str,
     ) -> list[User]:
@@ -236,20 +256,22 @@ class BaseMqttLock(BaseLock):
         with per-slot timeouts can fail an entire refresh and leave the
         coordinator with no data, which makes sync skip every slot.
 
-        ``read_slot`` returns None when the lock said nothing at all and a
-        credential for anything it described, however unreadable. Both reach
-        the coordinator as unreadable -- calling either empty would tell sync
-        the code is gone and storm reprogramming once the lock answers again
-        -- but only the silences decide whether the read was worth anything.
+        ``read_slot`` returns None when the lock said nothing at all, a
+        credential for anything it described, however unreadable, and
+        ``CANNOT_TELL`` when it answered that it cannot say. Silence and
+        ``CANNOT_TELL`` reach the core as silent (``last_silent_slots``): free
+        to allocate, and a write there is trusted -- except that, from a lock
+        that has described some slot, the core reads ``CANNOT_TELL`` as a
+        code withheld (``ProviderPort.read``). Only the silences decide
+        whether the read was worth anything.
 
         Every slot failing at the transport is a different thing from every
         slot reading unreadable, and only the first can raise. An all-unreadable
-        return is a successful poll as far as the coordinator is concerned:
-        it resets the connectivity breaker, un-suspends the slots, and lets
-        them re-fail on the next tick -- an oscillation on the order of
-        seconds, flipping every slot in and out of sync. A lock configured to
-        withhold its codes answers every request and is perfectly healthy, so
-        its reads are data and must not count towards this.
+        return is an answered read as far as the worker is concerned, and
+        raising instead would back the lock off and take it offline. A lock
+        configured to withhold its codes answers every request and is
+        perfectly healthy, so its reads are data and must not count towards
+        this.
 
         One silent slot among answered ones stays merely unreadable. A lock
         that answers most requests and drops one is a weak link rather than a
@@ -263,7 +285,7 @@ class BaseMqttLock(BaseLock):
         Two slots is the smallest read it can judge. Asking about one and
         hearing nothing is a single lost reply, and on a lossy mesh that is
         routine -- issue #1397 had a node dropping roughly half its
-        responses. Raising there would trip the connectivity breaker on
+        responses. Raising there would count towards the lock's backoff on
         ordinary noise for an entry with one user, while an entry with two on
         the same lock, losing replies at the same rate, polled on untroubled.
         How many people a household has must not decide whether its lock is
@@ -275,16 +297,18 @@ class BaseMqttLock(BaseLock):
         firmware implements User Code Set without Get. Those locks worked --
         every poll came back all-unreadable and every write landed -- until an
         all-silent rule that did not ask whether reading was ever possible
-        started declaring them gone, tripping the breaker and suspending the
+        started declaring them gone, backing the lock off and stopping the
         writes along with the reads that were never going to work. Until the
         lock proves it can be read, silence is the answer rather than the
         absence of one, and a lock that can never prove it is left exactly as
-        it was before this rule existed.
+        it was before this rule existed. ``CANNOT_TELL`` proves nothing either
+        way (#1581): it is no successful read, or a lock answering it to every
+        slot would later have its dropped replies taken for an outage, and it
+        is an answer, so a read that got one is no outage.
 
         One silent poll is not by itself an outage, and does not need to be
-        one here: raising records a single connectivity failure, and the
-        coordinator's breaker takes three in a row before it suspends
-        anything. A #1397-class link that loses both replies of one poll is
+        one here: raising records a single no-answer, and the worker takes
+        three in a row before it backs the lock off. A #1397-class link that loses both replies of one poll is
         absorbed there, by the mechanism that already exists for it.
 
         Nothing about a transport that is genuinely gone rests on this
@@ -299,16 +323,29 @@ class BaseMqttLock(BaseLock):
             return []
 
         reads = {slot_num: await read_slot(slot_num) for slot_num in sorted(code_slots)}
-        if any(state is not None for state in reads.values()):
+        self.last_cannot_tell_slots = frozenset(
+            s for s, state in reads.items() if state is CANNOT_TELL
+        )
+        self.last_silent_slots = self.last_cannot_tell_slots | frozenset(
+            s for s, state in reads.items() if state is None
+        )
+        if len(self.last_silent_slots) < len(reads):
             self._reads_have_succeeded = True
-        elif len(reads) > 1 and self._reads_have_succeeded:
+        elif (
+            len(reads) > 1
+            and self._reads_have_succeeded
+            and not self.last_cannot_tell_slots
+        ):
             raise LockDisconnected(
                 f"{self.lock.entity_id}: every one of the {len(reads)} requested "
                 f"slot reads {transport_failure}"
             )
         return [
             user_from_slot(
-                slot_num, SlotCredential.unreadable() if state is None else state
+                slot_num,
+                state
+                if isinstance(state, SlotCredential)
+                else SlotCredential.unreadable(),
             )
             for slot_num, state in reads.items()
         ]

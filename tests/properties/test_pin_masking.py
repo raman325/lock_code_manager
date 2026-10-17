@@ -8,13 +8,11 @@ value makes the whole scheme pointless. Example-based tests pin a handful of
 PINs; these pin the invariants over the whole input space.
 """
 
-from __future__ import annotations
-
 import re
 
 from hypothesis import given, strategies as st
 
-from custom_components.lock_code_manager.domain.util import (
+from custom_components.lock_code_manager.model.pin_masking import (
     deobfuscate_pins,
     mask_pin,
 )

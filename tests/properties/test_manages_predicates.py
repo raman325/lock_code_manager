@@ -20,8 +20,6 @@ Each question is checked two ways:
   answers from its cached view, any other from storage.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -45,14 +43,13 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
-from custom_components.lock_code_manager.domain.config import EntryConfig
-from custom_components.lock_code_manager.domain.queries import (
-    another_enabled_entry_configures,
+from custom_components.lock_code_manager.model.config import EntryConfig
+from custom_components.lock_code_manager.model.queries import (
+    another_entry_configures,
     configured_owner,
     entries_configuring,
     get_entry_config,
     slots_configured_on,
-    syncing_owner,
 )
 
 from ..common import user_subentries
@@ -60,17 +57,6 @@ from ..common import user_subentries
 LOCKS = ("lock.front", "lock.back", "lock.side")
 SLOTS = tuple(range(1, 6))
 
-# Written out rather than imported: the oracle states which load states keep
-# an entry's slots wanted on the lock, so it cannot borrow the answer.
-KEEPS_ITS_SLOTS = frozenset(
-    {
-        ConfigEntryState.LOADED,
-        ConfigEntryState.SETUP_IN_PROGRESS,
-        ConfigEntryState.SETUP_RETRY,
-        ConfigEntryState.NOT_LOADED,
-        ConfigEntryState.UNLOAD_IN_PROGRESS,
-    }
-)
 CACHE_IS_CURRENT = frozenset(
     {ConfigEntryState.LOADED, ConfigEntryState.UNLOAD_IN_PROGRESS}
 )
@@ -100,16 +86,6 @@ class EntrySpec:
         if self.cached is not None and self.state in CACHE_IS_CURRENT:
             return self.cached
         return self.stored
-
-    @property
-    def enabled(self) -> bool:
-        """Neither disabled nor ignored, in any load state."""
-        return not self.disabled and not self.ignored
-
-    @property
-    def keeps_its_slots(self) -> bool:
-        """Enabled, and in a load state whose slots are wanted on the lock."""
-        return self.enabled and self.state in KEEPS_ITS_SLOTS
 
     def configures(self, lock: str) -> bool:
         """Whether this entry lists ``lock``."""
@@ -151,7 +127,7 @@ def _frozen_get_managed_slots(
     *,
     excluding: ConfigEntry | None = None,
 ) -> set[int]:
-    """``domain.queries.get_managed_slots``."""
+    """``model.queries.get_managed_slots``."""
     return {
         slot_num
         for entry in hass.config_entries.async_entries(DOMAIN)
@@ -179,7 +155,7 @@ def _frozen_find_entry_for_lock_slot(
     *,
     keeping_slots: bool = False,
 ) -> ConfigEntry | None:
-    """``domain.queries.find_entry_for_lock_slot``."""
+    """``model.queries.find_entry_for_lock_slot``."""
     return next(
         (
             entry
@@ -193,21 +169,6 @@ def _frozen_find_entry_for_lock_slot(
             and config.has_slot(code_slot)
         ),
         None,
-    )
-
-
-def _frozen_lock_managed_by_other_entry(
-    hass: HomeAssistant,
-    config_entry: ConfigEntry,
-    lock_entity_id: str,
-) -> bool:
-    """``__init__._lock_managed_by_other_entry``."""
-    return any(
-        entry.entry_id != config_entry.entry_id
-        and get_entry_config(entry).has_lock(lock_entity_id)
-        for entry in hass.config_entries.async_entries(
-            DOMAIN, include_disabled=False, include_ignore=False
-        )
     )
 
 
@@ -339,45 +300,18 @@ def test_configured_owner_is_the_first_entry_listing_the_slot(
 
 
 @given(specs=ENTRY_SETS)
-def test_syncing_owner_counts_only_entries_keeping_their_slots(
+def test_another_entry_configures_counts_disabled_but_not_ignored(
     specs: list[EntrySpec],
 ) -> None:
-    """Only an enabled entry in a state that keeps its slots owns one."""
-
-    def probe(hass: HomeAssistant, entries: list[MockConfigEntry]) -> None:
-        for lock in LOCKS:
-            for slot in SLOTS:
-                expected = _first(
-                    specs,
-                    entries,
-                    lambda spec: (
-                        spec.keeps_its_slots and spec.configures_slot(lock, slot)
-                    ),
-                )
-                actual = syncing_owner(hass, lock, slot)
-                assert actual is _frozen_find_entry_for_lock_slot(
-                    hass, lock, slot, keeping_slots=True
-                )
-                assert actual is expected
-
-    _with_entries(specs, probe)
-
-
-@given(specs=ENTRY_SETS)
-def test_another_enabled_entry_configures_ignores_disabled_and_ignored(
-    specs: list[EntrySpec],
-) -> None:
-    """Another entry counts if it is neither disabled nor ignored, in any state."""
+    """Another entry counts unless it is ignored: disabled, in any state, it does."""
 
     def probe(hass: HomeAssistant, entries: list[MockConfigEntry]) -> None:
         for asking in entries:
             for lock in LOCKS:
                 expected = any(
-                    entry is not asking and spec.enabled and spec.configures(lock)
+                    entry is not asking and not spec.ignored and spec.configures(lock)
                     for spec, entry in zip(specs, entries, strict=True)
                 )
-                actual = another_enabled_entry_configures(hass, asking, lock)
-                assert actual is _frozen_lock_managed_by_other_entry(hass, asking, lock)
-                assert actual is expected
+                assert another_entry_configures(hass, asking, lock) is expected
 
     _with_entries(specs, probe)

@@ -24,15 +24,15 @@ is: the reads the coordinator makes right after a write would use up a
 count before any sync tick looked. A transport
 failure is the raw ``requests`` timeout core does not catch: only
 ``SchlageError`` is translated (SL:107-115), so a ``ReadTimeout`` (an
-``OSError``) reaches the caller as is.
+``OSError``) reaches the caller as is. A cloud failure is that
+``SchlageError``: core answers it with its own error when the cloud is asked
+to delete a code (SL:156-161), which it asks only for a code it found.
 
 A delete that finds its code only in a lagging read succeeds without a
 change. Core deletes that stale ``AccessCode`` through the cloud
 (SL:136-163); what the cloud answers for a code already gone is not
 documented by pyschlage, so the fake takes the quiet answer.
 """
-
-from __future__ import annotations
 
 from dataclasses import dataclass, field
 import time
@@ -46,7 +46,7 @@ from homeassistant.core import (
     ServiceResponse,
     SupportsResponse,
 )
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import translation
 
 from custom_components.lock_code_manager.providers.schlage import SCHLAGE_DOMAIN
@@ -68,6 +68,8 @@ class FakeSchlageCloud:
     read_lag: float = 0.0
     calls: list[tuple[str, dict]] = field(default_factory=list)
     faults: list[ServiceFault] = field(default_factory=list)
+    # Cloud failures, met only where core reaches the cloud to write.
+    failures: list[ServiceFault] = field(default_factory=list)
     # The table a lagging read answers, and the monotonic time it stops.
     _stale: dict[str, tuple[str, str]] | None = None
     _stale_until: float = 0.0
@@ -110,6 +112,12 @@ class FakeSchlageCloud:
         """Make ``service`` raise the cloud's raw ``ReadTimeout`` (``times`` more)."""
         fault = ServiceFault(self.faults, service, times)
         self.faults.append(fault)
+        return fault
+
+    def fail_deletes(self, *, times: int | None = 1) -> ServiceFault:
+        """Make the cloud fail to delete a code ``delete_code`` found (``times`` more)."""
+        fault = ServiceFault(self.failures, "delete_code", times)
+        self.failures.append(fault)
         return fault
 
     @property
@@ -191,6 +199,11 @@ class FakeSchlageCloud:
         )
         if target is None or target not in self.codes:
             return
+        if first_fault(self.failures, "delete_code") is not None:
+            raise HomeAssistantError(
+                translation_domain=SCHLAGE_DOMAIN,
+                translation_key="schlage_delete_code_failed",
+            )
         before = dict(self.codes)
         del self.codes[target]
         self._wrote(before)
