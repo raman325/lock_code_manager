@@ -109,6 +109,7 @@ from tests.providers.zwave_js.conftest import (
 from tests.providers.zwave_js.fake_node import (
     USER_CREDENTIAL_CC_ID,
     FakeZWaveLock,
+    LockUser,
     UserReportType,
     supervised_lock_state,
     user_credential_lock_state,
@@ -2623,6 +2624,7 @@ class TestSomeoneElsesCodeAtATurnedOffSlot:
         """The synthesized User Credential dump."""
         return user_credential_lock_state(lock_schlage_be469_state)
 
+    @pytest.mark.parametrize("name", [None, "3"], ids=["untagged", "named_3"])
     async def test_the_slot_reads_clear_and_the_code_stays(
         self,
         hass: HomeAssistant,
@@ -2630,13 +2632,15 @@ class TestSomeoneElsesCodeAtATurnedOffSlot:
         fake_zwave_lock: FakeZWaveLock,
         zwave_integration: MockConfigEntry,
         lock_entity: er.RegistryEntry,
+        name: str | None,
     ) -> None:
         """
         The code is someone else's, not the slot's: in sync, untouched, no repair.
 
         The clear finds no user tagged for the slot and leaves the code alone
         (#1518), so a slot reading it as its own never came in sync and was
-        held with a repair nothing could resolve.
+        held with a repair nothing could resolve. A user named ``3`` is no
+        tag on a lock that fits ``lcm:3:`` (#1729).
         """
         entry = MockConfigEntry(
             domain=DOMAIN,
@@ -2657,6 +2661,9 @@ class TestSomeoneElsesCodeAtATurnedOffSlot:
 
         # The homeowner adds a user with a PIN at credential slot 3.
         fake_zwave_lock.program(3, "5555")
+        if name is not None:
+            fake_zwave_lock.users[3].user_name = name
+            fake_zwave_lock._u3c_persist_user(3, UserReportType.USER_MODIFIED)
         await hass.async_block_till_done()
         await async_advance_sync_ticks(hass, freezer, 5)
 
@@ -2857,6 +2864,116 @@ class TestReleaseOnAShortNameLock:
         assert _users_tagged_for(fake_zwave_lock, 1)
         assert fake_zwave_lock.holds(2) is None
         assert fake_zwave_lock.holds(1) == "9999"
+
+
+class TestWriteNextToAUserNamedWithTheSlot:
+    """A User Credential lock: a homeowner's user named with a slot's number (#1729)."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    async def test_the_homeowner_s_user_is_not_written_onto(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Turning slot 3 on writes a user of LCM's own, not the homeowner's user named ``3``.
+
+        This lock fits ``lcm:3:``, so LCM never names a user ``3`` here.
+        Taken for slot 3's, the homeowner's user would be renamed and get
+        LCM's PIN, and a later release would delete it with its own code.
+        """
+        # The homeowner's user 7, named "3" in the vendor app, PIN at index 7.
+        fake_zwave_lock.program(7, "5555")
+        fake_zwave_lock.users[7].user_name = "3"
+        fake_zwave_lock._u3c_persist_user(7, UserReportType.USER_MODIFIED)
+        await hass.async_block_till_done()
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {
+                    **ZWAVE_JS_LCM_CONFIG_SLOTS,
+                    3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: True},
+                }
+            ),
+            unique_id="test_zwave_js_write_digit_named",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        for slot in (1, 2, 3):
+            await _async_settle_in_sync(hass, freezer, entry, lock_entity, slot)
+
+        assert fake_zwave_lock.users[7].user_name == "3"
+        assert fake_zwave_lock.holds(7) == "5555"
+        assert fake_zwave_lock.holds(3) == "3333"
+        assert (
+            fake_zwave_lock.credentials[(int(UserCredentialType.PIN_CODE), 3)][0] != 7
+        )
+        assert _users_tagged_for(fake_zwave_lock, 3) - {7}
+        await hass.config_entries.async_unload(entry.entry_id)
+
+
+class TestWriteOnAShortNameLock:
+    """A User Credential lock whose name limit cannot fit ``lcm:<slot>:``."""
+
+    @pytest.fixture
+    def lock_schlage_be469_state(
+        self, lock_schlage_be469_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The synthesized User Credential dump."""
+        return user_credential_lock_state(lock_schlage_be469_state)
+
+    @pytest.fixture
+    def fake_zwave_lock_options(self) -> dict[str, Any]:
+        """Five characters: ``lcm:3:`` does not fit, ``3`` does."""
+        return {"max_user_name_length": 5}
+
+    async def test_lcm_s_slot_numbered_user_is_written_again(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_zwave_lock: FakeZWaveLock,
+        zwave_integration: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        LCM names its user ``3`` here, so turning slot 3 on writes onto that user.
+
+        User 7 is slot 3's, left holding no PIN since the slot was last on.
+        Not finding it would leave it behind beside a second user named ``3``.
+        """
+        fake_zwave_lock.users[7] = LockUser(user_name="3")
+        fake_zwave_lock._u3c_persist_user(7, UserReportType.USER_ADDED)
+        await hass.async_block_till_done()
+        entry = MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_LOCKS: [lock_entity.entity_id]},
+            subentries_data=user_subentries(
+                {3: {CONF_NAME: "slot3", CONF_PIN: "3333", CONF_ENABLED: True}}
+            ),
+            unique_id="test_zwave_js_write_short_name",
+        )
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+        await _async_settle_in_sync(hass, freezer, entry, lock_entity, 3)
+
+        assert fake_zwave_lock.holds(3) == "3333"
+        assert (
+            fake_zwave_lock.credentials[(int(UserCredentialType.PIN_CODE), 3)][0] == 7
+        )
+        assert _users_tagged_for(fake_zwave_lock, 3) == {7}
+        await hass.config_entries.async_unload(entry.entry_id)
 
 
 class TestReleaseKeepsWhatLCMDidNotWrite:

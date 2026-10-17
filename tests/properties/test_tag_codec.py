@@ -5,6 +5,7 @@ from hypothesis import example, given, strategies as st
 from custom_components.lock_code_manager.providers._util import (
     make_compact_tagged_name,
     make_tagged_name,
+    parse_short_tag,
     parse_slot_num,
     parse_tag,
 )
@@ -42,6 +43,15 @@ def test_compact_round_trip(slot: int) -> None:
 def test_slot_only_round_trip(slot: int) -> None:
     """Bare digits parse as a slot tag (documented, intentionally ambiguous)."""
     assert parse_tag(str(slot)) == (slot, "")
+
+
+@given(slot=SLOT_NUMS)
+def test_short_tags_are_only_the_names_lcm_writes(slot: int) -> None:
+    """``lcm<slot>`` and ``<slot>`` read back as the slot; a padded number does not."""
+    assert parse_short_tag(make_compact_tagged_name(slot)) == slot
+    assert parse_short_tag(str(slot)) == slot
+    assert parse_short_tag(f"0{slot}") is None
+    assert parse_short_tag(make_tagged_name(slot)) is None
 
 
 @given(slot=SLOT_NUMS, name=NAMES)

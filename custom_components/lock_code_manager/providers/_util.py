@@ -28,10 +28,9 @@ read for locks whose names were written by older releases.
   back to ``str(slot)``.
 * Slot-only ``<digits>`` -- the deepest fallback, used when neither
   canonical nor compact fit. Just the slot number, written as
-  ``str(slot)``. Ambiguous with any external user named with only
-  digits, but only encountered on locks with absurdly small name limits
-  or firmwares that reject even ``lcm<slot>``, so the tradeoff is
-  accepted.
+  ``str(slot)``. A homeowner can name their own user ``3`` too, so a
+  provider counts a short form (compact or slot-only) as its tag only
+  where it knows it wrote one (``BaseLock.slot_tag``, #1729).
 * Legacy ``[LCM:<slot>] <name>`` -- read-only. Older Schlage/Akuvox
   releases wrote this format; ``parse_tag`` still recognizes it so the
   integration can identify its own users on locks that haven't been
@@ -44,7 +43,7 @@ with ``parse_full_tag``, which recognizes only the canonical and legacy
 formats.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 import re
 from typing import Any
 
@@ -93,10 +92,10 @@ def parse_tag(name: str) -> tuple[int | None, str]:
     the slot binding. The legacy ``[LCM:<slot>]`` format is read-only
     -- nothing emits it anymore -- but is still recognized so older
     lock-stored names continue to identify as LCM-owned until the next
-    write rewrites them in the canonical format. Bare digits being
-    treated as a slot tag is intentional but ambiguous with external
-    users whose names happen to be digit-only; the ambiguity is the
-    cost of preserving the slot binding on constrained locks.
+    write rewrites them in the canonical format. A short form says
+    nothing about who wrote it -- a homeowner can name a user ``3`` -- so
+    whether a user is LCM's is ``BaseLock.slot_tag``'s call, not this
+    parser's (#1729).
     """
     if match := _TAG_RE.match(name):
         return int(match.group(1)), match.group(2)
@@ -122,7 +121,25 @@ def parse_full_tag(name: str) -> tuple[int | None, str]:
     return None, name
 
 
-def foreign_slots(users: Iterable[User]) -> frozenset[int]:
+def parse_short_tag(name: str) -> int | None:
+    """
+    Return the slot of a name in a short form LCM writes, else ``None``.
+
+    The short forms are ``lcm<slot>`` and the bare slot number, exactly as
+    ``make_compact_tagged_name`` and ``str(slot)`` write them -- ``03`` is
+    not one. They carry no ownership on their own: a homeowner can name a
+    user ``3``, so the caller decides whether LCM wrote this one.
+    """
+    match = _COMPACT_TAG_RE.match(name) or _SLOT_ONLY_RE.match(name)
+    if match is None:
+        return None
+    slot = int(match.group(1))
+    return slot if name in (make_compact_tagged_name(slot), str(slot)) else None
+
+
+def foreign_slots(
+    users: Iterable[User], slot_tag: Callable[[User], int | None]
+) -> frozenset[int]:
     """
     Return the slots only users without a slot tag hold a PIN at.
 
@@ -132,12 +149,13 @@ def foreign_slots(users: Iterable[User]) -> frozenset[int]:
     vendor's app, or a user Lock Code Manager made before it tagged them.
     Nothing on the lock tells those apart. A write of slot n adopts the
     user, tagging it and overwriting their PIN; a slot turned off leaves it
-    alone, as a code nobody here manages (#1695).
+    alone, as a code nobody here manages (#1695). ``slot_tag`` is the lock's
+    reading of a user's tag (``BaseLock.slot_tag``).
     """
     tagged: set[int] = set()
     untagged: set[int] = set()
     for user in users:
-        holders = untagged if parse_tag(user.name or "")[0] is None else tagged
+        holders = untagged if slot_tag(user) is None else tagged
         holders.update(credential.slot for credential in user.pin_credentials)
     return frozenset(untagged - tagged)
 

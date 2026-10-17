@@ -678,27 +678,72 @@ class TestLcmSlotResolvers:
         },
     ]
 
+    @pytest.mark.parametrize(
+        ("name", "creator", "fabric", "slot"),
+        [
+            ("lcm:3:Tim", 9, 2, 3),
+            ("lcm3", 2, 2, 3),
+            ("3", 2, 2, 3),
+            ("lcm3", 9, 2, None),
+            ("3", 9, 2, None),
+            ("3", None, 2, None),
+            ("3", 2, None, None),
+            ("03", 2, 2, None),
+        ],
+        ids=[
+            "a_full_tag_whoever_made_it",
+            "compact_on_ha_s_user",
+            "slot_only_on_ha_s_user",
+            "compact_on_another_fabric_s",
+            "slot_only_on_another_fabric_s",
+            "slot_only_made_at_the_keypad",
+            "fabric_unknown",
+            "not_a_name_lcm_writes",
+        ],
+    )
+    def test_a_short_name_is_lcm_s_only_on_a_user_its_fabric_made(
+        self, name: str, creator: int | None, fabric: int | None, slot: int | None
+    ) -> None:
+        """``lcm3`` and ``3`` are LCM's names only where its fabric made the user (#1729)."""
+        users = [
+            {
+                "user_index": 1,
+                "user_name": name,
+                "creator_fabric_index": creator,
+                "credentials": [{"type": "pin", "index": 4}],
+            }
+        ]
+        assert _lcm_slot_from_raw_users_by_user_index(users, 1, fabric) == slot
+        assert _lcm_slot_from_raw_users_by_credential_index(users, 4, fabric) == slot
+
     def test_by_user_index_resolves_tagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 1) == 5
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 3) == 8
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 1, None) == 5
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 3, None) == 8
 
     def test_by_user_index_returns_none_for_untagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 2) is None
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 2, None) is None
 
     def test_by_user_index_returns_none_for_unknown(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 99) is None
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, None) is None
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 99, None) is None
+        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, None, None) is None
 
     def test_by_credential_index_resolves_tagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 7) == 5
+        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 7, None) == 5
 
     def test_by_credential_index_returns_none_for_untagged_owner(self) -> None:
         # credential index 3 belongs to "External" (untagged) -- resolves to None.
-        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 3) is None
+        assert (
+            _lcm_slot_from_raw_users_by_credential_index(self._USERS, 3, None) is None
+        )
 
     def test_by_credential_index_returns_none_for_unknown(self) -> None:
-        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 99) is None
-        assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, None) is None
+        assert (
+            _lcm_slot_from_raw_users_by_credential_index(self._USERS, 99, None) is None
+        )
+        assert (
+            _lcm_slot_from_raw_users_by_credential_index(self._USERS, None, None)
+            is None
+        )
 
 
 # =============================================================================
@@ -3501,6 +3546,57 @@ class TestReleaseManagedSlot:
             f"{_PROVIDER_MODULE}.get_lock_credential_status",
             AsyncMock(side_effect=_status),
         )
+
+    @pytest.mark.parametrize(
+        ("creator", "released"),
+        [(_HA_FABRIC, True), (_HA_FABRIC + 1, False)],
+        ids=["lcm_s_own", "the_homeowner_s"],
+    )
+    async def test_unlisted_release_of_a_user_named_with_the_slot(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        caplog: pytest.LogCaptureFixture,
+        creator: int,
+        released: bool,
+    ) -> None:
+        """
+        The user read alone, named ``5``, is slot 5's only if Home Assistant's fabric made it.
+
+        LCM falls back to the bare number on a lock that refuses its tag, and
+        only on a user it made: the lock lets no other fabric rename one. A
+        user another fabric made, now at the recorded index, is a homeowner's
+        named ``5`` (#1729), and is left as it is.
+        """
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        answer = self._get_user_answer("5", [(1, 7)]) | {"creatorFabricIndex": creator}
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        set_user = AsyncMock(return_value=None)
+        with (
+            self._patch_unlisted(),
+            self._patch_get_user(matter_lock, answer),
+            self._patch_statuses(
+                {
+                    7: {
+                        "credential_exists": True,
+                        "user_index": 42,
+                        "creator_fabric_index": creator,
+                    }
+                }
+            ),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+        ):
+            await matter_lock.async_release_managed_slot(5, written=True)
+
+        assert clear_user.called is released
+        clear_credential.assert_not_called()
+        set_user.assert_not_called()
+        assert matter_lock._slot_by_user_index == {}
+        assert ("no user on the lock carries LCM's tag" in caplog.text) is not released
 
     async def test_unlisted_release_clears_only_lcm_s_recorded_pin(
         self,
