@@ -31,10 +31,12 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
+    SERVICE_HARD_REFRESH_USERCODES,
 )
 from custom_components.lock_code_manager.ha.runtime import (
     GIVEN_UP_KEY,
     ISSUES_KEY,
+    STORE_KEY,
     _label,
     async_give_up,
     async_resume_slot,
@@ -1029,6 +1031,82 @@ async def _remove_user_in_slot(
     subentry = next(s for s in entry.subentries.values() if s.title == name)
     hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
     await hass.async_block_till_done()
+
+
+async def _hard_refresh(hass: HomeAssistant) -> None:
+    """Call the hard refresh service on the first lock and let it settle."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_HARD_REFRESH_USERCODES,
+        {ATTR_ENTITY_ID: LOCK_1_ENTITY_ID},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+
+async def test_a_slot_held_after_its_tries_lifts_once_a_read_finds_it_set(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The code went on at the keypad while held: a fresh read clears the repair.
+
+    A push saying so may come from a cache and lifts nothing; the hard
+    refresh reads the slot and does. Nothing more is written either way.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    ignored = lock.ignore("set", 1)
+    await async_set_slot_pin(hass, entry, 1, "4321")
+    await hass.async_block_till_done()
+    issue_id = f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+    assert issue_id in lcm_issue_ids(hass, "slot_suspended")
+    in_sync = in_sync_entity_id(hass, entry, 1)
+    assert hass.states.get(in_sync).state == STATE_OFF
+    ignored.clear()
+    lock.codes[1] = "4321"
+    writes = len(lock.service_calls["set_usercode"])
+
+    lock._push_credential_update(1, SlotCredential.known("4321"))
+    await hass.async_block_till_done()
+    assert issue_id in lcm_issue_ids(hass, "slot_suspended")
+
+    await _hard_refresh(hass)
+
+    assert issue_id not in lcm_issue_ids(hass, "slot_suspended")
+    assert hass.states.get(in_sync).state == STATE_ON
+    assert len(lock.service_calls["set_usercode"]) == writes
+
+
+async def test_a_held_release_lifts_and_is_done_once_a_read_finds_it_empty(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    The code was taken off at the keypad while its clear was held.
+
+    The clear reached the lock and was answered, but the code stayed: held
+    after two tries. Once a read finds the slot empty, the release is done --
+    the repair goes, and nothing is left owed to clear after a restart.
+    """
+    entry = await async_setup_lcm_entry(hass)
+    lock = mock_lock(entry)
+    lock.ignore("clear", 1)
+    await _remove_user_in_slot(hass, entry, 1)
+    issue_id = f"slot_suspended_{entry.entry_id}_{LOCK_1_ENTITY_ID}_1"
+    assert issue_id in lcm_issue_ids(hass, "slot_suspended")
+    store = hass.data[DOMAIN][STORE_KEY]
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+    assert worker.status(1) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+    del lock.codes[1]
+    clears = len(lock.service_calls["clear_usercode"])
+
+    await _hard_refresh(hass)
+
+    assert issue_id not in lcm_issue_ids(hass, "slot_suspended")
+    assert 1 not in worker.slots
+    assert (LOCK_1_ENTITY_ID, 1) not in hass.data[DOMAIN][GIVEN_UP_KEY]
+    assert store.releases() == []
+    assert len(lock.service_calls["clear_usercode"]) == clears
 
 
 async def test_a_suspended_repair_from_before_a_restart_goes_once_in_sync(

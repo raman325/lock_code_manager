@@ -197,8 +197,12 @@ A slot's `Status` is `unknown`, `in_sync`, `out_of_sync` or `suspended` (held). 
   has answered. After 3 tries the slot is held (2 for a release): `slot_suspended`, or
   `slot_clear_failed` for a clear. Fights -- the lock going from agreeing to disagreeing,
   e.g. a keypad change -- hold it the same way, aging out over 300 s. Failed tries pause
-  the slot 30 s, then 120 s. A hold is lifted only by a change of target or by
-  acknowledging its repair.
+  the slot 30 s, then 120 s. A hold is lifted by a change of target or by
+  acknowledging its repair. A hold from tries also lifts itself when a fresh read (a
+  poll, the drift check, a hard refresh) finds the slot already as wanted -- a release
+  in sync is then done. A push never lifts one (it may be a cache), nor does any read
+  lift a hold from fights or a refusal. Reads ask about such a held slot on its own,
+  after the rest; it is never written, and its no-answers do not count against the lock.
 - The adapter maps provider errors (`ha/adapter.py` `lock_error`): `CodeRejectedError` /
   `DuplicateCodeError` on a set disables the slot (`slot_disabled`); a refused clear holds it
   at once (`slot_clear_failed`); `LockOperationError` (`LockDisconnected`,
