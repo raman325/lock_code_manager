@@ -458,6 +458,10 @@
         }
       }
     },
+    "slot_conflict": {
+      "title": "Lock Code Manager: slot {slot_num} on {lock_name} is configured twice",
+      "description": "Slot {slot_num} on {lock_name} (`{lock_entity_id}`) is configured by **{entry_title}**, and also by **{owner_title}**, which owns it because it was set up first. **{entry_title}** does not write this slot on this lock, and its entities for the slot there are unavailable.\n\nRemove the slot from one of the entries. This issue will be automatically dismissed once only one entry configures it."
+    },
     "lock_offline": {
       "title": "Lock unreachable: {lock_entity_id}",
       "description": "Lock Code Manager has been unable to communicate with `{lock_entity_id}` for multiple consecutive attempts. Code synchronization is paused until the lock is reachable again. This issue will be automatically dismissed when the lock recovers."

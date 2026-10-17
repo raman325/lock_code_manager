@@ -1,6 +1,7 @@
 """The core wired into Home Assistant: the lock registry and what it raises."""
 
 import asyncio
+from datetime import timedelta
 from functools import partial
 import logging
 from typing import Any
@@ -43,6 +44,7 @@ from custom_components.lock_code_manager.ha.runtime import (
     async_want,
     lock_registry,
     signal_lock_changed,
+    slot_conflict_issue_id,
 )
 from custom_components.lock_code_manager.model.credentials import (
     SlotCode,
@@ -116,9 +118,9 @@ async def test_a_one_off_read_does_not_unload_the_provider_it_borrowed(
 
 
 async def test_an_entry_overlapping_a_slot_still_gets_the_lock(
-    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+    hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
-    """The overlapping slot stays the first entry's; the rest are managed."""
+    """The overlapping slot stays the older entry's; the rest are managed."""
     await async_setup_lcm_entry(hass)
     second = await async_setup_lcm_entry(
         hass,
@@ -135,7 +137,12 @@ async def test_an_entry_overlapping_a_slot_still_gets_the_lock(
     assert LOCK_1_ENTITY_ID in second.runtime_data.locks
     assert mock_lock(second).codes[3] == "3333"
     assert mock_lock(second).codes[2] == "5678"  # still the first entry's
-    assert "managed by another entry" in caplog.text
+    # The younger entry is told whose slot it is, and its entity for it is
+    # not the owner's state.
+    assert lcm_issue_ids(hass, "slot_conflict") == [
+        slot_conflict_issue_id(second.entry_id, LOCK_1_ENTITY_ID, 2)
+    ]
+    assert hass.states.get(code_entity_id(hass, second, 2)).state == STATE_UNAVAILABLE
 
 
 _SECOND_ON_SLOT_2 = {
@@ -148,13 +155,20 @@ _SECOND_ON_SLOT_2 = {
 async def test_a_slot_given_up_goes_to_the_entry_still_configuring_it(
     hass: HomeAssistant, mock_lock_config_entry, clear: bool
 ) -> None:
-    """Stored storage with two entries on one slot: the other's PIN lands."""
+    """
+    Stored storage with two entries on one slot: the other's PIN lands.
+
+    Given up as the owner's user is removed, its code cleared or (a user
+    handed off) left programmed.
+    """
     first = await async_setup_lcm_entry(hass)
     second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
     lock = mock_lock(second)
     assert lock.codes[2] == "5678"  # the first entry's
+    if not clear:
+        first.runtime_data.retained_pairs.add((LOCK_1_ENTITY_ID, 2))
 
-    async_give_up(hass, first, LOCK_1_ENTITY_ID, 2, clear=clear)
+    hass.config_entries.async_remove_subentry(first, subentry_id_for_slot(first, 2))
     await hass.async_block_till_done()
 
     assert lock.codes[2] == "2222"
@@ -270,6 +284,165 @@ async def test_a_slot_its_owner_removes_goes_to_the_entry_still_configuring_it(
     second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
 
     hass.config_entries.async_remove_subentry(first, subentry_id_for_slot(first, 2))
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
+    assert mock_lock(second).codes[2] == "2222"
+
+
+def _conflict(hass: HomeAssistant, entry: MockConfigEntry) -> list[str]:
+    """Return ``entry``'s repairs for slot 2 on lock 1 being an older entry's."""
+    return [
+        issue_id
+        for issue_id in lcm_issue_ids(hass, "slot_conflict")
+        if issue_id == slot_conflict_issue_id(entry.entry_id, LOCK_1_ENTITY_ID, 2)
+    ]
+
+
+def _younger_wrote_slot_2(lock: Any) -> bool:
+    """Return whether anything but the older entry's PIN reached slot 2."""
+    return any(
+        call[0] == 2 and call[1] != "5678"
+        for call in lock.service_calls["set_usercode"]
+    ) or any(call[0] == 2 for call in lock.service_calls["clear_usercode"])
+
+
+@pytest.mark.parametrize("down", ["disabled", "unloaded"])
+async def test_a_younger_entry_never_takes_a_slot_while_its_owner_is_down(
+    hass: HomeAssistant, mock_lock_config_entry, down: str
+) -> None:
+    """
+    #1691: the older entry is down, the younger one's slot changes: still the older's.
+
+    Disabled, or unloaded as a reload leaves it in between: the older entry
+    still configures the slot, so the younger one does not write it, and the
+    older one takes it back when it is up again.
+    """
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    lock = mock_lock(second)
+    assert _conflict(hass, second)
+
+    if down == "disabled":
+        assert await hass.config_entries.async_set_disabled_by(
+            first.entry_id, ConfigEntryDisabler.USER
+        )
+    else:
+        assert await hass.config_entries.async_unload(first.entry_id)
+    await hass.async_block_till_done()
+    await async_set_slot_pin(hass, second, 2, "2468")
+    await async_switch_slot(hass, second, 2, SERVICE_TURN_OFF)
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) is None
+    assert lock.codes[2] == "5678"
+    assert _conflict(hass, second)
+    # Not the younger entry's slot to show either.
+    assert hass.states.get(code_entity_id(hass, second, 2)).state == STATE_UNAVAILABLE
+
+    if down == "disabled":
+        assert await hass.config_entries.async_set_disabled_by(first.entry_id, None)
+    else:
+        assert await hass.config_entries.async_setup(first.entry_id)
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == first.entry_id
+    assert mock_lock(first).codes[2] == "5678"
+    assert not _younger_wrote_slot_2(mock_lock(first))
+    assert _conflict(hass, second)
+
+
+async def test_a_younger_entry_set_up_first_leaves_the_older_one_its_slot(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Startup order does not matter: the older entry owns the slot, set up last."""
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    # Created before the entry already set up (Home Assistant sets up an
+    # integration's entries in no promised order), added disabled so it
+    # waits.
+    first = MockConfigEntry(
+        domain=DOMAIN,
+        data=TWO_SLOTS_ON_LOCK_1,
+        unique_id="lcm",
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    # Frozen on a config entry: set the way Home Assistant loads it.
+    object.__setattr__(first, "created_at", second.created_at - timedelta(days=1))
+    first.add_to_hass(hass)
+    assert await hass.config_entries.async_reload(second.entry_id)
+    await hass.async_block_till_done()
+    lock = mock_lock(second)  # a new instance: the reload let go of the lock
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) is None
+    assert not _younger_wrote_slot_2(lock)
+    assert _conflict(hass, second)
+
+    assert await hass.config_entries.async_set_disabled_by(first.entry_id, None)
+    await hass.async_block_till_done()
+
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == first.entry_id
+    assert lock.codes[2] == "5678"
+    assert not _younger_wrote_slot_2(lock)
+
+
+@pytest.mark.parametrize("side", ["older", "younger"])
+async def test_a_slot_conflict_ends_when_either_entry_removes_the_slot(
+    hass: HomeAssistant, mock_lock_config_entry, side: str
+) -> None:
+    """The repair goes once one entry configures the slot; the remaining one owns it."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    assert _conflict(hass, second)
+    leaving, staying, pin = (
+        (first, second, "2222") if side == "older" else (second, first, "5678")
+    )
+
+    hass.config_entries.async_remove_subentry(leaving, subentry_id_for_slot(leaving, 2))
+    await hass.async_block_till_done()
+
+    assert not lcm_issue_ids(hass, "slot_conflict")
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == staying.entry_id
+    assert mock_lock(staying).codes[2] == pin
+
+
+@pytest.mark.parametrize("deleted", ["older", "younger"])
+async def test_a_slot_conflict_ends_when_either_entry_is_deleted(
+    hass: HomeAssistant, mock_lock_config_entry, deleted: str
+) -> None:
+    """Deleting either entry deletes the repair; the older one gone, the younger owns it."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    lock = mock_lock(first)
+    assert _conflict(hass, second)
+
+    gone, staying, pin = (
+        (first, second, "2222") if deleted == "older" else (second, first, "5678")
+    )
+    assert await hass.config_entries.async_remove(gone.entry_id)
+    await hass.async_block_till_done()
+
+    assert not lcm_issue_ids(hass, "slot_conflict")
+    assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == staying.entry_id
+    assert lock.codes[2] == pin
+
+
+async def test_a_disabled_younger_entry_s_conflict_ends_when_the_older_is_deleted(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The next owner is down: its repair still goes, and it claims the slot when up."""
+    first = await async_setup_lcm_entry(hass)
+    second = await async_setup_lcm_entry(hass, _SECOND_ON_SLOT_2, unique_id="rt2")
+    assert await hass.config_entries.async_set_disabled_by(
+        second.entry_id, ConfigEntryDisabler.USER
+    )
+    await hass.async_block_till_done()
+    assert _conflict(hass, second)
+
+    assert await hass.config_entries.async_remove(first.entry_id)
+    await hass.async_block_till_done()
+    assert not _conflict(hass, second)
+
+    assert await hass.config_entries.async_set_disabled_by(second.entry_id, None)
     await hass.async_block_till_done()
 
     assert lock_registry(hass).owner(LOCK_1_ENTITY_ID, 2) == second.entry_id
