@@ -554,4 +554,4 @@ async def _async_adoptable(
     else:
         # In the lock's turn: an entry holding it may have a write in flight.
         users = await worker.turn(lock.async_get_users)
-    return foreign_slots(users) & frozenset(indices)
+    return foreign_slots(users, lock.slot_tag) & frozenset(indices)

@@ -64,7 +64,13 @@ from ..model.exceptions import (
     LockOperationFailed,
 )
 from ._base import BaseLock
-from ._util import make_compact_tagged_name, parse_slot_num, parse_tag
+from ._util import (
+    make_compact_tagged_name,
+    parse_full_tag,
+    parse_short_tag,
+    parse_slot_num,
+    parse_tag,
+)
 from .const import LOGGER
 
 # DoorLock cluster ID (0x0101 = 257)
@@ -137,8 +143,30 @@ def _transient_status_disconnect(
     )
 
 
+def _raw_user_slot(raw_user: dict[str, Any], fabric: int | None) -> int | None:
+    """
+    Return the LCM slot a raw lock user is tagged for, or ``None``.
+
+    A canonical or legacy tag always counts. The short forms LCM falls back
+    to when the lock refuses that name -- ``lcm<slot>``, then the bare slot
+    number -- count only on a user Home Assistant's fabric (``fabric``)
+    created. The Matter spec lets only the fabric that created a user
+    rename it, so LCM never wrote a name on any other: a user the
+    homeowner named ``3`` in the vendor's app is theirs, not slot 3's
+    (#1729). The record is the lock's, so it holds across restarts. An
+    unknown ``fabric`` counts no short form.
+    """
+    name = raw_user.get("user_name") or ""
+    slot, _ = parse_full_tag(name)
+    if slot is not None:
+        return slot
+    if fabric is None or raw_user.get("creator_fabric_index") != fabric:
+        return None
+    return parse_short_tag(name)
+
+
 def _lcm_slot_from_raw_users_by_user_index(
-    raw_users: list[dict[str, Any]], user_index: int | None
+    raw_users: list[dict[str, Any]], user_index: int | None, fabric: int | None
 ) -> int | None:
     """
     Resolve the LCM slot by matching a raw lock user by ``user_index``.
@@ -148,46 +176,38 @@ def _lcm_slot_from_raw_users_by_user_index(
     """
     if user_index is None:
         return None
-    name = next(
+    return next(
         (
-            raw_user.get("user_name")
+            _raw_user_slot(raw_user, fabric)
             for raw_user in raw_users
             if raw_user.get("user_index") == user_index
         ),
         None,
     )
-    if not name:
-        return None
-    slot, _ = parse_tag(name)
-    return slot
 
 
 def _lcm_slot_from_raw_users_by_credential_index(
-    raw_users: list[dict[str, Any]], credential_index: int | None
+    raw_users: list[dict[str, Any]], credential_index: int | None, fabric: int | None
 ) -> int | None:
     """
     Resolve the LCM slot by finding the PIN credential at ``credential_index``.
 
     Walks each raw user's credentials list for a Personal Identification
-    Number credential whose Matter index matches; if found, parses the
-    owning user's ``lcm:<slot>:`` tag. Used as a fallback when the
-    LockOperation event omits ``userIndex``.
+    Number credential whose Matter index matches; if found, reads the
+    owning user's tag. Used as a fallback when the LockOperation event
+    omits ``userIndex``.
     """
     if credential_index is None:
         return None
-    name = next(
+    return next(
         (
-            raw_user.get("user_name")
+            _raw_user_slot(raw_user, fabric)
             for raw_user in raw_users
             for cred in raw_user.get("credentials", []) or []
             if cred.get("type") == "pin" and cred.get("index") == credential_index
         ),
         None,
     )
-    if not name:
-        return None
-    slot, _ = parse_tag(name)
-    return slot
 
 
 @dataclass(repr=False, eq=False)
@@ -550,14 +570,14 @@ class MatterLock(BaseLock):
         users: list[User] = []
         anchors: dict[int, int | None] = {}
         pins: dict[int, set[int]] = {}
-        for raw_user in await self._raw_lock_users():
+        raw_users = await self._raw_lock_users()
+        fabric = self._fabric_index()
+        for raw_user in raw_users:
             user_index = raw_user.get("user_index")
             if user_index is None:
                 continue
             user_name = raw_user.get("user_name")
-            lcm_slot_from_tag: int | None = None
-            if user_name:
-                lcm_slot_from_tag, _ = parse_tag(user_name)
+            lcm_slot_from_tag = _raw_user_slot(raw_user, fabric)
             anchors[user_index] = lcm_slot_from_tag
             pin_credentials: list[Credential] = []
             for cred in raw_user.get("credentials") or []:
@@ -600,6 +620,17 @@ class MatterLock(BaseLock):
         """Drop what LCM recorded about a lock user; return the slot it anchored."""
         self._pins_by_user_index.pop(user_index, None)
         return self._slot_by_user_index.pop(user_index, None)
+
+    @override
+    def slot_tag(self, user: User) -> int | None:
+        """
+        Return the slot the latest read found ``user`` tagged for, or ``None``.
+
+        That read weighed who created each user (``_raw_user_slot``), which
+        the name alone does not say, and left the answer in
+        ``_slot_by_user_index`` for every user it saw.
+        """
+        return self._slot_by_user_index.get(user.user_id)
 
     @override
     async def async_get_capabilities(self) -> LockCapabilities:
@@ -929,14 +960,14 @@ class MatterLock(BaseLock):
             return next(
                 (existing.user_id, False)
                 for existing in users
-                if existing.name and parse_tag(existing.name)[0] == slot
+                if self.slot_tag(existing) == slot
             )
         except StopIteration:
             return next(
                 (
                     (existing.user_id, True)
                     for existing in users
-                    if parse_tag(existing.name or "")[0] is None
+                    if self.slot_tag(existing) is None
                     for cred in existing.pin_credentials
                     if cred.slot == slot
                 ),
@@ -1017,17 +1048,18 @@ class MatterLock(BaseLock):
                     raise err from None
                 await self._release_recorded_pins(slot, recorded_index, written=written)
                 return
-            if user is None or parse_tag(user.get("user_name") or "")[0] != slot:
+            fabric = self._fabric_index()
+            if user is None or _raw_user_slot(user, fabric) != slot:
                 self._forget_user_index(recorded_index)
                 user = None
         else:
+            fabric = self._fabric_index()
             user = next(
                 (
                     raw_user
                     for raw_user in raw_users
                     if raw_user.get("user_index") is not None
-                    and raw_user.get("user_name")
-                    and parse_tag(raw_user["user_name"])[0] == slot
+                    and _raw_user_slot(raw_user, fabric) == slot
                 ),
                 None,
             )
@@ -1225,19 +1257,25 @@ class MatterLock(BaseLock):
         when the node does not report one, so the release is retried rather
         than deciding without it.
         """
+        if (fabric := self._fabric_index(node)) is None:
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: releasing slot {slot}, the node does "
+                f"not report Home Assistant's fabric index, so which PINs on "
+                f"the user are LCM's is unknown"
+            )
+        return fabric
+
+    def _fabric_index(self, node: Any | None = None) -> int | None:
+        """Return the index this lock gives Home Assistant's fabric; ``None`` if unreported."""
+        if node is None:
+            _, node = self._require_client_and_node()
         try:
             fabric = node.get_attribute_value(
                 0, _OPERATIONAL_CREDENTIALS_CLUSTER_ID, _CURRENT_FABRIC_INDEX
             )
         except KeyError, AttributeError:
-            fabric = None
-        if type(fabric) is not int or not fabric:
-            raise LockDisconnected(
-                f"{self.lock.entity_id}: releasing slot {slot}, the node does "
-                f"not report Home Assistant's fabric index ({fabric!r}), so "
-                f"which PINs on the user are LCM's is unknown"
-            )
-        return fabric
+            return None
+        return fabric if type(fabric) is int and fabric else None
 
     async def _untagged_name(self, tagged: str, user_index: int) -> str:
         """
@@ -1816,6 +1854,7 @@ class MatterLock(BaseLock):
         """
         try:
             raw_users = await self._raw_lock_users()
+            fabric = self._fabric_index()
         except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not resolve LockOperation userIndex=%s "
@@ -1829,10 +1868,12 @@ class MatterLock(BaseLock):
 
         # Explicit ``None`` check (not ``or``) so a valid LCM slot of 0
         # from the primary resolver doesn't fall through to the fallback.
-        code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
+        code_slot = _lcm_slot_from_raw_users_by_user_index(
+            raw_users, user_index, fabric
+        )
         if code_slot is None:
             code_slot = _lcm_slot_from_raw_users_by_credential_index(
-                raw_users, credential_index
+                raw_users, credential_index, fabric
             )
         if code_slot is None:
             LOGGER.debug(
@@ -1958,6 +1999,7 @@ class MatterLock(BaseLock):
                 raise LockDisconnected("not set up")
             # In the lock's turn: nothing reaches it once its worker stops.
             raw_users = await self.coordinator.async_in_turn(self._raw_lock_users)
+            fabric = self._fabric_index()
         except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not read users to resolve LockUserChange "
@@ -1967,7 +2009,9 @@ class MatterLock(BaseLock):
                 err,
             )
         else:
-            code_slot = _lcm_slot_from_raw_users_by_user_index(raw_users, user_index)
+            code_slot = _lcm_slot_from_raw_users_by_user_index(
+                raw_users, user_index, fabric
+            )
             if code_slot is None and any(
                 raw_user.get("user_index") == user_index for raw_user in raw_users
             ):

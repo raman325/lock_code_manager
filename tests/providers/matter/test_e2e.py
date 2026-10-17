@@ -70,7 +70,7 @@ from tests.conftest import async_advance_time, async_initial_tick
 
 from ...common import TICK_INTERVAL
 from .conftest import FAKE_MATTER_SLOTS, matter_helpers_patched
-from .fake_node import DlStatus, DoorLock, FakeMatterLock, ImStatus
+from .fake_node import OTHER_FABRIC, DlStatus, DoorLock, FakeMatterLock, ImStatus
 
 _PIN = DoorLock.Enums.CredentialTypeEnum.kPin
 
@@ -1562,6 +1562,135 @@ class TestReleaseOfARenamedUser:
 
             assert _released_warnings(caplog, 3) == []
             assert "no LCM-owned user to release for slot 3" in caplog.text
+
+
+class TestAUserNamedWithASlotNumber:
+    """A homeowner's user named ``3`` in the vendor's app is not slot 3's (#1729)."""
+
+    @staticmethod
+    def _homeowner_named_3(fake: FakeMatterLock) -> None:
+        """Make user 7, named ``3``, with PIN 555555, as the vendor's app does."""
+        fake.program(7, "555555", name="3", credential_index=7)
+        fake.users[7].created_by = OTHER_FABRIC
+        fake.users[7].modified_by = OTHER_FABRIC
+
+    async def test_turning_slot_3_on_writes_a_user_of_lcm_s_own(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Taken for slot 3's, the homeowner's user would get LCM's PIN over theirs."""
+        self._homeowner_named_3(fake_matter_lock)
+        slots = {3: {CONF_NAME: "Tim", CONF_PIN: "333333", CONF_ENABLED: True}}
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "named_3_write"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+
+            ours = fake_matter_lock.owner(_index_of(fake_matter_lock, "333333"))
+            assert ours not in (None, 7)
+            assert fake_matter_lock.users[ours].name == "lcm:3:Tim"
+            assert fake_matter_lock.users[7].name == "3"
+            assert fake_matter_lock.holds(7) == "555555"
+            assert [
+                exchange
+                for exchange in fake_matter_lock.commands
+                if exchange.command in ("SetUser", "SetCredential")
+                and exchange.index == 7
+            ] == []
+
+    async def test_removing_slot_3_leaves_it_alone(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Nothing is sent to it: no rename, no clear; slot 3 was never LCM's there."""
+        self._homeowner_named_3(fake_matter_lock)
+        slots = {
+            **FAKE_MATTER_SLOTS,
+            3: {CONF_NAME: "Tim", CONF_PIN: "333333", CONF_ENABLED: False},
+        }
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "named_3_release"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            sent = len(fake_matter_lock.commands)
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert fake_matter_lock.users[7].name == "3"
+            assert fake_matter_lock.holds(7) == "555555"
+            assert [
+                exchange.command
+                for exchange in fake_matter_lock.commands[sent:]
+                if exchange.command in ("ClearUser", "ClearCredential", "SetUser")
+            ] == []
+            assert "no LCM-owned user to release for slot 3" in caplog.text
+
+
+class TestAShortNameLCMWrote:
+    """A lock that refuses ``lcm:<slot>:`` gets ``lcm<slot>`` or the bare number from LCM."""
+
+    @pytest.fixture(params=[(4, "lcm3"), (1, "3")], ids=["compact", "slot_only"])
+    def short_name(self, request: pytest.FixtureRequest) -> tuple[int, str]:
+        """The lock's longest name, and the name LCM falls back to under it."""
+        return request.param
+
+    @pytest.fixture
+    def fake_matter_lock_options(self, short_name: tuple[int, str]) -> dict[str, Any]:
+        """A lock whose names are too short for ``lcm:3:``."""
+        return {"max_user_name": short_name[0]}
+
+    async def test_it_is_written_and_released_across_a_restart(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entity: er.RegistryEntry,
+        short_name: tuple[int, str],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        The user Home Assistant made stays slot 3's after a restart.
+
+        Nothing in memory says LCM named it: the lock records which fabric
+        made each user. Lost, the slot would get a second user beside it,
+        and removing the slot would leave the first, PIN and all.
+        """
+        slots = {3: {CONF_NAME: "Tim", CONF_PIN: "333333", CONF_ENABLED: True}}
+        async with _entry_on(
+            hass, fake_matter_lock_entity, slots, "short_name_lcm_wrote"
+        ) as entry:
+            await _async_settle(hass, freezer, entry, fake_matter_lock_entity, slots)
+            ours = fake_matter_lock.owner(_index_of(fake_matter_lock, "333333"))
+            assert ours is not None
+            assert fake_matter_lock.users[ours].name == short_name[1]
+
+            assert await hass.config_entries.async_reload(entry.entry_id)
+            await hass.async_block_till_done()
+            await async_set_slot_pin(hass, entry, 3, "343434")
+            await async_tick_until(
+                hass,
+                freezer,
+                lambda: "343434" in fake_matter_lock.codes.values(),
+                max_ticks=10,
+                what="slot 3's new PIN on the lock",
+            )
+            assert list(fake_matter_lock.users) == [ours]
+            assert fake_matter_lock.codes == {
+                _index_of(fake_matter_lock, "343434"): "343434"
+            }
+
+            await _async_remove_user(hass, freezer, entry, 3)
+
+            assert fake_matter_lock.users == {}
+            assert fake_matter_lock.codes == {}
+            assert _released_warnings(caplog, 3) == []
 
 
 class TestOpenBugs:

@@ -62,7 +62,7 @@ from ..model.queries import (
     get_entry_config,
     slots_configured_on,
 )
-from ._util import foreign_slots, make_tagged_name, parse_tag
+from ._util import foreign_slots, make_tagged_name, parse_full_tag, parse_short_tag
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -1312,7 +1312,7 @@ class BaseLock:
             owner_user_id = next(
                 user.user_id
                 for user in users
-                if user.name and parse_tag(user.name)[0] == code_slot
+                if self.slot_tag(user) == code_slot
                 for credential in user.pin_credentials
                 if credential.slot == code_slot
             )
@@ -1323,7 +1323,7 @@ class BaseLock:
                 (
                     user.user_id
                     for user in users
-                    if parse_tag(user.name or "")[0] is None
+                    if self.slot_tag(user) is None
                     for credential in user.pin_credentials
                     if credential.slot == code_slot
                 ),
@@ -1390,7 +1390,7 @@ class BaseLock:
         # so a read asks the lock nothing more.
         caps = self.cached_capabilities
         self.last_foreign_slots = (
-            foreign_slots(users)
+            foreign_slots(users, self.slot_tag)
             if self.supports_native_users
             and caps is not None
             and _keeps_user_records(caps)
@@ -1473,9 +1473,8 @@ class BaseLock:
         When the lock's limit can't even fit the canonical prefix
         (``_user_name_length("lcm:{slot}:") > max_user_name_length``), the helper
         falls back to writing just the slot number as the user name
-        (``str(slot)``). :func:`._util.parse_tag` recognizes
-        digit-only names as a length-constrained encoding of the slot
-        binding. If even the slot digits don't fit
+        (``str(slot)``), which ``slot_tag`` reads back as the slot's tag
+        on this lock only. If even the slot digits don't fit
         (``_user_name_length(str(slot)) > max_user_name_length``, e.g. slot 255 on a
         2-char-limit lock), the helper returns ``None`` rather than
         truncating the slot to a different number and silently
@@ -1530,6 +1529,35 @@ class BaseLock:
     def _user_name_length(name: str) -> int:
         """Return ``name``'s length as the lock counts it against its limit."""
         return len(name)
+
+    def slot_tag(self, user: User) -> int | None:
+        """
+        Return the slot ``user`` carries Lock Code Manager's tag for, or ``None``.
+
+        For a user from the latest ``async_get_users``. A canonical or legacy
+        tag always counts. The bare slot number counts only where this lock
+        is named that way by ``_build_tagged_user_name``: a name limit too
+        short for ``lcm:<slot>:``, judged from the cached capabilities (none
+        cached: it does not count). Anywhere else LCM never writes ``3``, so
+        a user named ``3`` is the homeowner's, and taking it for slot 3's
+        would write onto it or delete it with its codes (#1729). ``lcm<slot>``
+        is never written here and never counts.
+        """
+        name = user.name or ""
+        slot, _ = parse_full_tag(name)
+        if slot is not None:
+            return slot
+        slot = parse_short_tag(name)
+        caps = self.cached_capabilities
+        if (
+            slot is None
+            or name != str(slot)
+            or caps is None
+            or not _keeps_user_records(caps)
+            or self._user_name_length(f"lcm:{slot}:") <= caps.max_user_name_length
+        ):
+            return None
+        return slot
 
     async def _assert_credential_type_supported(self, credential: Credential) -> None:
         """
