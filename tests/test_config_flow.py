@@ -3259,6 +3259,136 @@ async def test_progress_only_moves_forward_across_widening_passes(
     assert reported[-1] == 1.0
 
 
+async def _start_two_lock_ui_flow(hass: HomeAssistant) -> str:
+    """Start a config flow over both locks and stop at the count form."""
+    flow_id = await _init_flow_to_user_step(hass)
+    await async_configure_flow(
+        hass,
+        flow_id,
+        {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]},
+    )
+    await async_configure_flow(hass, flow_id, {"next_step_id": "ui"})
+    return flow_id
+
+
+async def test_every_lock_is_read_at_once(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Two slow locks are read together, so the wait is the slower one (#1536).
+
+    Read one after another, a bulk add waits for the sum of every lock's read.
+    Both reads are held here, as slow locks hold them: both have to be in
+    flight before either answers. The second lock answers first, and progress
+    counts locks as they answer, in whatever order that is.
+    """
+    flow_id = await _start_two_lock_ui_flow(hass)
+    updates = async_capture_events(hass, EVENT_DATA_ENTRY_FLOW_PROGRESS_UPDATE)
+
+    def _empty_and_slow_to_read(lock: MockLCMLock) -> LockFault:
+        lock.codes.clear()
+        return lock.hang("get")
+
+    with when_mock_lock_built(_empty_and_slow_to_read) as faults:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+        assert result["type"] == "progress"
+
+        await async_run_until_quiet()
+        held = {fault.lock.lock.entity_id: fault for fault in faults if fault.held}
+        assert set(held) == {LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID}
+
+        held[LOCK_2_ENTITY_ID].clear()
+        await async_run_until_quiet()
+        # One of two locks has answered: half of the pass's half.
+        assert [event.data["progress"] for event in updates] == [0.0, 0.25]
+
+        held[LOCK_1_ENTITY_ID].clear()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "code_slot"
+    assert [event.data["progress"] for event in updates] == [0.0, 0.25, 0.5, 1.0]
+
+
+async def test_unreadable_locks_are_named_in_the_order_given(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Locks read together still name the unreadable ones in the entry's order.
+
+    The second lock fails first; the refusal names the first lock first all
+    the same, so the same entry gives the same sentence however the reads
+    happened to finish.
+    """
+    flow_id = await _start_two_lock_ui_flow(hass)
+    let_go = asyncio.Event()
+
+    async def _unreadable(self, slots=None):
+        if self.lock.entity_id == LOCK_1_ENTITY_ID:
+            await let_go.wait()
+        raise LockCodeManagerError("lock is asleep")
+
+    with patch.object(MockLCMLock, "async_get_usercodes", _unreadable):
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+        assert result["type"] == "progress"
+        await async_run_until_quiet()
+        let_go.set()
+        await hass.async_block_till_done()
+        result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "occupancy_unknown"}
+    assert result["description_placeholders"]["locks"] == (
+        f"{LOCK_1_ENTITY_ID}, {LOCK_2_ENTITY_ID}"
+    )
+
+
+async def test_closing_the_dialog_stops_every_lock_read(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A flow closed while its locks are read leaves no read running unowned.
+
+    Every lock is read in a task of its own; closing the dialog cancels the
+    allocation, and with it each read still waiting on its lock, rather than
+    leaving them to run on with nobody to hear the answer.
+    """
+    flow_id = await _start_two_lock_ui_flow(hass)
+
+    def _reads() -> list[asyncio.Task[Any]]:
+        return [
+            task
+            for task in asyncio.all_tasks()
+            if "async_read_occupancy" in task.get_coro().__qualname__
+        ]
+
+    def _empty_and_slow_to_read(lock: MockLCMLock) -> LockFault:
+        lock.codes.clear()
+        return lock.hang("get")
+
+    with when_mock_lock_built(_empty_and_slow_to_read) as faults:
+        result = await hass.config_entries.flow.async_configure(
+            flow_id, {CONF_NUM_USERS: 2}
+        )
+        assert result["type"] == "progress"
+        await async_run_until_quiet()
+        assert len(_reads()) == 2
+
+        hass.config_entries.flow.async_abort(flow_id)
+        await async_run_until_quiet()
+        # Each read gives its hold on the lock back on the way out, which can
+        # wait on the lock's worker: what matters is that it was cancelled.
+        reads = _reads()
+        assert len(reads) == 2
+        assert all(read.cancelling() for read in reads)
+
+        for fault in faults:
+            fault.clear()
+        await hass.async_block_till_done()
+
+
 async def test_a_second_request_for_an_answered_step_is_not_an_unknown_error(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

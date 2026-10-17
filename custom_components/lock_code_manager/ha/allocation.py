@@ -8,6 +8,7 @@ about which numbers are free -- and only one of them reading the locks
 would be the more dangerous disagreement.
 """
 
+import asyncio
 from collections.abc import Callable, Collection, Iterable, Sequence
 import logging
 from typing import Any
@@ -15,6 +16,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.util.async_ import create_eager_task
 
 from ..const import MAX_SEARCHED_SLOT
 from ..model.credentials import CredentialType
@@ -212,41 +214,33 @@ async def async_read_occupancy(
     an entry still being created, which by the same rule holds nothing and
     so excludes nothing.
 
-    ``progress`` is told, as a fraction, how many of the locks have answered:
-    a lock that answers one index per round trip can take a minute or more,
-    and the flow showing this read should not look frozen while it waits.
+    ``progress`` is told, as a fraction, how many of the locks have answered,
+    as each one does: a lock that answers one index per round trip can take a
+    minute or more, and the flow showing this read should not look frozen
+    while it waits. The answer keeps the order of ``locks`` however the reads
+    finished, so an unreadable set is always named the same way.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
-    lock_occupancies: list[LockOccupancy] = []
-    for done, lock_entity_id in enumerate(locks):
-        if progress is not None:
-            progress(done / len(locks))
+
+    async def _read(lock_entity_id: str) -> LockOccupancy:
         try:
             lock_instance = build_lock_instance(
                 hass, dev_reg, ent_reg, config_entry, lock_entity_id
             )
         except LockQuerySkipped as skipped:
-            lock_occupancies.append(
-                LockOccupancy(
-                    lock_entity_id=lock_entity_id,
-                    managed=skipped.managed,
-                    occupied=None,
-                )
+            return LockOccupancy(
+                lock_entity_id=lock_entity_id, managed=skipped.managed, occupied=None
             )
-            continue
         except Exception:
             _LOGGER.warning(
                 "Could not build a provider for %s; its contents are unknown",
                 lock_entity_id,
                 exc_info=True,
             )
-            lock_occupancies.append(
-                LockOccupancy(
-                    lock_entity_id=lock_entity_id, managed=True, occupied=None
-                )
+            return LockOccupancy(
+                lock_entity_id=lock_entity_id, managed=True, occupied=None
             )
-            continue
 
         occupied: frozenset[int] | None = None
         async with borrowed_lock_instance(lock_instance):
@@ -266,13 +260,38 @@ async def async_read_occupancy(
                     lock_entity_id,
                     exc_info=True,
                 )
-        lock_occupancies.append(
-            LockOccupancy(
-                lock_entity_id=lock_entity_id, managed=True, occupied=occupied
-            )
+        return LockOccupancy(
+            lock_entity_id=lock_entity_id, managed=True, occupied=occupied
         )
+
+    # Every lock at once, so the wait is the slowest lock rather than the sum
+    # of them (#1536). Each lock reads in its own worker's turn, so locks do
+    # not contend with one another; a lock named twice is read once, as two
+    # reads of one lock would only queue behind each other. Started eagerly
+    # and collected without yielding once all are in, so a read every lock
+    # answers at once still finishes without a turn of the loop -- which is
+    # what lets the flow skip its progress step (#1639).
     if progress is not None:
-        progress(1.0)
+        progress(0.0 if locks else 1.0)
+    reads = {lock: create_eager_task(_read(lock)) for lock in dict.fromkeys(locks)}
+    pending = set(reads.values())
+    try:
+        while True:
+            for read in [r for r in reads.values() if r in pending and r.done()]:
+                pending.discard(read)
+                read.result()
+                if progress is not None:
+                    progress((len(reads) - len(pending)) / len(reads))
+            if not pending:
+                break
+            await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        # Reads are only left outstanding here when one raised past its own
+        # handling or this read was cancelled: none is left running unowned.
+        for read in pending:
+            read.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+    lock_occupancies = [reads[lock].result() for lock in locks]
     return Occupancy(
         locks=tuple(lock_occupancies),
         claimed_by_other_entries=frozenset(
