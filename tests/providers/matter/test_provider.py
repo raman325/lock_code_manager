@@ -12,6 +12,7 @@ from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.matter import lock_helpers as matter_lock_helpers
 from homeassistant.components.matter.helpers import get_node_from_device_entry
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -3550,6 +3551,43 @@ class TestReleaseManagedSlot:
         assert matter_lock._pins_by_user_index == {42: {8}}
         assert "index(es) 7 on user 42" in caplog.text
         assert "remove it in the lock vendor's app" in caplog.text
+
+    @pytest.mark.parametrize(
+        "missing", ["_get_lock_endpoint_or_raise", "_format_user_response"]
+    )
+    async def test_unlisted_release_without_ha_s_single_user_read_clears_the_pin(
+        self,
+        matter_lock: MatterLock,
+        monkeypatch: pytest.MonkeyPatch,
+        missing: str,
+    ) -> None:
+        """
+        Home Assistant no longer has the private helpers the single read uses.
+
+        The read fails like an unanswered one, so the release falls back to
+        clearing LCM's recorded PIN, rather than the integration failing to
+        load.
+        """
+        monkeypatch.delattr(matter_lock_helpers, missing)
+        matter_lock._slot_by_user_index[42] = 5
+        matter_lock._pins_by_user_index[42] = {7}
+        send = AsyncMock()
+        clear_user = AsyncMock(return_value=None)
+        clear_credential = AsyncMock(return_value=None)
+        client, _node = matter_lock._require_client_and_node()
+        with (
+            self._patch_unlisted(),
+            patch.object(client, "send_device_command", send),
+            self._patch_status(creator_fabric_index=self._HA_FABRIC),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
+            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
+        ):
+            await matter_lock.async_release_managed_slot(5)
+
+        send.assert_not_called()
+        clear_user.assert_not_called()
+        clear_credential.assert_called_once()
+        assert clear_credential.call_args.kwargs["credential_index"] == 7
 
     @pytest.mark.parametrize(
         "status",

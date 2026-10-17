@@ -23,6 +23,7 @@ from matter_server.common.errors import (
 )
 from matter_server.common.models import EventType
 
+from homeassistant.components.matter import lock_helpers as matter_lock_helpers
 from homeassistant.components.matter.const import (
     DOMAIN as MATTER_DOMAIN,
     ID_TYPE_DEVICE_ID,
@@ -30,8 +31,6 @@ from homeassistant.components.matter.const import (
 from homeassistant.components.matter.helpers import get_device_id
 from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
-    _format_user_response,
-    _get_lock_endpoint_or_raise,
     clear_lock_credential,
     clear_lock_user,
     get_lock_credential_status,
@@ -496,18 +495,28 @@ class MatterLock(BaseLock):
 
         One GetUser for ``user_index``, for a lock that fails the full walk
         (#1689). Home Assistant's lock helpers have no single-user read, so
-        this sends the command and formats the answer with theirs.
+        this sends the command and formats the answer with their private
+        helpers. They are looked up here, not imported, so a rename in Home
+        Assistant costs only this read (``LockDisconnected``: the caller falls
+        back to the PIN-only release), never the integration's import.
         """
+        endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
+        format_user = getattr(matter_lock_helpers, "_format_user_response", None)
+        if endpoint_of is None or format_user is None:
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: Home Assistant's Matter lock helpers "
+                f"no longer provide a single-user read"
+            )
         client, node = self._require_client_and_node()
         response = await self._invoke_sdk(
             "get_lock_user",
             client.send_device_command(
                 node_id=node.node_id,
-                endpoint_id=_get_lock_endpoint_or_raise(node).endpoint_id,
+                endpoint_id=endpoint_of(node).endpoint_id,
                 command=clusters.DoorLock.Commands.GetUser(userIndex=user_index),
             ),
         )
-        return cast(dict[str, Any] | None, _format_user_response(response))
+        return cast(dict[str, Any] | None, format_user(response))
 
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
