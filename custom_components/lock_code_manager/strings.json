@@ -543,7 +543,6 @@
   },
   "config_subentries": {
     "user": {
-      "title": "User",
       "initiate_flow": {
         "user": "Add user",
         "reconfigure": "Edit user"
