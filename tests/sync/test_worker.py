@@ -425,6 +425,14 @@ async def test_a_keypad_fight_trips_however_often_it_is_read(rig_factory) -> Non
     assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
     assert rig.lock.writes == [(1, "1234")] * 3
 
+    # The keypad agrees between fights: a read that finds it so lifts nothing.
+    rig.lock.codes[1] = "1234"
+    await rig.worker.read([1])
+    await rig.worker.read()
+    await rig.settle()
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert rig.lock.writes == [(1, "1234")] * 3
+
 
 async def test_failures_spread_wider_than_the_window_never_hold(rig_factory) -> None:
     """Three failures over more than five minutes are not three in five."""
@@ -449,6 +457,85 @@ async def test_a_new_target_lifts_a_hold(rig_factory) -> None:
     rig.worker.want(1, "4321")
     await rig.settle()
     assert rig.status(1) == (Status.IN_SYNC, None)
+
+
+async def test_a_slot_held_after_its_tries_lifts_when_a_poll_finds_it_set(
+    rig_factory,
+) -> None:
+    """
+    Polls read a slot held after its tries; only agreement lifts the hold.
+
+    A reading that disagrees is written nothing and charged nothing; one
+    that agrees lifts the hold, with nothing to write.
+    """
+    lock = FakeLock(ignore_writes=True)
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    for _ in range(3):
+        await rig.pass_()
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    writes, tries = list(lock.writes), rig.worker.slots[1].tries
+
+    lock.codes[1] = "9999"
+    await rig.worker.read()
+    await rig.settle()
+    assert rig.status(1) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert (lock.writes, rig.worker.slots[1].tries) == (writes, tries)
+
+    lock.codes[1] = "1234"
+    await rig.worker.read()
+    await rig.settle()
+    assert rig.status(1) == (Status.IN_SYNC, None)
+    assert lock.writes == writes
+
+
+async def test_a_held_release_lifts_and_is_dropped_when_a_poll_finds_it_empty(
+    rig_factory,
+) -> None:
+    """The clear was answered, the code stayed, then went at the keypad."""
+    lock = FakeLock({5: "1234"}, ignore_writes=True)
+    rig = await _started(rig_factory(lock), {5: "1234"})
+    rig.worker.want(5, None, release=True)
+    for _ in range(3):
+        await rig.pass_()
+    assert rig.status(5) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+
+    del lock.codes[5]
+    await rig.worker.read()
+    await rig.settle()
+
+    assert 5 not in rig.worker.slots
+    assert lock.writes == [(5, None)] * 2
+
+
+async def test_a_refused_pin_stays_held_when_a_read_finds_it_set(rig_factory) -> None:
+    """The lock said no: a code put there some other way lifts nothing."""
+    lock = FakeLock(refuse_value={"1234"})
+    rig = await _started(rig_factory(lock), {1: "1234"})
+    assert rig.status(1) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
+
+    lock.codes[1] = "1234"
+    await rig.worker.read([1])
+    await rig.settle()
+
+    assert rig.status(1) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
+
+
+async def test_polls_of_held_slots_the_lock_ignores_never_back_it_off(
+    rig_factory,
+) -> None:
+    """A held slot's read going unanswered is nobody's: the lock stays reachable."""
+    lock = FakeLock({1: "1111"})
+    rig = await _started(rig_factory(lock), {1: "1111"})
+    ignored = {2, 3, 4}
+    lock.ignored = ignored
+    for n in ignored:
+        rig.worker.want(n, str(n) * 4)
+    await _run(rig, lambda: all(rig.status(n)[0] is Status.SUSPENDED for n in ignored))
+    assert all(rig.status(n) == (Status.SUSPENDED, Repair.CANT_SET) for n in ignored)
+
+    await rig.worker.read()
+
+    assert rig.worker.reachable
 
 
 async def test_a_release_clear_the_lock_ignores_ends_in_a_repair(rig_factory) -> None:

@@ -49,7 +49,8 @@ class ResumeSlotRepairFlow(RepairsFlow):
     Acknowledge a held slot: its lock tries it again.
 
     A hold means "stop trying until something changes". The things that
-    change it are a new target, or the user saying "try again" here.
+    change it are a new target, the user saying "try again" here, or -- for
+    a hold after its tries -- a fresh read finding the slot already right.
     """
 
     def __init__(self, data: dict[str, Any]) -> None:

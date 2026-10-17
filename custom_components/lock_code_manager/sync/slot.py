@@ -90,6 +90,12 @@ class Slot:
     ever. ``fights`` counts
     times the lock went from agreeing to disagreeing -- a keypad taking the
     code back (#776) -- and ages out of ``WINDOW``.
+
+    A hold is lifted by a change of target or the user acknowledging its
+    repair. One from tries running out also lifts itself when a fresh read
+    shows the lock already agrees: whatever kept the write from landing, the
+    slot is as wanted now. One from fights or a refusal never does: a keypad
+    fighting the code back agrees between fights, and the lock said no.
     """
 
     want: Want
@@ -98,6 +104,8 @@ class Slot:
     tries: int = 0
     fights: list[float] = field(default_factory=list)
     hold: Repair | None = None
+    # The hold came from tries running out: a fresh agreeing read lifts it.
+    liftable: bool = False
     release: bool = False
     # What the lock or its driver said when it refused the slot, if anything.
     why: str = ""
@@ -173,14 +181,17 @@ class Slot:
         """
         Take what the lock said about the slot.
 
-        A fresh read that agrees starts the tries over; a push may come from
-        a cache, so it never does. Going from agreeing to disagreeing is a
-        fight, and the write behind the agreement is no longer trusted.
+        A fresh read that agrees starts the tries over, and lifts a hold
+        from tries running out; a push may come from a cache, so it never
+        does. Going from agreeing to disagreeing is a fight, and the write
+        behind the agreement is no longer trusted.
         """
         agreed = self.seen is not None and self.agrees(salt)
         self.seen = reading
         if self.agrees(salt):
-            if fresh:
+            if fresh and self.liftable:
+                self.resume()
+            elif fresh:
                 self.tries = 0
         elif agreed:
             self.wrote = None
@@ -198,7 +209,7 @@ class Slot:
         """Count a sync that did not end in sync, with the lock there."""
         self.tries += 1
         if self.tries >= self._limit():
-            self.hold = self._give_up()
+            self.hold, self.liftable = self._give_up(), True
 
     def fought(self, now: float) -> None:
         """
@@ -210,14 +221,14 @@ class Slot:
         self.fights = [t for t in self.fights if t > now - WINDOW]
         self.fights.append(now)
         if len(self.fights) >= self._limit():
-            self.hold = self._give_up()
+            self.hold, self.liftable = self._give_up(), False
 
     def _limit(self) -> int:
         return RELEASE_LIMIT if self.release else LIMIT
 
     def refused(self, *, value: bool, why: str = "") -> None:
         """Hold the slot at once: the lock refused the value, or the slot."""
-        self.why, self.cause = why, ""
+        self.why, self.cause, self.liftable = why, "", False
         if value and self.want is not None:
             self.hold = Repair.SLOT_DISABLED
         else:
@@ -229,6 +240,7 @@ class Slot:
         self.tries = 0
         self.fights.clear()
         self.hold = None
+        self.liftable = False
         self.not_before = None
         self.why = self.cause = ""
 
