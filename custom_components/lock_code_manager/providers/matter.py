@@ -11,8 +11,9 @@ and occupancy updates (LockUserChange).
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal, override
+from typing import Any, Literal, cast, override
 
+from chip.clusters import Objects as clusters
 from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import (
     MatterError,
@@ -29,6 +30,8 @@ from homeassistant.components.matter.const import (
 from homeassistant.components.matter.helpers import get_device_id
 from homeassistant.components.matter.lock_helpers import (
     SetCredentialFailedError,
+    _format_user_response,
+    _get_lock_endpoint_or_raise,
     clear_lock_credential,
     clear_lock_user,
     get_lock_credential_status,
@@ -486,6 +489,25 @@ class MatterLock(BaseLock):
             "get_lock_users", get_lock_users(client, node)
         )
         return lock_data.get("users", [])
+
+    async def _raw_lock_user(self, user_index: int) -> dict[str, Any] | None:
+        """
+        Return one raw user, as ``get_lock_users`` lists it, or ``None`` if empty.
+
+        One GetUser for ``user_index``, for a lock that fails the full walk
+        (#1689). Home Assistant's lock helpers have no single-user read, so
+        this sends the command and formats the answer with theirs.
+        """
+        client, node = self._require_client_and_node()
+        response = await self._invoke_sdk(
+            "get_lock_user",
+            client.send_device_command(
+                node_id=node.node_id,
+                endpoint_id=_get_lock_endpoint_or_raise(node).endpoint_id,
+                command=clusters.DoorLock.Commands.GetUser(userIndex=user_index),
+            ),
+        )
+        return cast(dict[str, Any] | None, _format_user_response(response))
 
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
@@ -957,38 +979,49 @@ class MatterLock(BaseLock):
         lock under a user renamed in the vendor's app. Otherwise there was
         nothing of LCM's to find.
 
-        A lock that cannot list its users (#1689): if exactly one user index
-        is recorded for ``slot`` and LCM recorded PINs on it, those of them
-        the lock still says are Home Assistant's, on that user, are cleared
-        (``_release_recorded_pins``). Never ``ClearUser`` and no rename: what
-        else the user holds cannot be seen. Otherwise the listing's failure
-        is raised. A listing that works always wins over the record.
+        A lock that cannot list its users (#1689) is asked for the one user
+        index recorded for ``slot`` instead (one GetUser), which is released
+        as above if it still carries the tag. If that read fails too, LCM's
+        recorded PINs on it are cleared without seeing the user
+        (``_release_recorded_pins``). No single recorded user, or (for the
+        PIN-only path) no recorded PIN: the listing's failure is raised. A
+        listing that works always wins over the record.
 
         Lock-side failures raise, so the release is retried: nothing is
         deleted on an unanswered question about whose a PIN is.
         """
         try:
             raw_users = await self._raw_lock_users()
-        except LockDisconnected:
+        except LockDisconnected as err:
             recorded = [
                 index
                 for index, anchored in self._slot_by_user_index.items()
                 if anchored == slot
             ]
-            if len(recorded) != 1 or not self._pins_by_user_index.get(recorded[0]):
+            if len(recorded) != 1:
                 raise
-            await self._release_recorded_pins(slot, recorded[0], written=written)
-            return
-        user = next(
-            (
-                raw_user
-                for raw_user in raw_users
-                if raw_user.get("user_index") is not None
-                and raw_user.get("user_name")
-                and parse_tag(raw_user["user_name"])[0] == slot
-            ),
-            None,
-        )
+            recorded_index = recorded[0]
+            try:
+                user = await self._raw_lock_user(recorded_index)
+            except LockDisconnected:
+                if not self._pins_by_user_index.get(recorded_index):
+                    raise err from None
+                await self._release_recorded_pins(slot, recorded_index, written=written)
+                return
+            if user is None or parse_tag(user.get("user_name") or "")[0] != slot:
+                self._forget_user_index(recorded_index)
+                user = None
+        else:
+            user = next(
+                (
+                    raw_user
+                    for raw_user in raw_users
+                    if raw_user.get("user_index") is not None
+                    and raw_user.get("user_name")
+                    and parse_tag(raw_user["user_name"])[0] == slot
+                ),
+                None,
+            )
         if user is None:
             if written:
                 LOGGER.warning(
@@ -1051,12 +1084,12 @@ class MatterLock(BaseLock):
         self, slot: int, user_index: int, *, written: bool
     ) -> None:
         """
-        Clear LCM's recorded PINs on ``user_index`` without listing the lock's users.
+        Clear LCM's recorded PINs on ``user_index`` without reading the user.
 
         A recorded PIN is cleared only if the lock says it exists, on this
         user, created by Home Assistant's fabric; anything else is left (gone,
-        moved, or not LCM's). The user and its tag stay, so a release that can
-        list the users later still finds it.
+        moved, or not LCM's). What else the user holds cannot be seen, so it
+        is neither cleared nor renamed, and may remain with LCM's tag.
         """
         client, node = self._require_client_and_node()
         fabric = self._own_fabric_index(node, slot)
@@ -1092,8 +1125,10 @@ class MatterLock(BaseLock):
         if cleared:
             LOGGER.warning(
                 "Lock %s: released slot %s by clearing LCM's PIN(s) at credential "
-                "index(es) %s on user %s, because the lock could not list its "
-                "users. The user keeps LCM's tag until a later release can list it",
+                "index(es) %s on user %s, because the lock could not read its "
+                "users. That user may remain on the lock, empty, with LCM's tag; "
+                "no later release will retry it, so remove it in the lock "
+                "vendor's app",
                 self.lock.entity_id,
                 slot,
                 ", ".join(map(str, cleared)),
@@ -1101,10 +1136,11 @@ class MatterLock(BaseLock):
             )
         elif written:
             LOGGER.warning(
-                "Lock %s: released slot %s, but the lock could not list its users "
+                "Lock %s: released slot %s, but the lock could not read its users "
                 "and none of the PINs LCM recorded on user %s is still LCM's, so "
-                "nothing was removed. The user keeps LCM's tag until a later "
-                "release can list it",
+                "nothing was removed. That user may remain on the lock with "
+                "LCM's tag; no later release will retry it, so remove it in the "
+                "lock vendor's app",
                 self.lock.entity_id,
                 slot,
                 user_index,
