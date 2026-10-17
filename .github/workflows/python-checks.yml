@@ -102,8 +102,9 @@ jobs:
           files: coverage.xml
       - name: Upload test results to Codecov
         if: ${{ !cancelled() && matrix.python-version == needs.setup.outputs.target-python }}
-        uses: codecov/test-results-action@v1
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          report_type: test_results
           flags: python
           files: junit.xml
