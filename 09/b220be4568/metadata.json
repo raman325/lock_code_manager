@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "09b220be4568",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-lock-operation-one-user-read",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/09/b220be4568/0/metadata.json",
+      "transcript": "/09/b220be4568/0/full.jsonl",
+      "compact_transcript": "/09/b220be4568/0/transcript.jsonl",
+      "content_hash": "/09/b220be4568/0/content_hash.txt",
+      "prompt": "/09/b220be4568/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 44734,
+    "cache_read_tokens": 4681265,
+    "output_tokens": 21263,
+    "api_call_count": 22
+  }
+}
