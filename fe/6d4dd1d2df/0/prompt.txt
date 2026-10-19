@@ -1,0 +1,1 @@
+Yes but it’s wasted rf tx and rx. Let’s fix it in this PR since it’s the same problem
