@@ -637,6 +637,70 @@ class TestKeypadAndSwitch:
         assert hass.states.get(event_entity).state != before
         assert [event.data["name"] for event in used] == ["slot2"]
 
+    async def test_a_keypad_use_reads_only_the_user_it_names(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The use is announced after one GetUser, not one per user on the lock.
+
+        Every user was read in turn first, which on an Aqara U400 with seven
+        users held the event back for about 8.6 seconds (#1745).
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", user_index)]
+
+    async def test_a_keypad_use_is_placed_when_its_user_read_fails(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The named user's read goes unanswered, so every user is read instead.
+
+        The walk is what answered before the single read; it still does.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        fault = fake_matter_lock.fail("GetUser", user_index, times=1)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert fault.hits == 1
+        assert [event.data["name"] for event in used] == ["slot2"]
+
     async def test_turning_a_user_off_takes_its_pin_off_the_lock(
         self,
         hass: HomeAssistant,

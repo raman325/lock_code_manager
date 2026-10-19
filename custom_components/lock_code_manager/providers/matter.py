@@ -513,9 +513,10 @@ class MatterLock(BaseLock):
         """
         Return one raw user, as ``get_lock_users`` lists it, or ``None`` if empty.
 
-        One GetUser for ``user_index``, for a lock that fails the full walk
-        (#1689). Home Assistant's lock helpers have no single-user read, so
-        this sends the command and formats the answer with their private
+        One GetUser for ``user_index``: for a lock that fails the full walk
+        (#1689), and for a use that names its user, which is announced only
+        once this answers. Home Assistant's lock helpers have no single-user
+        read, so this sends the command and formats the answer with their private
         helpers. They are looked up here, not imported, so a rename in Home
         Assistant costs only this read (``LockDisconnected``: the caller falls
         back to the PIN-only release), never the integration's import.
@@ -1836,6 +1837,42 @@ class MatterLock(BaseLock):
             f"Matter LockOperation dispatch for {self.lock.entity_id}",
         )
 
+    async def _lock_operation_slot(
+        self, user_index: int | None, credential_index: int
+    ) -> int | None:
+        """
+        Return the LCM slot a LockOperation's user holds, or ``None``.
+
+        One GetUser when the event names its user. The walk over every user
+        answers when that read fails -- the lock busy, or Home Assistant's
+        private helpers it uses gone (``_raw_lock_user``) -- and when the
+        event names no user or one without LCM's tag.
+        """
+        fabric = self._fabric_index()
+        if user_index is not None:
+            try:
+                user = await self._raw_lock_user(user_index)
+            except LockOperationError as err:
+                LOGGER.debug(
+                    "Lock %s: could not read LockOperation user %s alone, "
+                    "reading every user: %s",
+                    self.lock.entity_id,
+                    user_index,
+                    err,
+                )
+            else:
+                # Explicit ``None`` check (not ``or``) so a valid LCM slot of
+                # 0 doesn't fall through to the walk.
+                if (
+                    user is not None
+                    and (slot := _raw_user_slot(user, fabric)) is not None
+                ):
+                    return slot
+        raw_users = await self._raw_lock_users()
+        return _lcm_slot_from_raw_users_by_credential_index(
+            raw_users, credential_index, fabric
+        )
+
     async def _dispatch_lock_operation(
         self,
         user_index: int | None,
@@ -1845,7 +1882,9 @@ class MatterLock(BaseLock):
         """
         Resolve the LCM slot for a LockOperation event and fire it.
 
-        Primary path: lock-reported ``userIndex`` -> user.name -> tag.
+        Primary path: lock-reported ``userIndex`` -> user.name -> tag, read
+        with one GetUser: the use is announced only once this answers, and
+        walking every user takes seconds on a lock with a handful of them.
         Fallback path: walk the user list to find the PIN credential at
         ``credentialIndex`` and parse the owning user's tag. Events whose
         owning user isn't LCM-tagged are silently dropped so out-of-band
@@ -1853,8 +1892,7 @@ class MatterLock(BaseLock):
         events.
         """
         try:
-            raw_users = await self._raw_lock_users()
-            fabric = self._fabric_index()
+            code_slot = await self._lock_operation_slot(user_index, credential_index)
         except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not resolve LockOperation userIndex=%s "
@@ -1866,15 +1904,6 @@ class MatterLock(BaseLock):
             )
             return
 
-        # Explicit ``None`` check (not ``or``) so a valid LCM slot of 0
-        # from the primary resolver doesn't fall through to the fallback.
-        code_slot = _lcm_slot_from_raw_users_by_user_index(
-            raw_users, user_index, fabric
-        )
-        if code_slot is None:
-            code_slot = _lcm_slot_from_raw_users_by_credential_index(
-                raw_users, credential_index, fabric
-            )
         if code_slot is None:
             LOGGER.debug(
                 "Lock %s: LockOperation userIndex=%s credentialIndex=%s did not "

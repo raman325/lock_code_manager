@@ -1,5 +1,7 @@
 """Test the Matter lock provider."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 import logging
 from types import SimpleNamespace
@@ -778,12 +780,25 @@ class TestLockOperationEvent:
     """
 
     @staticmethod
-    def _patch_users(users: list[dict]) -> Any:
-        """Patch get_lock_users so the async dispatch can resolve owners."""
-        return patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(return_value={"max_users": 10, "users": users}),
-        )
+    @contextmanager
+    def _patch_users(users: list[dict]) -> Iterator[None]:
+        """
+        Answer the user reads from ``users`` so the dispatch can resolve owners.
+
+        Both of them: the walk (``get_lock_users``) and the single read of the
+        user an event names, which answers ``None`` for an empty index.
+        """
+        by_index = {user.get("user_index"): user for user in users}
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                AsyncMock(return_value={"max_users": 10, "users": users}),
+            ),
+            patch.object(
+                MatterLock, "_raw_lock_user", AsyncMock(side_effect=by_index.get)
+            ),
+        ):
+            yield
 
     async def test_unlock_with_pin_credential(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -1093,10 +1108,18 @@ class TestLockOperationEvent:
         """Transport failure during owner lookup logs and drops the event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        client, _node = matter_lock._require_client_and_node()
 
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(side_effect=HomeAssistantError("transport down")),
+        with (
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                AsyncMock(side_effect=HomeAssistantError("transport down")),
+            ),
+            patch.object(
+                client,
+                "send_device_command",
+                AsyncMock(side_effect=HomeAssistantError("transport down")),
+            ),
         ):
             matter_lock._on_node_event(
                 None,
