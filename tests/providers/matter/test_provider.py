@@ -1152,6 +1152,67 @@ class TestLockOperationEvent:
 
         assert fired == []
 
+    @pytest.mark.parametrize(
+        ("data", "expected"),
+        [
+            pytest.param(
+                {
+                    "lockOperationType": 1,
+                    "operationSource": 3,
+                    "userIndex": 4,
+                    "fabricIndex": 1,
+                    "sourceNode": None,
+                    "credentials": [{"credentialType": 3, "credentialIndex": 3}],
+                },
+                [
+                    {
+                        "code_slot": 4,
+                        "to_locked": False,
+                        "credential_type": CredentialType.PIN,
+                    }
+                ],
+                id="keypad",
+            ),
+            pytest.param(
+                {
+                    "lockOperationType": 1,
+                    "operationSource": 10,
+                    "userIndex": 4,
+                    "fabricIndex": 1,
+                    "sourceNode": None,
+                    "credentials": [{"credentialType": 10, "credentialIndex": 1}],
+                },
+                [],
+                id="home_key",
+            ),
+        ],
+    )
+    async def test_a_lock_that_reports_the_source_as_the_type(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        data: dict[str, Any],
+        expected: list[dict[str, Any]],
+    ) -> None:
+        """
+        The Aqara U400's keypad PIN is a PIN, and its Home Key is still unreported.
+
+        Its firmware (3.1.1.0) writes ``operationSource`` into
+        ``credentialType``. Payloads as captured from the lock by the Matter
+        server (#1745); the Home Key's ``userIndex`` is set to the LCM user's
+        so only the credential decides.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}]
+        ):
+            matter_lock._on_node_event(None, _make_node_event(data=data))
+            await hass.async_block_till_done()
+
+        assert fired == expected
+
     async def test_a_card_is_not_placed_by_a_pin_at_its_index(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:

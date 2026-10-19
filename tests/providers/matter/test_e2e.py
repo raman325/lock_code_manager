@@ -641,6 +641,35 @@ class TestKeypadAndSwitch:
             (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
         ] == [("slot2", "pin")]
 
+    async def test_a_keypad_use_is_a_pin_whatever_type_the_lock_names(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A keypad PIN the lock logs as a fingerprint is recorded as a PIN.
+
+        The Aqara U400 (firmware 3.1.1.0) writes the operation source into
+        ``credentialType``, so its keypad uses arrive as 3, Fingerprint (#1745).
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN]),
+            reported_as=DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", "pin")]
+
     @pytest.mark.parametrize(
         ("kind", "expected"),
         [

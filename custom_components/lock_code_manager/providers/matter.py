@@ -112,6 +112,14 @@ _MATTER_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
     5: CredentialType.FACE,
 }
 
+# LockOperation ``operationSource`` (OperationSourceEnum) -> the one kind of
+# credential that reader takes, which names the use over ``credentialType``:
+# some firmware writes the source into ``credentialType``, so the Aqara U400
+# reports a keypad PIN as 3 (Fingerprint).
+_SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
+    3: CredentialType.PIN,  # Keypad.
+}
+
 # LockUserChange LockDataType values. A user-record change is handled too:
 # ClearUser (what Home Assistant's Manage access deletion sends) removes the
 # user together with its credentials, and the user-level CLEAR is the event
@@ -1812,7 +1820,8 @@ class MatterLock(BaseLock):
         Fires a code slot event when a user's credential is used to
         lock/unlock, naming the kind presented: a PIN, a card, a fingerprint
         or a face (``_MATTER_TO_CREDENTIAL_TYPE``). A kind with no mapping is
-        ignored.
+        ignored. A keypad source names the kind outright
+        (``_SOURCE_TO_CREDENTIAL_TYPE``), whatever ``credentialType`` says.
 
         The event's ``credentials[].credentialIndex`` is the Matter
         credential index, which LCM treats as opaque under the user-tag
@@ -1850,6 +1859,9 @@ class MatterLock(BaseLock):
         # then never match.
         credential_type, raw_index = min(
             used, key=lambda pair: pair[0] is not CredentialType.PIN
+        )
+        credential_type = _SOURCE_TO_CREDENTIAL_TYPE.get(
+            data.get("operationSource", -1), credential_type
         )
         credential_index = parse_slot_num(raw_index)
         if credential_index is None:

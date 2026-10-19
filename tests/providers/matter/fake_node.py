@@ -503,14 +503,20 @@ class FakeMatterLock:
         )
 
     def keypad_unlock(
-        self, credential_index: int, *, user_index: int | None = None
+        self,
+        credential_index: int,
+        *,
+        user_index: int | None = None,
+        reported_as: int = _PIN,
     ) -> None:
         """
         Unlock with the PIN at ``credential_index``, as the lock logs it.
 
         A ``LockOperation`` event: unlocked, from the keypad, naming the user
         and the credential used (appclusters 5.2.11.2). ``user_index`` defaults
-        to the user holding the credential.
+        to the user holding the credential. ``reported_as`` is the
+        ``credentialType`` written: firmware that writes the operation source
+        there instead sends the Keypad source's 3, as the Aqara U400 does.
         """
         self._log_event(
             DoorLock.Events.LockOperation,
@@ -523,7 +529,10 @@ class FakeMatterLock:
                 "fabricIndex": None,
                 "sourceNode": None,
                 "credentials": [
-                    {"credentialType": _PIN, "credentialIndex": credential_index}
+                    {
+                        "credentialType": reported_as,
+                        "credentialIndex": credential_index,
+                    }
                 ],
             },
         )
