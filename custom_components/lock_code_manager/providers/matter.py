@@ -11,6 +11,7 @@ and occupancy updates (LockUserChange).
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import partial
 from typing import Any, Literal, cast, override
 
 from chip.clusters import Objects as clusters
@@ -163,27 +164,6 @@ def _raw_user_slot(raw_user: dict[str, Any], fabric: int | None) -> int | None:
     if fabric is None or raw_user.get("creator_fabric_index") != fabric:
         return None
     return parse_short_tag(name)
-
-
-def _lcm_slot_from_raw_users_by_user_index(
-    raw_users: list[dict[str, Any]], user_index: int | None, fabric: int | None
-) -> int | None:
-    """
-    Resolve the LCM slot by matching a raw lock user by ``user_index``.
-
-    Pure helper over the already-fetched user list -- the caller owns the
-    ``_raw_lock_users`` round-trip and the transport-error handling.
-    """
-    if user_index is None:
-        return None
-    return next(
-        (
-            _raw_user_slot(raw_user, fabric)
-            for raw_user in raw_users
-            if raw_user.get("user_index") == user_index
-        ),
-        None,
-    )
 
 
 def _lcm_slot_from_raw_users_by_credential_index(
@@ -1837,40 +1817,48 @@ class MatterLock(BaseLock):
             f"Matter LockOperation dispatch for {self.lock.entity_id}",
         )
 
+    async def _raw_user_at(self, user_index: int) -> dict[str, Any] | None:
+        """
+        Return the raw user at ``user_index`` for an event that names it, or ``None``.
+
+        One GetUser (``_raw_lock_user``): an event names one user, and
+        reading every user to find it costs a round trip each over the
+        lock's radio. Every user is read only when that read fails -- the
+        lock busy, or Home Assistant's private helpers it uses gone.
+        """
+        try:
+            return await self._raw_lock_user(user_index)
+        except LockOperationError as err:
+            LOGGER.debug(
+                "Lock %s: could not read user %s alone, reading every user: %s",
+                self.lock.entity_id,
+                user_index,
+                err,
+            )
+        return next(
+            (
+                raw_user
+                for raw_user in await self._raw_lock_users()
+                if raw_user.get("user_index") == user_index
+            ),
+            None,
+        )
+
     async def _lock_operation_slot(
         self, user_index: int | None, credential_index: int
     ) -> int | None:
         """
         Return the LCM slot a LockOperation's user holds, or ``None``.
 
-        One GetUser when the event names its user. The walk over every user
-        answers when that read fails -- the lock busy, or Home Assistant's
-        private helpers it uses gone (``_raw_lock_user``) -- and when the
-        event names no user or one without LCM's tag.
+        The user the event names, read alone (``_raw_user_at``). Without
+        one, every user is read for the PIN at ``credentialIndex``.
         """
         fabric = self._fabric_index()
         if user_index is not None:
-            try:
-                user = await self._raw_lock_user(user_index)
-            except LockOperationError as err:
-                LOGGER.debug(
-                    "Lock %s: could not read LockOperation user %s alone, "
-                    "reading every user: %s",
-                    self.lock.entity_id,
-                    user_index,
-                    err,
-                )
-            else:
-                # Explicit ``None`` check (not ``or``) so a valid LCM slot of
-                # 0 doesn't fall through to the walk.
-                if (
-                    user is not None
-                    and (slot := _raw_user_slot(user, fabric)) is not None
-                ):
-                    return slot
-        raw_users = await self._raw_lock_users()
+            user = await self._raw_user_at(user_index)
+            return None if user is None else _raw_user_slot(user, fabric)
         return _lcm_slot_from_raw_users_by_credential_index(
-            raw_users, credential_index, fabric
+            await self._raw_lock_users(), credential_index, fabric
         )
 
     async def _dispatch_lock_operation(
@@ -1885,8 +1873,9 @@ class MatterLock(BaseLock):
         Primary path: lock-reported ``userIndex`` -> user.name -> tag, read
         with one GetUser: the use is announced only once this answers, and
         walking every user takes seconds on a lock with a handful of them.
-        Fallback path: walk the user list to find the PIN credential at
-        ``credentialIndex`` and parse the owning user's tag. Events whose
+        Fallback path, for an event without ``userIndex``: walk the user list
+        to find the PIN credential at ``credentialIndex`` and parse the
+        owning user's tag. Events whose
         owning user isn't LCM-tagged are silently dropped so out-of-band
         PIN uses on non-LCM credentials don't drive spurious code slot
         events.
@@ -2014,10 +2003,10 @@ class MatterLock(BaseLock):
         """
         Resolve the LCM slot for a LockUserChange and push the update.
 
-        Fetches the lock's current user list, finds the owner by
-        ``user_index``, parses its ``lcm:<slot>:`` tag, and hands the
-        observation to the coordinator. A cleared user is no longer in
-        that list, so a CLEAR falls back to the slot the index anchored at
+        Reads the user at ``user_index`` (``_raw_user_at``), parses its
+        ``lcm:<slot>:`` tag, and hands the
+        observation to the coordinator. A cleared user is no longer on
+        the lock, so a CLEAR falls back to the slot the index anchored at
         the last read or write. Events whose owning user isn't LCM-tagged
         are ignored so out-of-band credential changes on non-LCM users
         don't drive spurious coordinator updates.
@@ -2027,26 +2016,25 @@ class MatterLock(BaseLock):
             if self.coordinator is None:
                 raise LockDisconnected("not set up")
             # In the lock's turn: nothing reaches it once its worker stops.
-            raw_users = await self.coordinator.async_in_turn(self._raw_lock_users)
+            user = await self.coordinator.async_in_turn(
+                partial(self._raw_user_at, user_index)
+            )
             fabric = self._fabric_index()
         except LockOperationError as err:
             LOGGER.debug(
-                "Lock %s: could not read users to resolve LockUserChange "
+                "Lock %s: could not read user to resolve LockUserChange "
                 "userIndex %s: %s",
                 self.lock.entity_id,
                 user_index,
                 err,
             )
         else:
-            code_slot = _lcm_slot_from_raw_users_by_user_index(
-                raw_users, user_index, fabric
-            )
-            if code_slot is None and any(
-                raw_user.get("user_index") == user_index for raw_user in raw_users
-            ):
-                # Present but untagged: somebody else's user now, whatever
-                # this index anchored before.
-                self._forget_user_index(user_index)
+            if user is not None:
+                code_slot = _raw_user_slot(user, fabric)
+                if code_slot is None:
+                    # Present but untagged: somebody else's user now,
+                    # whatever this index anchored before.
+                    self._forget_user_index(user_index)
         if code_slot is None and resolved.is_empty:
             code_slot = self._forget_user_index(user_index)
         if code_slot is None:

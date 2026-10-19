@@ -980,6 +980,33 @@ class TestOtherUsersOnTheLock:
 
         assert FAKE_MATTER_SLOTS[1][CONF_PIN] in fake_matter_lock.codes.values()
 
+    async def test_a_change_to_another_user_reads_only_that_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A user added in the vendor's app costs one GetUser, not one per user on the lock.
+
+        The LockUserChange names its user, so that user is all there is to
+        read to learn it isn't Lock Code Manager's.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        sent = len(fake_matter_lock.commands)
+
+        fake_matter_lock.program(9, "999999", name="Mom", credential_index=9)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", 9)]
+
     async def test_a_turned_off_user_leaves_a_homeowner_s_code_alone(
         self,
         hass: HomeAssistant,

@@ -269,11 +269,31 @@ def matter_helpers_patched(helpers: dict[str, AsyncMock]) -> Iterator[None]:
     Answer every Matter lock helper the provider calls from ``helpers``.
 
     Patched where the provider imports them, for as long as anything the test
-    sets up -- an entry, or a flow creating one -- may call them.
+    sets up -- an entry, or a flow creating one -- may call them. The
+    provider's own single-user read answers from the ``get_lock_users`` mock
+    too, so a test sees one lock whichever way the provider reads it.
     """
     with ExitStack() as stack:
         for name, mock in helpers.items():
             stack.enter_context(patch(f"{_PROVIDER_MODULE}.{name}", mock))
+        if (list_users := helpers.get("get_lock_users")) is not None:
+
+            async def _raw_lock_user(
+                lock: MatterLock, user_index: int
+            ) -> dict[str, Any] | None:
+                lock_data = await lock._invoke_sdk("get_lock_user", list_users())
+                return next(
+                    (
+                        user
+                        for user in lock_data["users"]
+                        if user.get("user_index") == user_index
+                    ),
+                    None,
+                )
+
+            stack.enter_context(
+                patch.object(MatterLock, "_raw_lock_user", _raw_lock_user)
+            )
         yield
 
 

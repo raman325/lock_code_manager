@@ -48,7 +48,7 @@ from custom_components.lock_code_manager.providers.matter import (
     MatterLock,
     SetCredentialFailedError,
     _lcm_slot_from_raw_users_by_credential_index,
-    _lcm_slot_from_raw_users_by_user_index,
+    _raw_user_slot,
 )
 from tests.providers.helpers import (
     ProviderNativeTransportContractTests,
@@ -715,19 +715,11 @@ class TestLcmSlotResolvers:
                 "credentials": [{"type": "pin", "index": 4}],
             }
         ]
-        assert _lcm_slot_from_raw_users_by_user_index(users, 1, fabric) == slot
+        assert _raw_user_slot(users[0], fabric) == slot
         assert _lcm_slot_from_raw_users_by_credential_index(users, 4, fabric) == slot
 
-    def test_by_user_index_resolves_tagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 1, None) == 5
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 3, None) == 8
-
-    def test_by_user_index_returns_none_for_untagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 2, None) is None
-
-    def test_by_user_index_returns_none_for_unknown(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 99, None) is None
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, None, None) is None
+    def test_a_tagged_user_s_slot(self) -> None:
+        assert [_raw_user_slot(user, None) for user in self._USERS] == [5, None, 8]
 
     def test_by_credential_index_resolves_tagged(self) -> None:
         assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 7, None) == 5
@@ -772,6 +764,37 @@ def _make_node_event(
     )
 
 
+@contextmanager
+def _patch_user_reads(users: list[dict]) -> Iterator[None]:
+    """
+    Answer the provider's user reads from ``users``.
+
+    Both of them: the walk over every user (``get_lock_users``) and the
+    single read of the user an event names, which answers ``None`` for an
+    empty index.
+    """
+    by_index = {user.get("user_index"): user for user in users}
+    with (
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(return_value={"max_users": 10, "users": users}),
+        ),
+        patch.object(MatterLock, "_raw_lock_user", AsyncMock(side_effect=by_index.get)),
+    ):
+        yield
+
+
+@contextmanager
+def _patch_user_reads_failing(lock: MatterLock, error: Exception) -> Iterator[None]:
+    """Fail both of the provider's user reads with ``error``, as a lock out of reach does."""
+    client, _node = lock._require_client_and_node()
+    with (
+        patch(f"{_PROVIDER_MODULE}.get_lock_users", AsyncMock(side_effect=error)),
+        patch.object(client, "send_device_command", AsyncMock(side_effect=error)),
+    ):
+        yield
+
+
 class TestLockOperationEvent:
     """Test _handle_lock_operation callback and code-slot event firing.
 
@@ -779,26 +802,7 @@ class TestLockOperationEvent:
     dispatch resolves a live client+node and reaches ``_raw_lock_users``.
     """
 
-    @staticmethod
-    @contextmanager
-    def _patch_users(users: list[dict]) -> Iterator[None]:
-        """
-        Answer the user reads from ``users`` so the dispatch can resolve owners.
-
-        Both of them: the walk (``get_lock_users``) and the single read of the
-        user an event names, which answers ``None`` for an empty index.
-        """
-        by_index = {user.get("user_index"): user for user in users}
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                AsyncMock(return_value={"max_users": 10, "users": users}),
-            ),
-            patch.object(
-                MatterLock, "_raw_lock_user", AsyncMock(side_effect=by_index.get)
-            ),
-        ):
-            yield
+    _patch_users = staticmethod(_patch_user_reads)
 
     async def test_unlock_with_pin_credential(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -1108,18 +1112,9 @@ class TestLockOperationEvent:
         """Transport failure during owner lookup logs and drops the event."""
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
-        client, _node = matter_lock._require_client_and_node()
 
-        with (
-            patch(
-                f"{_PROVIDER_MODULE}.get_lock_users",
-                AsyncMock(side_effect=HomeAssistantError("transport down")),
-            ),
-            patch.object(
-                client,
-                "send_device_command",
-                AsyncMock(side_effect=HomeAssistantError("transport down")),
-            ),
+        with _patch_user_reads_failing(
+            matter_lock, HomeAssistantError("transport down")
         ):
             matter_lock._on_node_event(
                 None,
@@ -1526,11 +1521,8 @@ class TestLockUserChangeEvent:
 
     @staticmethod
     def _patch_users(users: list[dict]) -> Any:
-        """Patch get_lock_users so the async dispatch can resolve owners."""
-        return patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(return_value={"max_users": 10, "users": users}),
-        )
+        """Answer the user reads from ``users`` so the dispatch can resolve owners."""
+        return _patch_user_reads(users)
 
     async def test_pin_added_pushes_unknown(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -1762,9 +1754,8 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(side_effect=HomeAssistantError("transport down")),
+        with _patch_user_reads_failing(
+            matter_lock, HomeAssistantError("transport down")
         ):
             matter_lock._on_node_event(
                 None,
@@ -2222,10 +2213,7 @@ class TestLockUserChangeEvent:
             ]
         ):
             await matter_lock.async_get_users()
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(side_effect=HomeAssistantError("offline")),
-        ):
+        with _patch_user_reads_failing(matter_lock, HomeAssistantError("offline")):
             matter_lock._on_node_event(None, _cleared_event(42))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_called_once_with(
