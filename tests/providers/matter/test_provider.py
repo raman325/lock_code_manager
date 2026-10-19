@@ -55,6 +55,8 @@ from tests.providers.helpers import (
     ServiceProviderConnectionTests,
 )
 
+from .conftest import single_user_read_from_listing
+
 # Module path where lock_helpers functions are imported in the provider
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 
@@ -1519,10 +1521,7 @@ class TestLockUserChangeEvent:
     dispatch resolves a live client+node and reaches ``_raw_lock_users``.
     """
 
-    @staticmethod
-    def _patch_users(users: list[dict]) -> Any:
-        """Answer the user reads from ``users`` so the dispatch can resolve owners."""
-        return _patch_user_reads(users)
+    _patch_users = staticmethod(_patch_user_reads)
 
     async def test_pin_added_pushes_unknown(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -3659,6 +3658,27 @@ class TestReleaseManagedSlot:
         assert "index(es) 7 on user 42" in caplog.text
         assert "remove it in the lock vendor's app" in caplog.text
 
+    async def test_a_single_read_without_the_lock_s_endpoint_is_disconnected(
+        self, matter_lock: MatterLock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        A node without its Door Lock endpoint (mid re-interview) reads as disconnected.
+
+        Home Assistant raises its own error finding the endpoint, outside the
+        SDK call, so it is translated there; untranslated, it escaped every
+        caller's ``LockOperationError`` handling.
+        """
+
+        def _no_endpoint(_node: Any) -> Any:
+            raise matter_lock_helpers.LockEndpointNotFoundError("no lock endpoint")
+
+        monkeypatch.setattr(
+            matter_lock_helpers, "_get_lock_endpoint_or_raise", _no_endpoint
+        )
+
+        with pytest.raises(LockDisconnected, match="no Door Lock endpoint"):
+            await matter_lock._raw_lock_user(1)
+
     @pytest.mark.parametrize(
         "missing", ["_get_lock_endpoint_or_raise", "_format_user_response"]
     )
@@ -3999,6 +4019,7 @@ class TestSetCredential:
         in their own context manager.
         """
         with (
+            single_user_read_from_listing(),
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
                 AsyncMock(return_value={"max_users": 10, "users": []}),
@@ -4639,26 +4660,29 @@ class TestDeleteCredential:
         positive-path tests. Tests that need different lock state can patch
         get_lock_users in their own context manager.
         """
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(
-                return_value={
-                    "max_users": 10,
-                    "users": [
-                        {
-                            "user_index": 1,
-                            "user_name": "lcm:1:test",
-                            "credentials": [{"type": "pin", "index": 1}],
-                        },
-                        {
-                            "user_index": 4,
-                            "user_name": "lcm:4:test",
-                            "credentials": [{"type": "pin", "index": 4}],
-                        },
-                    ],
-                },
-            ),
-        ) as mock:
+        with (
+            single_user_read_from_listing(),
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                AsyncMock(
+                    return_value={
+                        "max_users": 10,
+                        "users": [
+                            {
+                                "user_index": 1,
+                                "user_name": "lcm:1:test",
+                                "credentials": [{"type": "pin", "index": 1}],
+                            },
+                            {
+                                "user_index": 4,
+                                "user_name": "lcm:4:test",
+                                "credentials": [{"type": "pin", "index": 4}],
+                            },
+                        ],
+                    },
+                ),
+            ) as mock,
+        ):
             yield mock
 
     async def test_delete_credential_returns_true(

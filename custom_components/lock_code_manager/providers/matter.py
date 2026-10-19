@@ -8,7 +8,7 @@ cluster events via the push framework for code slot tracking (LockOperation)
 and occupancy updates (LockUserChange).
 """
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
@@ -142,6 +142,22 @@ def _transient_status_disconnect(
         f"Matter set_lock_credential returned a transient status "
         f"'{status}' for {entity_id} slot {slot}"
     )
+
+
+def _single_user_read_helpers() -> tuple[Callable[..., Any], Callable[..., Any]] | None:
+    """
+    Return Home Assistant's private helpers a single-user read needs, or ``None``.
+
+    Its lock helpers have no single-user read, so ``MatterLock._raw_lock_user``
+    sends GetUser and formats the answer with these. They are looked up, not
+    imported, so a rename in Home Assistant costs only that read, never the
+    integration's import.
+    """
+    endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
+    format_user = getattr(matter_lock_helpers, "_format_user_response", None)
+    if endpoint_of is None or format_user is None:
+        return None
+    return endpoint_of, format_user
 
 
 def _raw_user_slot(raw_user: dict[str, Any], fabric: int | None) -> int | None:
@@ -493,27 +509,32 @@ class MatterLock(BaseLock):
         """
         Return one raw user, as ``get_lock_users`` lists it, or ``None`` if empty.
 
-        One GetUser for ``user_index``: for a lock that fails the full walk
-        (#1689), and for a use that names its user, which is announced only
-        once this answers. Home Assistant's lock helpers have no single-user
-        read, so this sends the command and formats the answer with their private
-        helpers. They are looked up here, not imported, so a rename in Home
-        Assistant costs only this read (``LockDisconnected``: the caller falls
-        back to the PIN-only release), never the integration's import.
+        One GetUser for ``user_index``, with Home Assistant's private helpers
+        (``_single_user_read_helpers``); ``LockDisconnected`` once they are
+        gone, as for an unanswered read. Callers that know the user they
+        want go through ``_raw_user_at``; a release on a lock that fails the
+        full walk (#1689) calls this directly.
         """
-        endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
-        format_user = getattr(matter_lock_helpers, "_format_user_response", None)
-        if endpoint_of is None or format_user is None:
+        helpers = _single_user_read_helpers()
+        if helpers is None:
             raise LockDisconnected(
                 f"{self.lock.entity_id}: Home Assistant's Matter lock helpers "
                 f"no longer provide a single-user read"
             )
+        endpoint_of, format_user = helpers
         client, node = self._require_client_and_node()
+        try:
+            endpoint_id = endpoint_of(node).endpoint_id
+        except HomeAssistantError as err:
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: no Door Lock endpoint to read user "
+                f"{user_index} from: {err}"
+            ) from err
         response = await self._invoke_sdk(
             "get_lock_user",
             client.send_device_command(
                 node_id=node.node_id,
-                endpoint_id=endpoint_of(node).endpoint_id,
+                endpoint_id=endpoint_id,
                 command=clusters.DoorLock.Commands.GetUser(userIndex=user_index),
             ),
         )
@@ -1333,18 +1354,17 @@ class MatterLock(BaseLock):
         Return the user's current Matter PIN credential index, or ``None``.
 
         LCM treats Matter's credential index as opaque and rediscovers it
-        per operation. This helper deliberately walks the **raw**
-        lock-side user data (not ``async_get_users``) so the returned
-        value is the Matter credential index Matter expects for
+        per operation, from the user's **raw** lock-side record
+        (``_raw_user_at``, one GetUser; not ``async_get_users``) so the
+        returned value is the Matter credential index Matter expects for
         ``set_lock_credential`` / ``clear_lock_credential`` -- not the
         LCM-projected slot that ``async_get_users`` exposes upward.
         """
+        user = await self._raw_user_at(user_id)
         return next(
             (
                 cred.get("index")
-                for raw_user in await self._raw_lock_users()
-                if raw_user.get("user_index") == user_id
-                for cred in raw_user.get("credentials") or []
+                for cred in (user or {}).get("credentials") or []
                 if cred.get("type") == "pin" and cred.get("index") is not None
             ),
             None,
@@ -1819,22 +1839,23 @@ class MatterLock(BaseLock):
 
     async def _raw_user_at(self, user_index: int) -> dict[str, Any] | None:
         """
-        Return the raw user at ``user_index`` for an event that names it, or ``None``.
+        Return the raw user at ``user_index``, or ``None`` if it is empty.
 
-        One GetUser (``_raw_lock_user``): an event names one user, and
-        reading every user to find it costs a round trip each over the
-        lock's radio. Every user is read only when that read fails -- the
-        lock busy, or Home Assistant's private helpers it uses gone.
+        One GetUser (``_raw_lock_user``): reading every user to find one
+        costs a round trip each over the lock's radio. Every user is read
+        only when Home Assistant no longer has the helpers the single read
+        uses. A lock that does not answer the single read raises
+        ``LockDisconnected``; asking it for every user instead would only
+        send it more.
         """
-        try:
+        if _single_user_read_helpers() is not None:
             return await self._raw_lock_user(user_index)
-        except LockOperationError as err:
-            LOGGER.debug(
-                "Lock %s: could not read user %s alone, reading every user: %s",
-                self.lock.entity_id,
-                user_index,
-                err,
-            )
+        LOGGER.debug(
+            "Lock %s: Home Assistant has no single-user read, reading every "
+            "user for user %s",
+            self.lock.entity_id,
+            user_index,
+        )
         return next(
             (
                 raw_user
@@ -1851,7 +1872,8 @@ class MatterLock(BaseLock):
         Return the LCM slot a LockOperation's user holds, or ``None``.
 
         The user the event names, read alone (``_raw_user_at``). Without
-        one, every user is read for the PIN at ``credentialIndex``.
+        one, every user is read for the Personal Identification Number
+        credential at ``credentialIndex``.
         """
         fabric = self._fabric_index()
         if user_index is not None:
@@ -1939,14 +1961,14 @@ class MatterLock(BaseLock):
         user with its credentials, and for a deletion made outside LCM that
         event is the only word the lock gives.
 
-        The LCM slot is resolved by walking the event's ``userIndex`` to
-        the owning user's name and parsing its ``lcm:<slot>:`` tag --
+        The LCM slot is resolved by reading the event's ``userIndex`` --
+        the owning user's name -- and parsing its ``lcm:<slot>:`` tag --
         ``userIndex`` alone is sufficient. ``dataIndex`` (the Matter
         credential index) is captured best-effort for log context only;
         under the user-tag model it is opaque to LCM, and dropping
         otherwise-resolvable events when it's missing or malformed would
-        silently lose state updates. The lookup is async (a fresh
-        ``_raw_lock_users`` round-trip) so the callback schedules a task
+        silently lose state updates. The lookup is async (one GetUser,
+        ``_raw_user_at``) so the callback schedules a task
         rather than blocking the event loop. Events for users LCM
         doesn't own (untagged names) are ignored.
         """

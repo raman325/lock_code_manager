@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.providers import matter as matter_provider
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 from ...common import user_subentries
@@ -276,24 +277,37 @@ def matter_helpers_patched(helpers: dict[str, AsyncMock]) -> Iterator[None]:
     with ExitStack() as stack:
         for name, mock in helpers.items():
             stack.enter_context(patch(f"{_PROVIDER_MODULE}.{name}", mock))
-        if (list_users := helpers.get("get_lock_users")) is not None:
+        if "get_lock_users" in helpers:
+            stack.enter_context(single_user_read_from_listing())
+        yield
 
-            async def _raw_lock_user(
-                lock: MatterLock, user_index: int
-            ) -> dict[str, Any] | None:
-                lock_data = await lock._invoke_sdk("get_lock_user", list_users())
-                return next(
-                    (
-                        user
-                        for user in lock_data["users"]
-                        if user.get("user_index") == user_index
-                    ),
-                    None,
-                )
 
-            stack.enter_context(
-                patch.object(MatterLock, "_raw_lock_user", _raw_lock_user)
-            )
+@contextmanager
+def single_user_read_from_listing() -> Iterator[None]:
+    """
+    Answer the provider's single-user read from ``get_lock_users`` as patched.
+
+    For tests that stand in for the lock with a ``get_lock_users`` mock: the
+    read finds the same users, and fails the same way, whichever way the
+    provider asks. Looked up when called, so a test's own patch counts.
+    """
+
+    async def _raw_lock_user(
+        lock: MatterLock, user_index: int
+    ) -> dict[str, Any] | None:
+        lock_data = await lock._invoke_sdk(
+            "get_lock_user", matter_provider.get_lock_users(None, None)
+        )
+        return next(
+            (
+                user
+                for user in lock_data["users"]
+                if user.get("user_index") == user_index
+            ),
+            None,
+        )
+
+    with patch.object(MatterLock, "_raw_lock_user", _raw_lock_user):
         yield
 
 
