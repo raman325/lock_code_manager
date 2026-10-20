@@ -1886,14 +1886,15 @@ class MatterLock(BaseLock):
         # The credential the lock itself typed as a PIN when there is one (a
         # PIN-and-fingerprint user, say): its index is the only one the
         # fallback below can place. Otherwise the first.
-        credential_type, credential = next(
+        typed_pin = next(
             (
                 pair
                 for pair in used
                 if pair[1].get("credentialType") == _MatterCredentialType.kPin
             ),
-            used[0],
+            None,
         )
+        credential_type, credential = typed_pin or used[0]
         # Coerce via ``parse_slot_num`` because some Matter implementations
         # send the index as a string -- the int-keyed comparison in the
         # fallback walker would then never match. Only that fallback reads
@@ -1906,7 +1907,7 @@ class MatterLock(BaseLock):
         placeable_by_pin_index = (
             credential_index is not None
             and credential_type is CredentialType.PIN
-            and credential.get("credentialType") == _MatterCredentialType.kPin
+            and typed_pin is not None
         )
         # Nothing could name the user, so the lock's user list is not read.
         if user_index is None and not placeable_by_pin_index:
@@ -1933,15 +1934,16 @@ class MatterLock(BaseLock):
         placeable_by_pin_index: bool,
     ) -> None:
         """
-        Resolve the LCM slot for a LockOperation event and fire it.
+        Resolve the Lock Code Manager slot for a LockOperation event and fire it.
 
         Primary path: lock-reported ``userIndex`` -> user.name -> tag.
         Fallback path, when ``placeable_by_pin_index`` (a credential the
         lock typed as a PIN, with a readable ``credentialIndex``): walk the
         user list to find the PIN credential at that index and parse the
-        owning user's tag. Events whose owning user isn't LCM-tagged are
-        silently dropped so out-of-band PIN uses on non-LCM credentials don't
-        drive spurious code slot events.
+        owning user's tag. Events whose owning user carries no Lock Code
+        Manager tag are silently dropped so out-of-band PIN uses on
+        credentials Lock Code Manager doesn't manage don't drive spurious code
+        slot events.
         """
         try:
             raw_users = await self._raw_lock_users()

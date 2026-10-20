@@ -57,7 +57,7 @@ _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
 # The credential an operation event's ``action_source_name`` says was
 # presented (zigbee-herdsman-converters ``lockSourceName``). Every other
-# source -- keypad, rf, manual -- reports PIN, as it always has.
+# source -- keypad, radio frequency remote, manual -- reports PIN.
 _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
     "rfid": CredentialType.RFID,
     "fingerprint": CredentialType.FINGERPRINT,
