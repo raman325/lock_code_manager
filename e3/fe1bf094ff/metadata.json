@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "e3fe1bf094ff",
+  "strategy": "manual-commit",
+  "branch": "fix/matter-lock-operation-one-user-read",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/e3/fe1bf094ff/0/metadata.json",
+      "transcript": "/e3/fe1bf094ff/0/full.jsonl",
+      "compact_transcript": "/e3/fe1bf094ff/0/transcript.jsonl",
+      "content_hash": "/e3/fe1bf094ff/0/content_hash.txt",
+      "prompt": "/e3/fe1bf094ff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 72754,
+    "cache_read_tokens": 6398402,
+    "output_tokens": 27427,
+    "api_call_count": 42,
+    "subagent_tokens": {
+      "input_tokens": 174,
+      "cache_creation_tokens": 303595,
+      "cache_read_tokens": 12627899,
+      "output_tokens": 71882,
+      "api_call_count": 87
+    }
+  }
+}
