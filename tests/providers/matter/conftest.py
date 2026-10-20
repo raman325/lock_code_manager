@@ -444,10 +444,22 @@ def fake_matter_lock_options() -> dict[str, Any]:
 
 
 @pytest.fixture
+def fake_matter_node_attributes() -> dict[str, Any]:
+    """
+    Attribute values, by path, set on the node before anything reads it.
+
+    Override to change what the lock advertises, its Door Lock FeatureMap
+    included.
+    """
+    return {}
+
+
+@pytest.fixture
 async def fake_matter_lock(
     hass: HomeAssistant,
     matter_client: MagicMock,
     fake_matter_lock_options: dict[str, Any],
+    fake_matter_node_attributes: dict[str, Any],
 ) -> FakeMatterLock:
     """
     Set the Matter integration up on a stateful fake of a lock that manages users.
@@ -456,6 +468,8 @@ async def fake_matter_lock(
     to the fake.
     """
     node = create_node_from_fixture(FAKE_MATTER_NODE_FIXTURE)
+    for path, value in fake_matter_node_attributes.items():
+        node.update_attribute(path, value)
     fake = FakeMatterLock(matter_client, node, **fake_matter_lock_options)
     await setup_matter_integration_with_node(hass, matter_client, node)
     return fake

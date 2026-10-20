@@ -780,6 +780,7 @@ async def test_limiter_spends_a_use_on_locking_when_widened(
 )
 async def test_limiter_spends_a_use_only_on_a_pin(
     hass: HomeAssistant,
+    monkeypatch: pytest.MonkeyPatch,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     credential_type: CredentialType,
@@ -791,7 +792,8 @@ async def test_limiter_spends_a_use_only_on_a_pin(
     The limiter enforces its limit by turning the user off, which takes away
     only the PIN Lock Code Manager manages: a card enrolled on the lock
     itself keeps opening the door, so counting its taps would spend a limit
-    it cannot enforce.
+    it cannot enforce. The lock declares the kind it reports, as a provider
+    reporting one must for the user's event entity to record it.
     """
     counter = await _setup_counter(hass, initial=3)
 
@@ -806,6 +808,11 @@ async def test_limiter_spends_a_use_only_on_a_pin(
     )
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    monkeypatch.setattr(
+        type(lock),
+        "reported_credential_types",
+        property(lambda _: frozenset({credential_type})),
+    )
     lock.async_fire_code_slot_event(1, False, credential_type)
     await hass.async_block_till_done()
     assert hass.states.get(SLOT_1_EVENT_ENTITY).attributes[ATTR_EVENT_TYPE] == (

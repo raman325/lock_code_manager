@@ -63,6 +63,12 @@ _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
     "fingerprint": CredentialType.FINGERPRINT,
 }
 
+# Nothing here asks the lock which readers it has, so every kind an operation
+# event's source can name is reported, and the keypad's PIN.
+_Z2M_REPORTED_CREDENTIAL_TYPES = frozenset(
+    {CredentialType.PIN, *_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values()}
+)
+
 # User status 0xFF, which the Door Lock cluster names "Not Supported": the
 # lock cannot report its users at all.
 _Z2M_STATUS_CANNOT_TELL = "not_supported_255"
@@ -170,6 +176,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
     def supports_code_slot_events(self) -> bool:
         """Return whether this lock supports code slot events."""
         return True
+
+    @property
+    @override
+    def reported_credential_types(self) -> frozenset[CredentialType]:
+        """Return every kind an operation event's source can name."""
+        return _Z2M_REPORTED_CREDENTIAL_TYPES
 
     @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:

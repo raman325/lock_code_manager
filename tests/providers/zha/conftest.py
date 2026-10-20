@@ -490,6 +490,9 @@ class DoorLockStandIn:
     by command name, and ``reply_delays`` makes a command's answer take that
     many seconds on the clock: a lock that answers, slowly, as one at the end
     of zigpy's retries and the radio's confirmation waits does.
+
+    ``attributes`` are what it answers a Read Attributes with, by attribute
+    id; any other attribute it reports unsupported.
     """
 
     def __init__(
@@ -497,11 +500,13 @@ class DoorLockStandIn:
         cluster: closures.DoorLock,
         codes: dict[int, str],
         answers: dict[str, Answer],
+        attributes: dict[int, Any] | None = None,
     ) -> None:
         """Hold the lock's table and the answers that replace its own."""
         self.cluster = cluster
         self.codes = dict(codes)
         self.answers = answers
+        self.attributes = attributes or {}
         self.reply_delays: dict[str, float] = {}
         self.requests: list[foundation.CommandSchema] = []
 
@@ -512,6 +517,8 @@ class DoorLockStandIn:
             frame := answer(request)
         ) is not None:
             return frame
+        if name == "Read_Attributes":
+            return self._read_attributes_response(request.attribute_ids)
         if name == "set_pin_code":
             self.codes[request.user_id] = request.pin_code
             return lock_frame(self.cluster, "set_pin_code_response", status=0)
@@ -531,6 +538,28 @@ class DoorLockStandIn:
                 code=code or "",
             )
         return default_response(request.command.id, Status.UNSUP_CLUSTER_COMMAND)
+
+    def _read_attributes_response(self, attribute_ids: list[int]) -> Frame:
+        """Answer a Read Attributes: each attribute's value, or unsupported."""
+        records = [
+            foundation.ReadAttributeRecord(
+                attrid=attrid, status=Status.UNSUPPORTED_ATTRIBUTE
+            )
+            if attrid not in self.attributes
+            else foundation.ReadAttributeRecord(
+                attrid=attrid,
+                status=Status.SUCCESS,
+                value=foundation.TypeValue(
+                    type=(definition := self.cluster.attributes[attrid]).zcl_type,
+                    value=definition.type(self.attributes[attrid]),
+                ),
+            )
+            for attrid in attribute_ids
+        ]
+        command = foundation.GENERAL_COMMANDS[
+            foundation.GeneralCommand.Read_Attributes_rsp
+        ]
+        return Frame(general=True, payload=command.schema(status_records=records))
 
     async def request(self, data: bytes) -> foundation.CommandSchema | bytes:
         """Decode one request frame, answer it, and decode the answer as zigpy does."""
@@ -567,17 +596,34 @@ def door_lock_answers() -> dict[str, Answer]:
 
 
 @pytest.fixture
+def door_lock_attributes() -> dict[int, Any] | None:
+    """
+    Return the Door Lock attributes the lock answers reads with, by id.
+
+    ``None`` leaves reads to the patched cluster, which answers nothing. A
+    dict has zigpy read them from the lock, which answers each listed one
+    with its value and any other as unsupported.
+    """
+    return None
+
+
+@pytest.fixture
 def door_lock(
     zigpy_lock_device: zigpy.device.Device,
     door_lock_codes: dict[int, str],
     door_lock_answers: dict[str, Answer],
+    door_lock_attributes: dict[int, Any] | None,
 ) -> DoorLockStandIn:
     """Put the stand-in lock behind the lock endpoint's Door Lock traffic."""
     endpoint = zigpy_lock_device.endpoints[1]
+    cluster = endpoint.in_clusters[closures.DoorLock.cluster_id]
+    if door_lock_attributes is not None:
+        # zigpy's own reads, in place of the patched ones, so what the
+        # provider sees is what zigpy makes of the lock's answer.
+        del cluster.read_attributes
+        del cluster.read_attributes_raw
     stand_in = DoorLockStandIn(
-        endpoint.in_clusters[closures.DoorLock.cluster_id],
-        door_lock_codes,
-        door_lock_answers,
+        cluster, door_lock_codes, door_lock_answers, door_lock_attributes
     )
     other_traffic = endpoint.request
 

@@ -29,7 +29,7 @@ from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
-from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
+from homeassistant.components.event import ATTR_EVENT_TYPES, DOMAIN as EVENT_DOMAIN
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -76,9 +76,14 @@ from custom_components.lock_code_manager.ha.runtime import (
     locks_that_cannot_report,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
     SlotCode,
     SlotCredential,
     WriteResult,
+)
+from custom_components.lock_code_manager.model.events import (
+    CredentialOperation,
+    async_fire_credential_used,
 )
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.model.locks import per_lock_issue_id
@@ -241,6 +246,39 @@ class TestEvents:
         # Credential events push unreadable (the lock doesn't expose the Personal
         # Identification Number value in the event; the worker's read gets it).
         assert _first_push(pushed, 1) == SlotCredential.unreadable()
+
+    async def test_the_event_entity_records_pins_alone(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A Z-Wave lock reports Personal Identification Number uses only.
+
+        So the user's event entity lists that kind alone, and a use of any
+        other announced for this entry is not recorded there.
+        """
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        assert before.attributes[ATTR_EVENT_TYPES] == ["pin"]
+
+        async_fire_credential_used(
+            hass,
+            lcm_config_entry,
+            name="slot1",
+            source=lock_entity.entity_id,
+            target=lock_entity.entity_id,
+            credential_type=CredentialType.RFID,
+            operation=CredentialOperation.UNLOCK,
+        )
+        await hass.async_block_till_done()
+
+        after = hass.states.get(event_entity)
+        assert after.state == before.state == STATE_UNKNOWN
+        assert after.attributes == before.attributes
 
 
 # A push lock is read only when asked, and Home Assistant debounces the asking:

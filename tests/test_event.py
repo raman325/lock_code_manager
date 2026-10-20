@@ -42,8 +42,8 @@ from custom_components.lock_code_manager.model.credentials import (
     LockCapabilities,
 )
 from custom_components.lock_code_manager.model.events import (
-    BUS_EVENT_CREDENTIAL_USED,
     CredentialOperation,
+    async_fire_credential_used,
 )
 from custom_components.lock_code_manager.providers import BaseLock
 
@@ -227,71 +227,114 @@ async def test_event_types_unions_what_the_entrys_locks_advertise(
         await hass.config_entries.async_unload(config_entry.entry_id)
 
 
-async def test_a_use_of_an_unnamed_kind_widens_the_vocabulary(
+class MockLCMLockDeclaringFingerprint(MockLCMLock):
+    """A lock whose provider cannot ask it, and declares a fingerprint reader."""
+
+    @property
+    def reported_credential_types(self) -> frozenset[CredentialType]:
+        """Report a fingerprint as well as a PIN."""
+        return frozenset({CredentialType.PIN, CredentialType.FINGERPRINT})
+
+
+def _fire_used(
+    hass: HomeAssistant, config_entry: MockConfigEntry, kind: CredentialType
+) -> None:
+    """Announce a use of ``kind`` by slot 1's user, as a provider would."""
+    async_fire_credential_used(
+        hass,
+        config_entry,
+        name="test1",
+        source=EXTERNAL_KEYPAD,
+        target=EXTERNAL_TARGET,
+        credential_type=kind,
+        operation=CredentialOperation.UNKNOWN,
+    )
+
+
+async def test_event_types_includes_what_a_provider_declares(
     hass: HomeAssistant,
+    mock_lock_config_entry,
+):
+    """
+    A provider that cannot ask its lock declares the kinds it reports.
+
+    These locks answer no capability probe, so the declaration is the only
+    thing that says a finger is possible here -- and a use of one is
+    recorded rather than dropped.
+    """
+    with patch(
+        "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
+        {"test": MockLCMLockDeclaringFingerprint},
+    ):
+        config_entry = MockConfigEntry(
+            domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title Declared Types"
+        )
+        config_entry.add_to_hass(hass)
+        await hass.config_entries.async_setup(config_entry.entry_id)
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_EVENT_ENTITY)
+        assert state
+        assert state.attributes[ATTR_EVENT_TYPES] == [
+            CredentialType.FINGERPRINT,
+            CredentialType.PIN,
+        ]
+
+        _fire_used(hass, config_entry, CredentialType.FINGERPRINT)
+        await hass.async_block_till_done()
+
+        state = hass.states.get(SLOT_1_EVENT_ENTITY)
+        assert state
+        assert state.attributes[ATTR_EVENT_TYPE] == CredentialType.FINGERPRINT
+
+        await hass.config_entries.async_unload(config_entry.entry_id)
+
+
+async def test_a_use_of_a_kind_no_lock_reports_is_dropped(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
     """
-    A kind that arrives anyway is recorded, not dropped.
+    A kind none of the entry's locks can report is not recorded.
 
-    ``_trigger_event`` raises on an undeclared type and this runs on a bus
-    callback whose exceptions Home Assistant swallows, so a use whose kind
-    the capability probe has not admitted yet would vanish without a trace.
-    A use that happened is better evidence of what is possible here than a
-    probe that has not finished, so it widens the vocabulary instead.
+    The vocabulary is what the locks can do rather than what has happened,
+    so the use is dropped and the vocabulary is unchanged. It is dropped
+    before Home Assistant is asked to record it: an undeclared event type
+    raises there, and the error would be logged as a failure when it is an
+    expected condition -- a provider under-reporting its lock.
     """
     before = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert before
-    assert CredentialType.FINGERPRINT not in before.attributes[ATTR_EVENT_TYPES]
+    assert before.state == STATE_UNKNOWN
 
-    hass.bus.async_fire(
-        BUS_EVENT_CREDENTIAL_USED,
-        event_data={
-            ATTR_NAME: "test1",
-            ATTR_CONFIG_ENTRY_ID: lock_code_manager_config_entry.entry_id,
-            ATTR_CONFIG_ENTRY_TITLE: lock_code_manager_config_entry.title,
-            ATTR_SOURCE: EXTERNAL_KEYPAD,
-            ATTR_TARGET: EXTERNAL_TARGET,
-            ATTR_CREDENTIAL_TYPE: CredentialType.FINGERPRINT,
-            ATTR_OPERATION: CredentialOperation.UNKNOWN,
-        },
-    )
+    caplog.set_level(logging.DEBUG, logger="custom_components.lock_code_manager.event")
+    _fire_used(hass, lock_code_manager_config_entry, CredentialType.FINGERPRINT)
     await hass.async_block_till_done()
 
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
-    assert state.state != STATE_UNKNOWN
-    assert state.attributes[ATTR_EVENT_TYPE] == CredentialType.FINGERPRINT
-    assert CredentialType.FINGERPRINT in state.attributes[ATTR_EVENT_TYPES]
+    assert state.state == STATE_UNKNOWN
+    assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
+    assert [
+        (record.levelno, record.args)
+        for record in caplog.records
+        if record.name == "custom_components.lock_code_manager.event"
+        or record.levelno >= logging.WARNING
+    ] == [(logging.DEBUG, (SLOT_1_EVENT_ENTITY, CredentialType.FINGERPRINT))]
 
 
-@pytest.mark.parametrize(
-    ("restored_type", "expected_types"),
-    [
-        pytest.param(
-            CredentialType.RFID,
-            sorted(MANAGED_CREDENTIAL_TYPES | {CredentialType.RFID}),
-            id="a_kind",
-        ),
-        pytest.param(
-            LOCK_1_ENTITY_ID, sorted(MANAGED_CREDENTIAL_TYPES), id="not_a_kind"
-        ),
-    ],
-)
-async def test_a_restored_use_keeps_its_kind_in_the_vocabulary(
+async def test_a_restored_use_does_not_widen_the_vocabulary(
     hass: HomeAssistant,
     mock_lock_config_entry,
-    restored_type: str,
-    expected_types: list[str],
 ):
     """
-    A card use from before a restart is still one of the entity's kinds.
+    A card use from before a restart says nothing about what the locks can do.
 
-    Home Assistant restores ``event_type`` from the last use, and these
-    locks advertise nothing, so only that use says a card is possible here.
-    A restored type that is not a kind -- a lock entity ID from the
-    vocabulary this one replaced -- is not one to declare.
+    Home Assistant restores ``event_type`` from the last use; these locks
+    advertise and declare nothing beyond the floor, so the vocabulary is the
+    floor.
     """
     mock_restore_cache_with_extra_data(
         hass,
@@ -300,9 +343,12 @@ async def test_a_restored_use_keeps_its_kind_in_the_vocabulary(
                 State(
                     SLOT_1_EVENT_ENTITY,
                     "2026-01-01T12:00:00.000+00:00",
-                    {ATTR_EVENT_TYPE: restored_type},
+                    {ATTR_EVENT_TYPE: CredentialType.RFID},
                 ),
-                {"last_event_type": restored_type, "last_event_attributes": {}},
+                {
+                    "last_event_type": CredentialType.RFID,
+                    "last_event_attributes": {},
+                },
             )
         ],
     )
@@ -315,8 +361,7 @@ async def test_a_restored_use_keeps_its_kind_in_the_vocabulary(
 
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
-    assert state.attributes[ATTR_EVENT_TYPE] == restored_type
-    assert state.attributes[ATTR_EVENT_TYPES] == expected_types
+    assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 

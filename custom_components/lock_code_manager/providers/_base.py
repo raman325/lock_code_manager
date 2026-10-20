@@ -391,6 +391,18 @@ class BaseLock:
         return max(self.operation_timeout_seconds, self.per_exchange_budget * exchanges)
 
     @property
+    def reported_credential_types(self) -> frozenset[CredentialType]:
+        """
+        Return the kinds this provider reports a use as, beyond its capabilities.
+
+        The capabilities are what ``async_get_capabilities`` advertises; this
+        is for the kinds a provider's protocol cannot ask the lock about.
+        Empty for a provider that only ever reports a Personal Identification
+        Number, which every per-user event entity admits already.
+        """
+        return frozenset()
+
+    @property
     def display_name(self) -> str:
         """Return a human-readable name for this lock."""
         return lock_display_name(self.hass, self.lock.entity_id)
