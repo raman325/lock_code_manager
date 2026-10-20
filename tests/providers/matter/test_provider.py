@@ -1286,6 +1286,185 @@ class TestLockOperationEvent:
             {"code_slot": 1, "to_locked": False, "credential_type": CredentialType.PIN}
         ]
 
+    @pytest.mark.parametrize(
+        ("source", "credential_type", "expected"),
+        [
+            # The source written into credentialType, as the Aqara U400 does.
+            pytest.param(2, 2, None, id="app_reported_as_rfid"),
+            pytest.param(4, 4, None, id="auto_reported_as_finger_vein"),
+            pytest.param(5, 5, None, id="button_reported_as_face"),
+            pytest.param(1, 1, None, id="manual_reported_as_pin"),
+            pytest.param(8, 8, CredentialType.RFID, id="rfid_reported_as_aliro"),
+            pytest.param(9, 9, None, id="biometric_reported_as_its_source"),
+            # A source that names no user credential outranks even a PIN type.
+            pytest.param(6, 1, None, id="schedule_naming_a_pin"),
+            pytest.param(10, 1, None, id="aliro_naming_a_pin"),
+            pytest.param(8, 2, CredentialType.RFID, id="rfid"),
+            pytest.param(9, 3, CredentialType.FINGERPRINT, id="fingerprint"),
+            pytest.param(9, 4, CredentialType.FINGERPRINT, id="finger_vein"),
+            pytest.param(9, 5, CredentialType.FACE, id="face"),
+            pytest.param(9, 1, None, id="biometric_naming_a_pin"),
+            # A source that does not say leaves the kind to credentialType.
+            pytest.param(7, 1, CredentialType.PIN, id="remote_pin"),
+            pytest.param(7, 2, CredentialType.RFID, id="remote_rfid"),
+            pytest.param(0, 5, CredentialType.FACE, id="unspecified_face"),
+            pytest.param(200, 3, CredentialType.FINGERPRINT, id="vendor_source"),
+            pytest.param(None, 2, CredentialType.RFID, id="no_source"),
+        ],
+    )
+    async def test_the_source_names_the_kind_ahead_of_the_type(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        source: int | None,
+        credential_type: int,
+        expected: CredentialType | None,
+    ) -> None:
+        """
+        A use is named by the reader it came from, and only then by its type.
+
+        The Aqara U400 (#1745) writes ``operationSource`` into
+        ``credentialType``; the reporter captured only its keypad and Home Key
+        payloads, so the app, auto, button, manual, RFID and biometric cases
+        here extrapolate that pattern to the other sources. On such firmware
+        an app unlock reads as a card and spends a Slot Usage Limiter use.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        data: dict[str, Any] = {
+            "lockOperationType": 1,
+            "userIndex": 4,
+            "credentials": [{"credentialType": credential_type, "credentialIndex": 3}],
+        }
+        if source is not None:
+            data["operationSource"] = source
+
+        with self._patch_users(
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}]
+        ):
+            matter_lock._on_node_event(None, _make_node_event(data=data))
+            await hass.async_block_till_done()
+
+        assert fired == (
+            []
+            if expected is None
+            else [{"code_slot": 4, "to_locked": False, "credential_type": expected}]
+        )
+
+    async def test_a_credential_without_an_index_is_ignored(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A use whose credential has no readable index fires nothing."""
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}]
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "operationSource": 3,
+                        "userIndex": 4,
+                        "credentials": [{"credentialType": 1}],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert fired == []
+
+    @pytest.mark.parametrize(
+        ("source", "credentials", "expected"),
+        [
+            pytest.param(
+                3,
+                [{"credentialType": 1, "credentialIndex": 4}],
+                [
+                    {
+                        "code_slot": 1,
+                        "to_locked": False,
+                        "credential_type": CredentialType.PIN,
+                    }
+                ],
+                id="keypad_pin",
+            ),
+            pytest.param(
+                3,
+                [
+                    {"credentialType": 2, "credentialIndex": 9},
+                    {"credentialType": 1, "credentialIndex": 4},
+                ],
+                [
+                    {
+                        "code_slot": 1,
+                        "to_locked": False,
+                        "credential_type": CredentialType.PIN,
+                    }
+                ],
+                id="keypad_card_then_pin",
+            ),
+            pytest.param(
+                3, [{"credentialType": 2, "credentialIndex": 4}], [], id="keypad_card"
+            ),
+            pytest.param(
+                3,
+                [{"credentialType": 3, "credentialIndex": 4}],
+                [],
+                id="keypad_reported_as_fingerprint",
+            ),
+            pytest.param(
+                8,
+                [{"credentialType": 1, "credentialIndex": 4}],
+                [],
+                id="rfid_reader_naming_a_pin",
+            ),
+        ],
+    )
+    async def test_only_a_pin_the_lock_typed_is_placed_by_its_index(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        source: int,
+        credentials: list[dict[str, Any]],
+        expected: list[dict[str, Any]],
+    ) -> None:
+        """
+        Without a userIndex, PIN 4's holder owns only a PIN the lock typed at 4.
+
+        A keypad use is reported as a PIN whatever its ``credentialType``,
+        but the index is in the space of the type the lock gave it: a card
+        at 4 -- or the Aqara U400's keypad credential, typed 3 -- says
+        nothing about who holds PIN 4.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+
+        with self._patch_users(
+            [
+                {
+                    "user_index": 1,
+                    "user_name": "lcm:1:Alice",
+                    "credentials": [{"type": "pin", "index": 4}],
+                }
+            ]
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "operationSource": source,
+                        "credentials": credentials,
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert fired == expected
+
     async def test_wrong_cluster_ignored(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:

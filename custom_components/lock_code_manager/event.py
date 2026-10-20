@@ -216,6 +216,13 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         await BaseLockCodeManagerEntity.async_added_to_hass(self)
         # EventEntity.async_added_to_hass restores __last_event_type from stored data
         await EventEntity.async_added_to_hass(self)
+        # Home Assistant restores the last use's kind into ``event_type``, and
+        # it has to stay one of ``event_types``: a card use recorded before a
+        # restart is as much proof of the kind as one recorded since.
+        if (
+            last := await self.async_get_last_event_data()
+        ) is not None and last.last_event_type in CredentialType:
+            self._recorded_types.add(CredentialType(last.last_event_type))
         self._watch_locks(self.locks)
 
         # The unified event is the only source. Every use reaches it --

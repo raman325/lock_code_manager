@@ -292,7 +292,7 @@ template or blueprint reads about that use:
 
 | Attribute | Meaning |
 | --------- | ------- |
-| `event_type` | The kind of credential presented — `pin`, or `rfid`, `fingerprint` or `face` on a lock that reports which (Matter, ZHA, Zigbee2MQTT). It says *what* was used, never where |
+| `event_type` | The kind of credential presented — `pin`, or on a lock that reports which: `rfid` or `fingerprint` (Matter, ZHA, Zigbee2MQTT) or `face` (Matter). It says *what* was used, never where |
 | `event_types` | The kinds this user's uses can be: what Lock Code Manager manages, plus everything the configuration's locks advertise |
 | `name` | The user whose credential was used |
 | `target` | What the credential was used against — a lock that reported the use, or whatever `lock_code_manager.use_credential` was told it acted on |

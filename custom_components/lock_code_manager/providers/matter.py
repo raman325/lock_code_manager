@@ -97,28 +97,37 @@ _CURRENT_FABRIC_INDEX = 5
 _LOCK_OPERATION_EVENT_ID = 2
 _LOCK_USER_CHANGE_EVENT_ID = 4
 
-# LockOperation ``credentials[].credentialType`` (CredentialTypeEnum) -> the
-# kind of credential a use reports. Finger vein is a finger biometric, which
-# is what FINGERPRINT stands for in the Z-Wave vocabulary it shares. Left
-# out, and so not reported, as before: ProgrammingPIN (0), the lock's admin
-# code rather than a user's credential, and the Aliro keys (6-8), which name
-# a phone or wallet credential presented over NFC, BLE or UWB that no
-# CredentialType member describes honestly.
+_OperationSource = clusters.DoorLock.Enums.OperationSourceEnum
+_MatterCredentialType = clusters.DoorLock.Enums.CredentialTypeEnum
+
+# LockOperation ``credentials[].credentialType`` -> the kind of credential a
+# use reports. Finger vein is a finger biometric, which is what FINGERPRINT
+# stands for in the Z-Wave vocabulary it shares. Left out, and so not
+# reported: ProgrammingPIN, the lock's admin code rather than a user's
+# credential, and the Aliro keys, which name a phone or wallet credential
+# presented over Near Field Communication, Bluetooth Low Energy or
+# Ultra-Wideband that no CredentialType member describes honestly.
 _MATTER_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
-    1: CredentialType.PIN,
-    2: CredentialType.RFID,
-    3: CredentialType.FINGERPRINT,
-    4: CredentialType.FINGERPRINT,  # Finger vein.
-    5: CredentialType.FACE,
+    _MatterCredentialType.kPin: CredentialType.PIN,
+    _MatterCredentialType.kRfid: CredentialType.RFID,
+    _MatterCredentialType.kFingerprint: CredentialType.FINGERPRINT,
+    _MatterCredentialType.kFingerVein: CredentialType.FINGERPRINT,
+    _MatterCredentialType.kFace: CredentialType.FACE,
 }
 
-# LockOperation ``operationSource`` (OperationSourceEnum) -> the one kind of
-# credential that reader takes, which names the use over ``credentialType``:
-# some firmware writes the source into ``credentialType``, so the Aqara U400
-# reports a keypad PIN as 3 (Fingerprint).
-_SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
-    3: CredentialType.PIN,  # Keypad.
-}
+# LockOperation ``operationSource`` values whose uses are not reported: no
+# user presented a credential (the app, a button, auto-relock, a schedule, a
+# turned key), or the credential was an Aliro key.
+_UNREPORTED_SOURCES: frozenset[int] = frozenset(
+    {
+        _OperationSource.kManual,
+        _OperationSource.kProprietaryRemote,
+        _OperationSource.kAuto,
+        _OperationSource.kButton,
+        _OperationSource.kSchedule,
+        _OperationSource.kAliro,
+    }
+)
 
 # LockUserChange LockDataType values. A user-record change is handled too:
 # ClearUser (what Home Assistant's Manage access deletion sends) removes the
@@ -231,6 +240,34 @@ def _lcm_slot_from_raw_users_by_credential_index(
         ),
         None,
     )
+
+
+def _kind_used(source: Any, matter_credential_type: Any) -> CredentialType | None:
+    """
+    Name the kind of credential a LockOperation reports, or None for no use.
+
+    The operation source decides ahead of ``credentialType``, because some
+    firmware writes the source into ``credentialType``: the Aqara U400 logs
+    a keypad PIN as 3 (Fingerprint) and a Home Key as 10. On such firmware,
+    trusting the type would read an app unlock as a card and an auto-relock
+    as a fingerprint. The keypad and the RFID reader each take one kind; the
+    biometric reader leaves finger or face to the type. Only a source that
+    does not say -- Remote, Unspecified, a vendor's own, or none at all --
+    leaves the kind wholly to ``credentialType``.
+    """
+    if source == _OperationSource.kKeypad:
+        return CredentialType.PIN
+    if source == _OperationSource.kRfid:
+        return CredentialType.RFID
+    if source in _UNREPORTED_SOURCES:
+        return None
+    kind = _MATTER_TO_CREDENTIAL_TYPE.get(matter_credential_type)
+    if source == _OperationSource.kBiometric and kind not in (
+        CredentialType.FINGERPRINT,
+        CredentialType.FACE,
+    ):
+        return None
+    return kind
 
 
 @dataclass(repr=False, eq=False)
@@ -1819,9 +1856,7 @@ class MatterLock(BaseLock):
 
         Fires a code slot event when a user's credential is used to
         lock/unlock, naming the kind presented: a PIN, a card, a fingerprint
-        or a face (``_MATTER_TO_CREDENTIAL_TYPE``). A kind with no mapping is
-        ignored. A keypad source names the kind outright
-        (``_SOURCE_TO_CREDENTIAL_TYPE``), whatever ``credentialType`` says.
+        or a face (``_kind_used``). A use of no reportable kind is ignored.
 
         The event's ``credentials[].credentialIndex`` is the Matter
         credential index, which LCM treats as opaque under the user-tag
@@ -1833,45 +1868,49 @@ class MatterLock(BaseLock):
         event loop.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
-        credentials = data.get("credentials")
-
-        if not credentials:
-            return
-
-        # Every credential presented of a kind a use can report.
+        source = data.get("operationSource")
         used = [
-            (credential_type, cred.get("credentialIndex"))
-            for cred in credentials
+            (kind, cred)
+            for cred in data.get("credentials") or []
             if isinstance(cred, dict)
-            and (
-                credential_type := _MATTER_TO_CREDENTIAL_TYPE.get(
-                    cred.get("credentialType", -1)
-                )
-            )
+            and (kind := _kind_used(source, cred.get("credentialType"))) is not None
         ]
         if not used:
             return
-        # A PIN wins when one was among them (a PIN-and-fingerprint user,
-        # say): it is the only kind the fallback below can place. Otherwise
-        # the first, ``min`` being stable. Coerce the index via
-        # ``parse_slot_num`` because some Matter implementations send it as
-        # a string -- the int-keyed comparison in the fallback walker would
-        # then never match.
-        credential_type, raw_index = min(
-            used, key=lambda pair: pair[0] is not CredentialType.PIN
+        # The credential the lock itself typed as a PIN when there is one (a
+        # PIN-and-fingerprint user, say): its index is the only one the
+        # fallback below can place. Otherwise the first.
+        credential_type, credential = next(
+            (
+                pair
+                for pair in used
+                if pair[1].get("credentialType") == _MatterCredentialType.kPin
+            ),
+            used[0],
         )
-        credential_type = _SOURCE_TO_CREDENTIAL_TYPE.get(
-            data.get("operationSource", -1), credential_type
-        )
-        credential_index = parse_slot_num(raw_index)
+        # Coerce via ``parse_slot_num`` because some Matter implementations
+        # send the index as a string -- the int-keyed comparison in the
+        # fallback walker would then never match.
+        credential_index = parse_slot_num(credential.get("credentialIndex"))
         if credential_index is None:
             return
 
         user_index = parse_slot_num(data.get("userIndex"))
+        # A keypad use is a PIN whatever the lock typed it, but only an index
+        # the lock typed as a PIN is a PIN index: a card at 4 under a keypad
+        # source says nothing about who holds PIN 4.
+        placeable_by_pin_index = (
+            credential_type is CredentialType.PIN
+            and credential.get("credentialType") == _MatterCredentialType.kPin
+        )
 
         self._create_background_task(
             self._dispatch_lock_operation(
-                user_index, credential_index, data, credential_type
+                user_index,
+                credential_index,
+                data,
+                credential_type,
+                placeable_by_pin_index=placeable_by_pin_index,
             ),
             f"Matter LockOperation dispatch for {self.lock.entity_id}",
         )
@@ -1882,16 +1921,18 @@ class MatterLock(BaseLock):
         credential_index: int,
         data: dict[str, Any],
         credential_type: CredentialType,
+        *,
+        placeable_by_pin_index: bool,
     ) -> None:
         """
         Resolve the LCM slot for a LockOperation event and fire it.
 
         Primary path: lock-reported ``userIndex`` -> user.name -> tag.
-        Fallback path: walk the user list to find the PIN credential at
-        ``credentialIndex`` and parse the owning user's tag. Events whose
-        owning user isn't LCM-tagged are silently dropped so out-of-band
-        PIN uses on non-LCM credentials don't drive spurious code slot
-        events.
+        Fallback path, when ``placeable_by_pin_index``: walk the user list to
+        find the PIN credential at ``credentialIndex`` and parse the owning
+        user's tag. Events whose owning user isn't LCM-tagged are silently
+        dropped so out-of-band PIN uses on non-LCM credentials don't drive
+        spurious code slot events.
         """
         try:
             raw_users = await self._raw_lock_users()
@@ -1912,9 +1953,10 @@ class MatterLock(BaseLock):
         code_slot = _lcm_slot_from_raw_users_by_user_index(
             raw_users, user_index, fabric
         )
-        # The fallback walks PIN credentials, so it can only place a PIN: a
-        # card's index says nothing about who holds a PIN at that index.
-        if code_slot is None and credential_type is CredentialType.PIN:
+        # The fallback walks PIN credentials, so it can only place a PIN
+        # index: a card's index says nothing about who holds a PIN at that
+        # index.
+        if code_slot is None and placeable_by_pin_index:
             code_slot = _lcm_slot_from_raw_users_by_credential_index(
                 raw_users, credential_index, fabric
             )

@@ -537,21 +537,33 @@ class FakeMatterLock:
             },
         )
 
-    def present(self, user_index: int, kind: int, index: int = 1) -> None:
+    def present(
+        self,
+        user_index: int | None,
+        kind: int,
+        index: int = 1,
+        *,
+        source: int | None = None,
+    ) -> None:
         """
         Unlock with a user's credential of ``kind`` at ``index``, as the lock logs it.
 
         A ``LockOperation`` event like :meth:`keypad_unlock`'s, from the
-        reader that takes that kind: a card from the RFID reader, a finger or
-        a face from the biometric one.
+        reader that takes that kind unless ``source`` names another: a card
+        from the RFID reader, a finger or a face from the biometric one.
+        ``user_index`` of ``None`` is a lock that does not name the user.
         """
+        if source is None:
+            source = (
+                DoorLock.Enums.OperationSourceEnum.kRfid
+                if kind == DoorLock.Enums.CredentialTypeEnum.kRfid
+                else DoorLock.Enums.OperationSourceEnum.kBiometric
+            )
         self._log_event(
             DoorLock.Events.LockOperation,
             {
                 "lockOperationType": DoorLock.Enums.LockOperationTypeEnum.kUnlock,
-                "operationSource": DoorLock.Enums.OperationSourceEnum.kRfid
-                if kind == DoorLock.Enums.CredentialTypeEnum.kRfid
-                else DoorLock.Enums.OperationSourceEnum.kBiometric,
+                "operationSource": source,
                 "userIndex": user_index,
                 "fabricIndex": None,
                 "sourceNode": None,

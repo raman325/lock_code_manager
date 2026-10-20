@@ -163,8 +163,9 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
 
 # The credential an operation event's source says was presented. RFID is the
 # Door Lock cluster's own; 4 is a vendor extension zigbee-herdsman-converters
-# names "fingerprint". Every other source -- the keypad, an RF command
-# carrying a PIN, manual, indeterminate -- reports PIN, as it always has.
+# names "fingerprint". Every other source -- the keypad, a radio frequency
+# command carrying a PIN, manual, indeterminate -- reports PIN, as it always
+# has.
 SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
     DoorLock.OperationEventSource.RFID: CredentialType.RFID,
     4: CredentialType.FINGERPRINT,
