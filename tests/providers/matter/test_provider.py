@@ -1939,18 +1939,20 @@ class TestLockUserChangeEvent:
         listing.assert_not_awaited()
         mock_coordinator.observe_push.assert_not_called()
 
-    async def test_a_lock_that_does_not_say_how_many_users_it_holds_bounds_only_below(
+    async def test_a_lock_that_does_not_say_how_many_users_it_holds_holds_none(
         self,
         hass: HomeAssistant,
         matter_lock: MatterLock,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        Without NumberOfTotalUsersSupported, any index from 1 names a user to read.
+        Without NumberOfTotalUsersSupported, no index names a user: nothing is read.
 
-        Past the 10 this node otherwise reports, the change is resolved.
+        Home Assistant's ``get_lock_users`` lists no user on such a lock, so
+        the single read agrees with it, even with the stand-in lock
+        answering a tagged user at the index.
         """
-        _client, node = matter_lock._require_client_and_node()
+        client, node = matter_lock._require_client_and_node()
         door_lock = node.endpoints[1].get_cluster(clusters.DoorLock)
         monkeypatch.setattr(door_lock, "numberOfTotalUsersSupported", None)
         mock_coordinator = _mock_coordinator()
@@ -1961,7 +1963,7 @@ class TestLockUserChangeEvent:
             matter_lock,
             [
                 {
-                    "user_index": 11,
+                    "user_index": 3,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 },
@@ -1975,15 +1977,14 @@ class TestLockUserChangeEvent:
                         "lockDataType": 6,  # PIN
                         "dataOperationType": 0,  # Add
                         "dataIndex": 7,
-                        "userIndex": 11,
+                        "userIndex": 3,
                     },
                 ),
             )
             await hass.async_block_till_done()
+            client.send_device_command.assert_not_awaited()
 
-        mock_coordinator.observe_push.assert_called_once_with(
-            pin_address(3), SlotCredential.unreadable()
-        )
+        mock_coordinator.observe_push.assert_not_called()
 
     async def test_user_cleared_resolves_through_the_last_read(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -4086,7 +4087,8 @@ class TestGetUserRead:
         The answer keeps what the provider reads, under ``get_lock_users``'s names.
 
         The command goes to the node's Door Lock endpoint. A credential that
-        is not a Personal Identification Number is kept, as another's.
+        is not a Personal Identification Number is kept, its type named as
+        Home Assistant names it.
         """
         answer = get_user_answer(
             3,
@@ -4103,7 +4105,7 @@ class TestGetUserRead:
             ],
         )
         with self._answering(matter_lock, answer) as send:
-            user = await matter_lock._raw_lock_user(3)
+            user = await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
 
         assert user == {
             "user_index": 3,
@@ -4111,7 +4113,7 @@ class TestGetUserRead:
             "creator_fabric_index": 2,
             "credentials": [
                 {"type": "pin", "index": 7},
-                {"type": "other", "index": 2},
+                {"type": "rfid", "index": 2},
             ],
         }
         _client, node = matter_lock._require_client_and_node()
@@ -4127,7 +4129,66 @@ class TestGetUserRead:
     ) -> None:
         """An index the lock holds no user at answers no ``userStatus``."""
         with self._answering(matter_lock, get_user_answer(3, [])):
-            assert await matter_lock._raw_lock_user(3) is None
+            assert (
+                await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+                is None
+            )
+
+    @pytest.mark.parametrize("name", [None, 5], ids=["null", "not_text"])
+    async def test_a_name_that_is_not_text_reads_as_no_name(
+        self, matter_lock: MatterLock, name: Any
+    ) -> None:
+        """The user is still read, its credentials with it: it has no name."""
+        answer = get_user_answer(
+            3,
+            [
+                {
+                    "user_index": 3,
+                    "user_name": "lcm:5:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ],
+        ) | {"userName": name}
+        with self._answering(matter_lock, answer):
+            user = await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+
+        assert user is not None
+        assert user["user_name"] is None
+        assert user["credentials"] == [{"type": "pin", "index": 7}]
+
+    async def test_a_credential_without_its_index_does_not_hide_the_pin(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """
+        A credential the lock gives no index is kept without one, and skipped.
+
+        The user's Personal Identification Number beside it is still found,
+        as it is in Home Assistant's listing.
+        """
+        answer = get_user_answer(
+            3,
+            [
+                {
+                    "user_index": 3,
+                    "user_name": "lcm:5:Carol",
+                    "credentials": [
+                        {"type": "pin", "index": 2},
+                        {"type": "pin", "index": 7},
+                    ],
+                }
+            ],
+        )
+        answer["credentials"][0]["credentialIndex"] = None
+        with self._answering(matter_lock, answer):
+            user = await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+            index = await matter_lock._find_pin_credential_index_for_user(3)
+
+        assert user is not None
+        assert user["credentials"] == [
+            {"type": "pin", "index": None},
+            {"type": "pin", "index": 7},
+        ]
+        assert index == 7
 
     @pytest.mark.parametrize(
         "answer",
@@ -4136,22 +4197,16 @@ class TestGetUserRead:
             [],
             get_user_answer(4, [{"user_index": 4, "user_name": "lcm:5:Carol"}]),
             get_user_answer(3, [{"user_index": 3, "user_name": "lcm:5:Carol"}])
-            | {"userName": 5},
-            get_user_answer(3, [{"user_index": 3, "user_name": "lcm:5:Carol"}])
             | {"credentials": {"credentialType": 1, "credentialIndex": 7}},
             get_user_answer(3, [{"user_index": 3, "user_name": "lcm:5:Carol"}])
             | {"credentials": [7]},
-            get_user_answer(3, [{"user_index": 3, "user_name": "lcm:5:Carol"}])
-            | {"credentials": [{"credentialType": 1, "credentialIndex": None}]},
         ],
         ids=[
             "nothing",
             "not_a_record",
             "another_user_s",
-            "a_name_that_is_not_text",
             "credentials_not_a_list",
             "a_credential_not_a_record",
-            "a_credential_without_its_index",
         ],
     )
     async def test_an_answer_that_is_not_a_user_record_fails_the_operation(
@@ -4166,7 +4221,7 @@ class TestGetUserRead:
             self._answering(matter_lock, answer),
             pytest.raises(LockOperationFailed, match="GetUser answered"),
         ):
-            await matter_lock._raw_lock_user(3)
+            await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
 
     async def test_a_use_whose_user_reads_malformed_reads_nothing_more(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -4210,14 +4265,14 @@ class TestGetUserRead:
 
         Nothing is sent: there is no endpoint to send GetUser to.
         """
-        client, node = matter_lock._require_client_and_node()
+        _client, node = matter_lock._require_client_and_node()
         monkeypatch.setattr(node, "endpoints", {0: node.endpoints[0]})
 
         with (
             self._answering(matter_lock, None) as send,
             pytest.raises(LockDisconnected, match="no Door Lock endpoint"),
         ):
-            await matter_lock._raw_lock_user(1)
+            await matter_lock._find_pin_credential_index_for_user(1)
         send.assert_not_awaited()
 
 
