@@ -3,7 +3,6 @@
 from collections.abc import AsyncIterator, Iterable, Iterator
 from contextlib import asynccontextmanager
 import logging
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -341,10 +340,10 @@ class TestAddingThroughTheUserInterface:
 
     @pytest.fixture(autouse=True)
     def _helpers_patched(
-        self, matter_mock_helpers: dict[str, AsyncMock]
+        self, matter_mock_helpers: dict[str, AsyncMock], matter_client: MagicMock
     ) -> Iterator[None]:
         """Keep the helpers patched for the entry the flow creates and sets up."""
-        with matter_helpers_patched(matter_mock_helpers):
+        with matter_helpers_patched(matter_mock_helpers, matter_client):
             yield
 
     async def _start_flow(
@@ -582,33 +581,6 @@ def _index_of(fake: FakeMatterLock, pin: str) -> int:
     return next(index for index, held in fake.codes.items() if held == pin)
 
 
-# Home Assistant's single-user read helpers, each changed in a way the
-# provider's single read no longer fits: a signature, or an answer's shape.
-_MISFIT_SINGLE_USER_READS = [
-    pytest.param(
-        {"_get_lock_endpoint_or_raise": lambda: None}, id="endpoint_signature"
-    ),
-    pytest.param(
-        {"_get_lock_endpoint_or_raise": lambda _node: object()}, id="endpoint_shape"
-    ),
-    pytest.param({"_format_user_response": lambda: None}, id="formatter_signature"),
-    pytest.param(
-        {"_format_user_response": lambda _response: ("user",)}, id="formatter_shape"
-    ),
-]
-
-
-def _misfit_lock_helpers(misfit: dict[str, Any]) -> SimpleNamespace:
-    """Return Home Assistant's lock helpers the single read uses, with ``misfit`` in place."""
-    return SimpleNamespace(
-        **{
-            "_get_lock_endpoint_or_raise": lock_helpers._get_lock_endpoint_or_raise,
-            "_format_user_response": lock_helpers._format_user_response,
-        }
-        | misfit
-    )
-
-
 @asynccontextmanager
 async def _entry_on(
     hass: HomeAssistant,
@@ -736,7 +708,7 @@ class TestKeypadAndSwitch:
             for exchange in fake_matter_lock.commands[sent:]
         ] == [("GetUser", user_index)]
 
-    async def test_a_keypad_use_is_placed_without_ha_s_single_user_read(
+    async def test_a_keypad_use_needs_none_of_ha_s_private_lock_helpers(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
@@ -746,16 +718,18 @@ class TestKeypadAndSwitch:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """
-        Home Assistant no longer has the private helpers the single read uses.
+        The named user is read and parsed by Lock Code Manager itself.
 
-        Every user is read instead, and the use is still announced.
+        Home Assistant's lock helpers have no single-user read, and the
+        private ones that find the lock's endpoint and format a GetUser
+        answer may change in any release; the use is announced without them.
         """
         await _async_settle(
             hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
         )
-        monkeypatch.setattr(
-            f"{_PROVIDER_MODULE}.matter_lock_helpers", SimpleNamespace()
-        )
+        for private in ("_get_lock_endpoint_or_raise", "_format_user_response"):
+            monkeypatch.delattr(lock_helpers, private, raising=False)
+        sent = len(fake_matter_lock.commands)
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
         fake_matter_lock.keypad_unlock(
@@ -764,38 +738,9 @@ class TestKeypadAndSwitch:
         await hass.async_block_till_done(wait_background_tasks=True)
 
         assert [event.data["name"] for event in used] == ["slot2"]
-
-    @pytest.mark.parametrize("misfit", _MISFIT_SINGLE_USER_READS)
-    async def test_a_keypad_use_is_placed_when_ha_s_single_user_read_no_longer_fits(
-        self,
-        hass: HomeAssistant,
-        freezer: FrozenDateTimeFactory,
-        fake_matter_lock: FakeMatterLock,
-        fake_matter_lock_entry: MockConfigEntry,
-        fake_matter_lock_entity: er.RegistryEntry,
-        monkeypatch: pytest.MonkeyPatch,
-        misfit: dict[str, Any],
-    ) -> None:
-        """
-        Home Assistant's private helpers changed their signature or answer.
-
-        Every user is read instead, and the use is still announced, rather
-        than the helper's error escaping the read.
-        """
-        await _async_settle(
-            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
-        )
-        monkeypatch.setattr(
-            f"{_PROVIDER_MODULE}.matter_lock_helpers", _misfit_lock_helpers(misfit)
-        )
-        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-
-        fake_matter_lock.keypad_unlock(
-            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
-        )
-        await hass.async_block_till_done(wait_background_tasks=True)
-
-        assert [event.data["name"] for event in used] == ["slot2"]
+        assert [exchange.command for exchange in fake_matter_lock.commands[sent:]] == [
+            "GetUser"
+        ]
 
     async def test_a_keypad_use_naming_user_zero_is_found_by_its_credential(
         self,
@@ -824,6 +769,40 @@ class TestKeypadAndSwitch:
 
         assert [event.data["name"] for event in used] == ["slot2"]
         assert 0 not in [
+            exchange.payload.get("userIndex")
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command == "GetUser"
+        ]
+
+    async def test_a_keypad_use_naming_a_user_past_the_lock_s_is_found_by_its_credential(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A use naming an index past the lock's NumberOfTotalUsersSupported names nobody.
+
+        The credential used finds its user, as for a use naming no user;
+        GetUser for that index is never sent, as the lock refuses it.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        past = fake_matter_lock.max_users + 1
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN]),
+            user_index=past,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+        assert past not in [
             exchange.payload.get("userIndex")
             for exchange in fake_matter_lock.commands[sent:]
             if exchange.command == "GetUser"
@@ -923,43 +902,6 @@ class TestKeypadAndSwitch:
             for exchange in fake_matter_lock.commands[sent:]
             if exchange.command == "GetUser"
         ] == [user_index]
-
-    @pytest.mark.parametrize("misfit", _MISFIT_SINGLE_USER_READS)
-    async def test_a_pin_clears_when_ha_s_single_user_read_no_longer_fits(
-        self,
-        hass: HomeAssistant,
-        freezer: FrozenDateTimeFactory,
-        fake_matter_lock: FakeMatterLock,
-        fake_matter_lock_entry: MockConfigEntry,
-        fake_matter_lock_entity: er.RegistryEntry,
-        monkeypatch: pytest.MonkeyPatch,
-        misfit: dict[str, Any],
-    ) -> None:
-        """
-        Home Assistant's private helpers changed their signature or answer.
-
-        The clear finds the PIN's credential index by reading every user
-        instead, so the PIN still comes off the lock.
-        """
-        await _async_settle(
-            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
-        )
-        lock = fake_matter_lock_entry.runtime_data.locks[
-            fake_matter_lock_entity.entity_id
-        ]
-        user_index = fake_matter_lock.owner(
-            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
-        )
-        assert user_index is not None
-        monkeypatch.setattr(
-            f"{_PROVIDER_MODULE}.matter_lock_helpers", _misfit_lock_helpers(misfit)
-        )
-
-        assert await lock.async_delete_credential(
-            CredentialRef(user_id=user_index, type=CredentialType.PIN, slot=2)
-        )
-
-        assert FAKE_MATTER_SLOTS[2][CONF_PIN] not in fake_matter_lock.codes.values()
 
 
 class TestStartup:
