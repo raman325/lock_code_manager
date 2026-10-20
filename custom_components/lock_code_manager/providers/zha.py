@@ -13,7 +13,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal, override
+from typing import Any, ClassVar, Literal, NamedTuple, override
 
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
@@ -177,10 +177,37 @@ _REPORTABLE_CREDENTIAL_TYPES = frozenset(
     {CredentialType.PIN, *SOURCE_TO_CREDENTIAL_TYPE.values()}
 )
 
-# How long setup waits to hear whether the lock reads cards. An unanswered
-# question lists the reader anyway, so it is not worth more of setup's deadline
-# than this -- a slow answer must not be what fails setup.
-_CARD_READER_QUESTION_BUDGET = 60.0
+# The event masks that say whether the lock notifies a code change.
+_PROGRAMMING_EVENT_MASKS = (
+    DoorLock.AttributeDefs.keypad_programming_event_mask,
+    DoorLock.AttributeDefs.rf_programming_event_mask,
+    DoorLock.AttributeDefs.rfid_programming_event_mask,
+)
+_RFID_USERS = DoorLock.AttributeDefs.num_of_rfid_users_supported
+
+
+class _SetupAnswers(NamedTuple):
+    """What the lock said during setup; ``reads_cards`` is None for no answer."""
+
+    programming_events: bool
+    reads_cards: bool | None
+
+
+def _reads_cards(success: dict[Any, Any], failure: dict[Any, Any]) -> bool | None:
+    """
+    Return whether the lock's answer says it has a card reader, or None.
+
+    None when the lock gave no value for its card user count, which nothing
+    here treats as a missing reader.
+    """
+    if failure.get(_RFID_USERS.id) == foundation.Status.UNSUPPORTED_ATTRIBUTE:
+        return False
+    if (count := success.get(_RFID_USERS.id)) is None:
+        return None
+    # Zero taken at face value, unlike the PIN count in `async_get_max_slot`:
+    # a lock with a keypad has PIN users whatever it reports, but one with no
+    # reader really has no card users.
+    return count > 0
 
 
 # What one ZCL command to a sleepy lock can legitimately take before zigpy
@@ -288,10 +315,11 @@ class ZHALock(BaseLock):
         self.unsubscribe_push_updates()
         self._door_lock_cluster = None
         await super().async_setup(config_entry)
-        self._supports_programming_events = (
-            await self._async_check_programming_event_support()
-        )
-        self._reads_cards = await self._async_ask_whether_it_reads_cards()
+        answers = await self._async_read_setup_attributes()
+        self._supports_programming_events = answers.programming_events
+        # A reconnect the lock does not answer keeps what it said before.
+        if answers.reads_cards is not None:
+            self._reads_cards = answers.reads_cards
         if not self._supports_programming_events:
             _LOGGER.info(
                 "Lock %s: programming event notifications not supported, "
@@ -667,37 +695,6 @@ class ZHALock(BaseLock):
             return None
         return min(int(supported), MAX_SEARCHED_SLOT)
 
-    async def _async_ask_whether_it_reads_cards(self) -> bool | None:
-        """
-        Ask the lock whether it has a Radio Frequency Identification reader.
-
-        From its count of RFID users. ``None`` when it gave no answer --
-        unreachable, timed out, or failed the read -- which nothing here
-        treats as a missing reader.
-        """
-        attribute = DoorLock.AttributeDefs.num_of_rfid_users_supported
-        try:
-            cluster = await self._get_connected_cluster()
-            async with asyncio.timeout(_CARD_READER_QUESTION_BUDGET):
-                success, failure = await cluster.read_attributes(
-                    [attribute.id], allow_cache=True, only_cache=False
-                )
-        except Exception:
-            _LOGGER.debug(
-                "Lock %s: could not ask whether it reads cards",
-                self.lock.entity_id,
-                exc_info=True,
-            )
-            return None
-        if failure.get(attribute.id) == foundation.Status.UNSUPPORTED_ATTRIBUTE:
-            return False
-        if (count := success.get(attribute.id)) is None:
-            return None
-        # Zero taken at face value, unlike the PIN count in `async_get_max_slot`:
-        # a lock with a keypad has PIN users whatever it reports, but one with
-        # no reader really has no card users.
-        return count > 0
-
     @override
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
@@ -877,43 +874,43 @@ class ZHALock(BaseLock):
 
     # -- Programming event support detection ---------------------------------
 
-    async def _async_check_programming_event_support(self) -> bool:
+    async def _async_read_setup_attributes(self) -> _SetupAnswers:
         """
-        Check if the lock supports programming event notifications.
+        Ask the lock what setup needs to know, in one read.
 
-        Reads event mask attributes to determine if the lock will send
-        programming_event_notification when codes change.
+        Whether it sends programming event notifications when codes change,
+        from its event mask attributes, and whether it reads cards, from its
+        count of Radio Frequency Identification users. One read, so the
+        second question costs setup no further exchange. zigpy answers each
+        attribute on its own, so one the lock refuses says nothing about the
+        others.
         """
         cluster = self._get_door_lock_cluster()
         if not cluster:
-            return False
-
-        mask_attrs = (
-            DoorLock.AttributeDefs.keypad_programming_event_mask,
-            DoorLock.AttributeDefs.rf_programming_event_mask,
-            DoorLock.AttributeDefs.rfid_programming_event_mask,
-        )
-
+            return _SetupAnswers(programming_events=False, reads_cards=None)
         try:
-            result = await cluster.read_attributes(
-                [attr.id for attr in mask_attrs],
+            success, failure = await cluster.read_attributes(
+                [attr.id for attr in (*_PROGRAMMING_EVENT_MASKS, _RFID_USERS)],
                 allow_cache=False,
                 only_cache=False,
             )
         except Exception:
             _LOGGER.debug(
-                "Lock %s: could not read programming event mask attributes",
+                "Lock %s: could not read its programming event masks or card "
+                "user count",
                 self.lock.entity_id,
                 exc_info=True,
             )
-            return False
+            return _SetupAnswers(programming_events=False, reads_cards=None)
+        return _SetupAnswers(
+            programming_events=self._sends_programming_events(success),
+            reads_cards=_reads_cards(success, failure),
+        )
 
-        values = result[0] if isinstance(result, tuple) else result
-
-        for attr in mask_attrs:
-            value = None
-            if isinstance(values, dict):
-                value = values.get(attr.id, values.get(attr.name))
+    def _sends_programming_events(self, success: dict[Any, Any]) -> bool:
+        """Return whether any event mask the lock answered with is set."""
+        for attr in _PROGRAMMING_EVENT_MASKS:
+            value = success.get(attr.id, success.get(attr.name))
             if value is not None and value != 0:
                 _LOGGER.debug(
                     "Lock %s: supports programming events (%s [0x%04x]=0x%04x)",

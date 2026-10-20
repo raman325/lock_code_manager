@@ -540,7 +540,7 @@ async def test_programming_event_support_with_mask(
     mask_attr = DoorLock.AttributeDefs.keypad_programming_event_mask
     cluster.read_attributes = AsyncMock(return_value=({mask_attr.id: 0x0001}, {}))
 
-    result = await zha_lock._async_check_programming_event_support()
+    result = (await zha_lock._async_read_setup_attributes()).programming_events
     assert result is True
 
 
@@ -553,29 +553,36 @@ async def test_programming_event_support_without_mask(
 
     cluster.read_attributes = AsyncMock(return_value=({}, {}))
 
-    result = await zha_lock._async_check_programming_event_support()
+    result = (await zha_lock._async_read_setup_attributes()).programming_events
     assert result is False
 
 
-async def test_a_card_reader_question_left_hanging_is_no_answer(
-    hass: HomeAssistant, zha_lock: ZHALock
+async def test_a_reconnect_the_lock_does_not_answer_keeps_its_card_answer(
+    hass: HomeAssistant, zha_lock: ZHALock, simple_lcm_config_entry: MockConfigEntry
 ) -> None:
     """
-    A read that outlasts its own bound gives up rather than raising.
+    A lock that said it has no reader is not taken to have one after a blip.
 
-    The question is asked during setup, so it must never be what fails
-    setup's deadline; no answer lists the reader anyway.
+    Setup runs again on every reconnect, and a lock briefly unreachable then
+    answers nothing; what it said before still stands.
     """
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
-    cluster.read_attributes = AsyncMock(side_effect=asyncio.Event().wait)
+    rfid_users = DoorLock.AttributeDefs.num_of_rfid_users_supported.id
+    cluster.read_attributes = AsyncMock(
+        side_effect=[
+            ({}, {rfid_users: Status.UNSUPPORTED_ATTRIBUTE}),
+            TimeoutError(),
+        ]
+    )
 
-    with patch(
-        "custom_components.lock_code_manager.providers.zha._CARD_READER_QUESTION_BUDGET",
-        0.01,
-    ):
-        assert await zha_lock._async_ask_whether_it_reads_cards() is None
-    assert CredentialType.RFID in zha_lock.reported_credential_types
+    await zha_lock.async_setup(simple_lcm_config_entry)
+    assert CredentialType.RFID not in zha_lock.reported_credential_types
+    await zha_lock.async_setup(simple_lcm_config_entry)
+
+    assert cluster.read_attributes.await_count == 2
+    assert CredentialType.RFID not in zha_lock.reported_credential_types
+    zha_lock.unsubscribe_push_updates()
 
 
 # ---------------------------------------------------------------------------
@@ -1023,7 +1030,9 @@ async def test_check_programming_support_no_cluster(
 ) -> None:
     """Test programming support check returns False without cluster."""
     with patch.object(zha_lock, "_get_door_lock_cluster", return_value=None):
-        assert await zha_lock._async_check_programming_event_support() is False
+        assert (
+            await zha_lock._async_read_setup_attributes()
+        ).programming_events is False
 
 
 async def test_check_programming_support_read_failure(
@@ -1035,7 +1044,7 @@ async def test_check_programming_support_read_failure(
 
     cluster.read_attributes = AsyncMock(side_effect=RuntimeError("read failed"))
 
-    result = await zha_lock._async_check_programming_event_support()
+    result = (await zha_lock._async_read_setup_attributes()).programming_events
     assert result is False
 
 

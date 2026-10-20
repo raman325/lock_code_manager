@@ -1,5 +1,6 @@
 """End-to-end tests for the ZHA provider through a real Lock Code Manager entry."""
 
+from datetime import timedelta
 import re
 from typing import Any
 
@@ -1399,24 +1400,37 @@ def _no_answer(request: Any) -> Frame | None:
 
 # The Radio Frequency Identification user count, Door Lock attribute 0x0013.
 _RFID_USERS = DoorLock.AttributeDefs.num_of_rfid_users_supported.id
+# The keypad programming event mask, with the Zigbee Cluster Library's bits for
+# a PIN code added (1) and deleted (2) set. No Zigbee lock dump on record
+# reports one, so the value is made up.
+_KEYPAD_MASK = {DoorLock.AttributeDefs.keypad_programming_event_mask.id: 0b110}
 
 
 class TestCardReader:
     """Whether a card use is recorded follows what the lock says of its reader."""
 
     @pytest.mark.parametrize(
-        ("door_lock_attributes", "door_lock_answers", "reads_cards"),
+        ("door_lock_attributes", "door_lock_answers", "reads_cards", "notifies"),
         [
             # No Zigbee lock dump on record reports a positive count, so this
             # one is made up.
-            pytest.param({_RFID_USERS: 30}, {}, True, id="a_reader"),
+            pytest.param(
+                {_RFID_USERS: 30, **_KEYPAD_MASK}, {}, True, True, id="a_reader"
+            ),
+            # The masks refused, the count still believed.
+            pytest.param(
+                {_RFID_USERS: 30}, {}, True, False, id="a_reader_without_masks"
+            ),
             # Nor a zero: made up too.
-            pytest.param({_RFID_USERS: 0}, {}, False, id="no_card_users"),
+            pytest.param({_RFID_USERS: 0}, {}, False, False, id="no_card_users"),
             # The Level Home B2 reports the attribute unsupported (zigpy/zha
-            # fc5b0945, tests/data/devices/level-home-b2-0x0300001a.json).
-            pytest.param({}, {}, False, id="unsupported"),
+            # fc5b0945, tests/data/devices/level-home-b2-0x0300001a.json); the
+            # mask beside it is still believed.
+            pytest.param(_KEYPAD_MASK, {}, False, True, id="unsupported"),
             # A read zigpy gave up on is no answer at all.
-            pytest.param({}, {"Read_Attributes": _no_answer}, True, id="no_answer"),
+            pytest.param(
+                {}, {"Read_Attributes": _no_answer}, True, False, id="no_answer"
+            ),
         ],
     )
     async def test_a_card_use_is_recorded_unless_the_lock_has_no_reader(
@@ -1425,6 +1439,7 @@ class TestCardReader:
         lcm_config_entry: MockConfigEntry,
         door_lock: DoorLockStandIn,
         reads_cards: bool,
+        notifies: bool,
     ) -> None:
         """
         The lock is asked at setup whether it reads cards, and believed.
@@ -1436,12 +1451,19 @@ class TestCardReader:
         answer keeps the reader listed, because recording a kind the lock
         cannot produce costs nothing and dropping a real card use would not.
         A fingerprint has no attribute to ask about and is always listed.
+
+        Asked in the same read as the programming event masks, and each
+        answer stands on its own: a lock refusing one says nothing of the
+        other.
         """
         await _run_ticks(hass)
         assert any(
             request.command.name == "Read_Attributes"
             and _RFID_USERS in request.attribute_ids
             for request in door_lock.requests
+        )
+        assert _zha_lock(lcm_config_entry).hard_refresh_interval == (
+            None if notifies else timedelta(hours=1)
         )
         event_entity = slot_entity_id(
             hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
