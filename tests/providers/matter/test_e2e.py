@@ -1354,6 +1354,156 @@ class TestRefusedUserUpdates:
         )
 
 
+def _users_read_before_the_pin(fake: FakeMatterLock, sent: int) -> list[int]:
+    """Return each user index read, in order, from ``sent`` until the first PIN write."""
+    exchanges = fake.commands[sent:]
+    first_write = next(
+        position
+        for position, exchange in enumerate(exchanges)
+        if exchange.command == "SetCredential"
+    )
+    return [
+        exchange.payload["userIndex"]
+        for exchange in exchanges[:first_write]
+        if exchange.command == "GetUser"
+    ]
+
+
+class TestAWriteFindsItsUser:
+    """A PIN write finds the slot's user on the lock without reading every user (#1756)."""
+
+    @pytest.fixture(autouse=True)
+    async def _settled_beside_another_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """Both slots in sync, and a user of the homeowner's beside them."""
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        fake_matter_lock.program(9, "999999", name="Mom", credential_index=9)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    async def _async_write(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake: FakeMatterLock,
+        entry: MockConfigEntry,
+        pin: str,
+    ) -> list[int]:
+        """Change slot 1's PIN to ``pin``; return the users read before it was written."""
+        sent = len(fake.commands)
+        await async_set_slot_pin(hass, entry, 1, pin)
+        await async_tick_until(
+            hass,
+            freezer,
+            lambda: pin in fake.codes.values(),
+            max_ticks=10,
+            what=f"slot 1's PIN {pin} on the lock",
+        )
+        return _users_read_before_the_pin(fake, sent)
+
+    async def test_a_pin_change_reads_only_the_slot_s_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+    ) -> None:
+        """
+        The user last seen holding slot 1 is the only one read before its PIN goes out.
+
+        Every user on the lock was read in turn first, which on an Aqara U400
+        with seven users took about 8.6 seconds a write (#1745).
+        """
+        ours = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
+        )
+
+        read = await self._async_write(
+            hass, freezer, fake_matter_lock, fake_matter_lock_entry, "246802"
+        )
+
+        assert set(read) == {ours}
+        assert fake_matter_lock.owner(_index_of(fake_matter_lock, "246802")) == ours
+
+    async def test_a_user_moved_out_of_band_is_found_by_reading_every_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+    ) -> None:
+        """
+        Slot 1's user, made again at another index and the old one removed unannounced, gets the PIN.
+
+        The index last seen holding slot 1 reads empty, so every user is
+        read and the one now tagged for slot 1 is written to; no second user
+        is made for the slot. The next write reads only that user.
+        """
+        old = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
+        )
+        assert old is not None
+        await _async_add_user(fake_matter_lock, "lcm:1:slo", credential_index=5)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        moved = fake_matter_lock.owner(5)
+        assert moved not in (None, old)
+        fake_matter_lock.forget(old)
+
+        read = await self._async_write(
+            hass, freezer, fake_matter_lock, fake_matter_lock_entry, "246802"
+        )
+
+        assert {old, moved, 9} <= set(read)
+        assert fake_matter_lock.owner(_index_of(fake_matter_lock, "246802")) == moved
+        assert [
+            index
+            for index, user in fake_matter_lock.users.items()
+            if parse_tag(user.name)[0] == 1
+        ] == [moved]
+
+        read = await self._async_write(
+            hass, freezer, fake_matter_lock, fake_matter_lock_entry, "135790"
+        )
+
+        assert set(read) == {moved}
+
+    async def test_an_unanswered_read_of_the_slot_s_user_is_retried(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+    ) -> None:
+        """
+        The write is retried, as when any read of every user went unanswered, and lands.
+
+        It lands on the slot's own user: the failed read is no sign the user
+        is gone, so no second user is made for the slot.
+        """
+        ours = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
+        )
+        unanswered = fake_matter_lock.fail("GetUser", ours, times=1)
+
+        await self._async_write(
+            hass, freezer, fake_matter_lock, fake_matter_lock_entry, "246802"
+        )
+
+        assert unanswered.hits
+        assert fake_matter_lock.owner(_index_of(fake_matter_lock, "246802")) == ours
+        assert sorted(fake_matter_lock.users) == sorted(
+            [ours, 9, fake_matter_lock.owner(_index_of(fake_matter_lock, "567890"))]
+        )
+        assert lcm_issue_ids(hass, "slot_suspended") == []
+
+
 class TestOtherUsersOnTheLock:
     """Changes Lock Code Manager did not make."""
 

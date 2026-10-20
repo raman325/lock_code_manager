@@ -3830,6 +3830,229 @@ class TestSetUser:
 # =============================================================================
 
 
+def _tagged(index: int, name: str, *pins: int, creator: int = 1) -> dict[str, Any]:
+    """Return a user as ``get_lock_users`` lists it, holding PINs at ``pins``."""
+    return {
+        "user_index": index,
+        "user_name": name,
+        "creator_fabric_index": creator,
+        "credentials": [{"type": "pin", "index": pin} for pin in pins],
+    }
+
+
+class TestSetUserFromTheRecord:
+    """
+    ``async_set_user`` reads the user recorded for the slot before reading every user (#1756).
+
+    The node's NumberOfTotalUsersSupported is 10, and Home Assistant's
+    fabric is 1.
+    """
+
+    @contextmanager
+    def _lock_holding(
+        self, lock: MatterLock, users: list[dict[str, Any]]
+    ) -> Iterator[SimpleNamespace]:
+        """
+        Answer every read from ``users``; yield the listing, GetUser and set_lock_user mocks.
+
+        A GetUser is answered here, not through the listing, so the
+        listing's awaits count only the reads of every user.
+        """
+        client, _node = lock._require_client_and_node()
+
+        async def _get_user(*_args: Any, command: Any, **_kwargs: Any) -> Any:
+            return get_user_answer(command.userIndex, users)
+
+        listing = AsyncMock(return_value={"max_users": 10, "users": users})
+        send = AsyncMock(side_effect=_get_user)
+        set_user = AsyncMock(return_value={"user_index": 10})
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", listing),
+            patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
+            patch.object(client, "send_device_command", send),
+        ):
+            yield SimpleNamespace(listing=listing, send=send, set_user=set_user)
+
+    @staticmethod
+    def _users_read_alone(send: AsyncMock) -> list[int]:
+        """Return the user index of each GetUser sent on its own."""
+        return [
+            call.kwargs["command"].userIndex
+            for call in send.call_args_list
+            if isinstance(call.kwargs["command"], clusters.DoorLock.Commands.GetUser)
+        ]
+
+    async def test_the_recorded_user_still_tagged_is_the_only_one_read(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """One GetUser, of the user recorded for the slot; no user is listed."""
+        matter_lock._slot_by_user_index.update({4: 2, 6: 3})
+        users = [_tagged(4, "lcm:2:Bob", 7), _tagged(6, "lcm:3:Carol", 8)]
+        with self._lock_holding(matter_lock, users) as lock:
+            result = await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bo"))
+
+        assert result == SetUserResult(user_id=4, created=False)
+        assert self._users_read_alone(lock.send) == [4]
+        lock.listing.assert_not_awaited()
+        assert lock.set_user.call_args.kwargs["user_index"] == 4
+
+    async def test_the_read_records_the_user_as_listing_every_user_would(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """
+        The user's slot and PINs are recorded from the read, as the listing would record them.
+
+        A release on a lock that cannot list its users clears the PINs
+        recorded (#1689), so a record the read left stale would miss one.
+        """
+        matter_lock._slot_by_user_index[4] = 2
+        matter_lock._pins_by_user_index[4] = {1}
+        users = [_tagged(4, "lcm:2:Bob", 7, 9)]
+        with self._lock_holding(matter_lock, users):
+            await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+            read = (
+                matter_lock._slot_by_user_index[4],
+                matter_lock._pins_by_user_index[4],
+            )
+            await matter_lock.async_get_users()
+
+        assert read == (2, {7, 9})
+        assert read == (
+            matter_lock._slot_by_user_index[4],
+            matter_lock._pins_by_user_index[4],
+        )
+
+    @pytest.mark.parametrize(
+        ("at_recorded", "recorded_after"),
+        [
+            (None, None),
+            (_tagged(4, "lcm:3:Carol", 7), 3),
+            (_tagged(4, "Mom", 9), None),
+            (_tagged(4, "2", 7, creator=2), None),
+        ],
+        ids=["gone", "tagged_for_another_slot", "untagged", "short_tag_another_fabric"],
+    )
+    async def test_a_record_that_no_longer_holds_reads_every_user(
+        self,
+        matter_lock: MatterLock,
+        at_recorded: dict[str, Any] | None,
+        recorded_after: int | None,
+    ) -> None:
+        """
+        The slot's user is found by listing every user, and both indices are recorded as read.
+
+        A bare-number name counts as a tag only on a user Home Assistant's
+        fabric made (#1729), as when every user is read.
+        """
+        matter_lock._slot_by_user_index[4] = 2
+        users = [*([at_recorded] if at_recorded else []), _tagged(6, "lcm:2:Bob", 8)]
+        with self._lock_holding(matter_lock, users) as lock:
+            result = await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
+        assert result == SetUserResult(user_id=6, created=False)
+        assert self._users_read_alone(lock.send) == [4]
+        lock.listing.assert_awaited_once()
+        assert matter_lock._slot_by_user_index.get(4) == recorded_after
+        assert matter_lock._slot_by_user_index[6] == 2
+
+    @pytest.mark.parametrize(
+        ("users", "adopted"),
+        [
+            ([_tagged(6, "Old", 2)], 6),
+            ([_tagged(4, "Old", 2)], 4),
+        ],
+        ids=["recorded_user_gone", "recorded_user_untagged"],
+    )
+    async def test_a_record_that_no_longer_holds_still_adopts(
+        self, matter_lock: MatterLock, users: list[dict[str, Any]], adopted: int
+    ) -> None:
+        """
+        An untagged user holding a PIN at the slot's index is adopted, as without a record.
+
+        How Lock Code Manager 2.0 left its users; the rename tags it.
+        """
+        matter_lock._slot_by_user_index[4] = 2
+        with self._lock_holding(matter_lock, users) as lock:
+            result = await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
+        assert result == SetUserResult(user_id=adopted, created=False)
+        lock.listing.assert_awaited_once()
+        assert lock.set_user.call_args.kwargs == {
+            "user_index": adopted,
+            "user_name": "lcm:2:Bob",
+        }
+
+    async def test_no_record_reads_every_user(self, matter_lock: MatterLock) -> None:
+        """Nothing read since setup: every user is listed, and no user read alone."""
+        with self._lock_holding(matter_lock, [_tagged(6, "lcm:2:Bob", 8)]) as lock:
+            result = await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
+        assert result == SetUserResult(user_id=6, created=False)
+        assert self._users_read_alone(lock.send) == []
+        lock.listing.assert_awaited_once()
+
+    async def test_two_users_recorded_for_the_slot_reads_every_user(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """
+        Which of two users tagged for one slot is its user is decided by listing every user.
+
+        The first listed, as ever: reading either alone could pick the other.
+        """
+        matter_lock._slot_by_user_index.update({6: 2, 4: 2})
+        users = [_tagged(4, "lcm:2:Bob", 7), _tagged(6, "lcm:2:Bob", 8)]
+        with self._lock_holding(matter_lock, users) as lock:
+            result = await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
+        assert result == SetUserResult(user_id=4, created=False)
+        assert self._users_read_alone(lock.send) == []
+        lock.listing.assert_awaited_once()
+
+    async def test_a_recorded_index_past_the_lock_s_users_is_not_read(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """An index past NumberOfTotalUsersSupported names no user; every user is listed."""
+        matter_lock._slot_by_user_index[11] = 2
+        with self._lock_holding(matter_lock, [_tagged(6, "lcm:2:Bob", 8)]) as lock:
+            result = await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
+        assert result == SetUserResult(user_id=6, created=False)
+        assert self._users_read_alone(lock.send) == []
+        lock.listing.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        ("answer", "raised"),
+        [
+            (HomeAssistantError("unreachable"), LockDisconnected),
+            (MatterClientException("not connected"), LockDisconnected),
+            ({"userIndex": 5}, LockOperationFailed),
+        ],
+        ids=["unanswered", "client_not_connected", "not_a_user_record"],
+    )
+    async def test_a_failed_read_raises_without_listing_every_user(
+        self, matter_lock: MatterLock, answer: Any, raised: type[Exception]
+    ) -> None:
+        """
+        A lock that did not answer is asked nothing more, as when listing every user fails.
+
+        The write is retried; the record stands, since the read said
+        nothing about the user.
+        """
+        matter_lock._slot_by_user_index[4] = 2
+        with self._lock_holding(matter_lock, [_tagged(4, "lcm:2:Bob", 7)]) as lock:
+            if isinstance(answer, Exception):
+                lock.send.side_effect = answer
+            else:
+                lock.send.side_effect = None
+                lock.send.return_value = answer
+            with pytest.raises(raised):
+                await matter_lock.async_set_user(User(user_id=2, name="lcm:2:Bob"))
+
+        lock.listing.assert_not_awaited()
+        lock.set_user.assert_not_awaited()
+        assert matter_lock._slot_by_user_index == {4: 2}
+
+
 class TestDeleteUser:
     """Test async_delete_user removes lock users."""
 
