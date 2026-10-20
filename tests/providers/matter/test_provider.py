@@ -775,13 +775,12 @@ def _patch_user_reads(users: list[dict]) -> Iterator[None]:
     single read of the user an event names, which answers ``None`` for an
     empty index.
     """
-    by_index = {user.get("user_index"): user for user in users}
     with (
         patch(
             f"{_PROVIDER_MODULE}.get_lock_users",
             AsyncMock(return_value={"max_users": 10, "users": users}),
         ),
-        patch.object(MatterLock, "_raw_lock_user", AsyncMock(side_effect=by_index.get)),
+        single_user_read_from_listing(),
     ):
         yield
 
@@ -924,26 +923,26 @@ class TestLockOperationEvent:
     async def test_preserves_slot_zero_resolved_by_user_index(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """Slot 0 from the primary resolver must not fall through to the fallback.
+        """
+        Slot 0 on the named user is reported, and no credentialIndex search runs.
 
-        Pins the explicit ``None`` check that replaced an ``or``-chain in
-        ``_dispatch_lock_operation``: with ``or``, ``code_slot == 0`` is
-        falsy, so the fallback walker would run and likely return a
-        different slot. The fix is to gate on ``is None`` explicitly.
+        A search runs only for a user index that reads empty; slot 0 is
+        falsy, so a check on truth rather than on ``None`` would search and
+        report the decoy's slot 4 instead.
         """
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
             [
-                # User at userIndex 1 maps to LCM slot 0 (legitimate primary hit).
+                # The user the event names, tagged for LCM slot 0.
                 {
                     "user_index": 1,
                     "user_name": "lcm:0:Zero",
-                    "credentials": [{"type": "pin", "index": 99}],
+                    "credentials": [{"type": "pin", "index": 5}],
                 },
-                # Decoy at credentialIndex 99 owned by a different tagged slot.
-                # If the resolver falls through, this would yield slot 4.
+                # The only holder of the event's credentialIndex 99, tagged
+                # for another slot: a search would yield slot 4.
                 {
                     "user_index": 2,
                     "user_name": "lcm:4:Decoy",
@@ -1865,6 +1864,53 @@ class TestLockUserChangeEvent:
             )
             await hass.async_block_till_done()
 
+        mock_coordinator.observe_push.assert_not_called()
+
+    @pytest.mark.parametrize("user_index", [0, -1])
+    async def test_pin_event_for_a_user_index_below_one_reads_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock, user_index: int
+    ) -> None:
+        """
+        Matter numbers users from 1, so a LockUserChange naming a lower index names nobody.
+
+        It is dropped without a read, even with the stand-in lock answering
+        a tagged user at that index.
+        """
+        mock_coordinator = _mock_coordinator()
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
+        matter_lock.coordinator = mock_coordinator
+        listing = AsyncMock(
+            return_value={
+                "max_users": 10,
+                "users": [
+                    {
+                        "user_index": user_index,
+                        "user_name": "lcm:3:Carol",
+                        "credentials": [{"type": "pin", "index": 7}],
+                    },
+                ],
+            }
+        )
+
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", listing),
+            single_user_read_from_listing(),
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,  # PIN
+                        "dataOperationType": 0,  # Add
+                        "dataIndex": 7,
+                        "userIndex": user_index,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        listing.assert_not_awaited()
         mock_coordinator.observe_push.assert_not_called()
 
     async def test_user_cleared_resolves_through_the_last_read(
@@ -3664,9 +3710,10 @@ class TestReleaseManagedSlot:
         """
         A node without its Door Lock endpoint (mid re-interview) reads as disconnected.
 
-        Home Assistant raises its own error finding the endpoint, outside the
-        SDK call, so it is translated there; untranslated, it escaped every
-        caller's ``LockOperationError`` handling.
+        Home Assistant raises its own error finding the endpoint, before the
+        command is sent, so it is translated there; untranslated, it escaped
+        every caller's ``LockOperationError`` handling. Every user is not read
+        instead: listing them needs the same endpoint.
         """
 
         def _no_endpoint(_node: Any) -> Any:
@@ -3675,9 +3722,16 @@ class TestReleaseManagedSlot:
         monkeypatch.setattr(
             matter_lock_helpers, "_get_lock_endpoint_or_raise", _no_endpoint
         )
+        listing = AsyncMock(return_value={"max_users": 10, "users": []})
 
         with pytest.raises(LockDisconnected, match="no Door Lock endpoint"):
             await matter_lock._raw_lock_user(1)
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", listing),
+            pytest.raises(LockDisconnected, match="no Door Lock endpoint"),
+        ):
+            await matter_lock._raw_user_at(1)
+        listing.assert_not_awaited()
 
     @pytest.mark.parametrize(
         "missing", ["_get_lock_endpoint_or_raise", "_format_user_response"]

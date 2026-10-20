@@ -8,11 +8,11 @@ cluster events via the push framework for code slot tracking (LockOperation)
 and occupancy updates (LockUserChange).
 """
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import Any, Literal, cast, override
+from typing import Any, Literal, override
 
 from chip.clusters import Objects as clusters
 from matter_server.client.exceptions import MatterClientException
@@ -144,20 +144,21 @@ def _transient_status_disconnect(
     )
 
 
-def _single_user_read_helpers() -> tuple[Callable[..., Any], Callable[..., Any]] | None:
-    """
-    Return Home Assistant's private helpers a single-user read needs, or ``None``.
+# What Home Assistant's private helpers raise once their signature or answer
+# shape no longer matches how the single-user read calls them.
+_HELPER_MISMATCH = (AttributeError, LookupError, TypeError, ValueError)
 
-    Its lock helpers have no single-user read, so ``MatterLock._raw_lock_user``
-    sends GetUser and formats the answer with these. They are looked up, not
-    imported, so a rename in Home Assistant costs only that read, never the
-    integration's import.
+
+class _SingleUserReadUnavailable(LockDisconnected):
     """
-    endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
-    format_user = getattr(matter_lock_helpers, "_format_user_response", None)
-    if endpoint_of is None or format_user is None:
-        return None
-    return endpoint_of, format_user
+    Home Assistant's private helpers can no longer read one user.
+
+    ``MatterLock._raw_lock_user`` borrows them, as its lock helpers have no
+    single-user read: they are gone, or no longer take or give what the read
+    expects. A ``LockDisconnected``, so a caller with no other way to read
+    the user treats the lock as unanswered; ``MatterLock._raw_user_at``
+    reads every user instead.
+    """
 
 
 def _raw_user_slot(raw_user: dict[str, Any], fabric: int | None) -> int | None:
@@ -191,7 +192,7 @@ def _lcm_slot_from_raw_users_by_credential_index(
     Walks each raw user's credentials list for a Personal Identification
     Number credential whose Matter index matches; if found, reads the
     owning user's tag. Used as a fallback when the LockOperation event
-    omits ``userIndex``.
+    names no user, or one that reads empty.
     """
     if credential_index is None:
         return None
@@ -509,19 +510,23 @@ class MatterLock(BaseLock):
         """
         Return one raw user, as ``get_lock_users`` lists it, or ``None`` if empty.
 
-        One GetUser for ``user_index``, with Home Assistant's private helpers
-        (``_single_user_read_helpers``); ``LockDisconnected`` once they are
-        gone, as for an unanswered read. Callers that know the user they
-        want go through ``_raw_user_at``; a release on a lock that fails the
-        full walk (#1689) calls this directly.
+        One GetUser for ``user_index``, sent and formatted with Home
+        Assistant's private helpers. They are looked up, not imported, so a
+        rename in Home Assistant costs only this read, never the
+        integration's import; ``_SingleUserReadUnavailable`` once they are
+        gone or no longer fit. A node without its Door Lock endpoint is
+        ``LockDisconnected``: listing every user needs that endpoint too.
+        Callers that know the user they want go through ``_raw_user_at``; a
+        release on a lock that fails the full walk (#1689) calls this
+        directly.
         """
-        helpers = _single_user_read_helpers()
-        if helpers is None:
-            raise LockDisconnected(
+        endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
+        format_user = getattr(matter_lock_helpers, "_format_user_response", None)
+        if endpoint_of is None or format_user is None:
+            raise _SingleUserReadUnavailable(
                 f"{self.lock.entity_id}: Home Assistant's Matter lock helpers "
                 f"no longer provide a single-user read"
             )
-        endpoint_of, format_user = helpers
         client, node = self._require_client_and_node()
         try:
             endpoint_id = endpoint_of(node).endpoint_id
@@ -529,6 +534,11 @@ class MatterLock(BaseLock):
             raise LockDisconnected(
                 f"{self.lock.entity_id}: no Door Lock endpoint to read user "
                 f"{user_index} from: {err}"
+            ) from err
+        except _HELPER_MISMATCH as err:
+            raise _SingleUserReadUnavailable(
+                f"{self.lock.entity_id}: Home Assistant's Door Lock endpoint "
+                f"lookup no longer fits a single-user read: {err!r}"
             ) from err
         response = await self._invoke_sdk(
             "get_lock_user",
@@ -538,7 +548,19 @@ class MatterLock(BaseLock):
                 command=clusters.DoorLock.Commands.GetUser(userIndex=user_index),
             ),
         )
-        return cast(dict[str, Any] | None, format_user(response))
+        try:
+            user = format_user(response)
+        except _HELPER_MISMATCH as err:
+            raise _SingleUserReadUnavailable(
+                f"{self.lock.entity_id}: Home Assistant's user formatter no "
+                f"longer reads user {user_index}'s GetUser answer: {err!r}"
+            ) from err
+        if user is not None and not isinstance(user, dict):
+            raise _SingleUserReadUnavailable(
+                f"{self.lock.entity_id}: Home Assistant's user formatter "
+                f"answered {type(user).__name__} for user {user_index}"
+            )
+        return user
 
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
@@ -1843,19 +1865,19 @@ class MatterLock(BaseLock):
 
         One GetUser (``_raw_lock_user``): reading every user to find one
         costs a round trip each over the lock's radio. Every user is read
-        only when Home Assistant no longer has the helpers the single read
-        uses. A lock that does not answer the single read raises
-        ``LockDisconnected``; asking it for every user instead would only
-        send it more.
+        only when Home Assistant's helpers can no longer read one. A lock
+        that does not answer the single read raises ``LockDisconnected``;
+        asking it for every user instead would only send it more.
         """
-        if _single_user_read_helpers() is not None:
+        try:
             return await self._raw_lock_user(user_index)
-        LOGGER.debug(
-            "Lock %s: Home Assistant has no single-user read, reading every "
-            "user for user %s",
-            self.lock.entity_id,
-            user_index,
-        )
+        except _SingleUserReadUnavailable as err:
+            LOGGER.debug(
+                "Lock %s: %s; reading every user for user %s",
+                self.lock.entity_id,
+                err,
+                user_index,
+            )
         return next(
             (
                 raw_user
@@ -1871,14 +1893,18 @@ class MatterLock(BaseLock):
         """
         Return the LCM slot a LockOperation's user holds, or ``None``.
 
-        The user the event names, read alone (``_raw_user_at``). Without
-        one, every user is read for the Personal Identification Number
-        credential at ``credentialIndex``.
+        The user the event names, read alone (``_raw_user_at``). Matter
+        numbers users from 1, so an event naming no user, or a user index
+        below 1, names nobody; for that, and for a named index that reads
+        empty, every user is read for the Personal Identification Number
+        credential at ``credentialIndex``. A named user that is not LCM's
+        answers ``None`` without that search.
         """
         fabric = self._fabric_index()
-        if user_index is not None:
+        if user_index is not None and user_index >= 1:
             user = await self._raw_user_at(user_index)
-            return None if user is None else _raw_user_slot(user, fabric)
+            if user is not None:
+                return _raw_user_slot(user, fabric)
         return _lcm_slot_from_raw_users_by_credential_index(
             await self._raw_lock_users(), credential_index, fabric
         )
@@ -1895,9 +1921,9 @@ class MatterLock(BaseLock):
         Primary path: lock-reported ``userIndex`` -> user.name -> tag, read
         with one GetUser: the use is announced only once this answers, and
         walking every user takes seconds on a lock with a handful of them.
-        Fallback path, for an event without ``userIndex``: walk the user list
-        to find the PIN credential at ``credentialIndex`` and parse the
-        owning user's tag. Events whose
+        Fallback path, for an event naming no user or an empty one: walk the
+        user list to find the PIN credential at ``credentialIndex`` and parse
+        the owning user's tag. Events whose
         owning user isn't LCM-tagged are silently dropped so out-of-band
         PIN uses on non-LCM credentials don't drive spurious code slot
         events.
@@ -1979,9 +2005,10 @@ class MatterLock(BaseLock):
             return
 
         user_index = parse_slot_num(data.get("userIndex"))
-        if user_index is None:
+        # Matter numbers users from 1: anything else names no user to read.
+        if user_index is None or user_index < 1:
             LOGGER.debug(
-                "Lock %s: LockUserChange has non-integer userIndex %r, ignoring",
+                "Lock %s: LockUserChange names no user (userIndex %r), ignoring",
                 self.lock.entity_id,
                 data.get("userIndex"),
             )
