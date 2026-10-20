@@ -2,14 +2,15 @@
 blueprint:
   name: "Lock Code Manager: Slot Usage Notifier"
   description: >
-    Runs one or more actions when a Lock Code Manager code slot PIN
-    is used on a lock. Use this to send notifications, trigger scripts,
+    Runs one or more actions when a Lock Code Manager code slot's
+    credential (a PIN, or a card or fingerprint on a lock that reports
+    which) is used on a lock. Use this to send notifications, trigger scripts,
     or run any other Home Assistant action.
 
 
     **How it works**
 
-    When a code slot event fires (PIN used on lock), the automation
+    When a code slot event fires (credential used on lock), the automation
     runs the configured actions. You can use the action editor to
     configure any HA action — notifications, scripts, scenes, etc.
 
@@ -22,7 +23,7 @@ blueprint:
 
     - `slot_name` — the user-configured name of the code slot
 
-    - `lock_name` — the friendly name of the lock where the PIN
+    - `lock_name` — the friendly name of the lock where the credential
       was used
 
     - `timestamp` — the date and time the event occurred
@@ -30,7 +31,8 @@ blueprint:
     - `operation` — what the device did with the credential: `unlock`,
       `lock`, or `unknown` when nothing reported which
 
-    - `credential_type` — the kind of credential presented, `pin` today
+    - `credential_type` — the kind of credential presented: `pin`, or
+      `rfid`, `fingerprint` or `face` on a lock that reports which
 
 
     **What runs the actions**

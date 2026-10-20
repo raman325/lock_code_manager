@@ -20,6 +20,7 @@ from homeassistant.exceptions import HomeAssistantError
 from ..model.credentials import (
     Credential,
     CredentialRef,
+    CredentialType,
     SlotCredential,
     User,
     WriteResult,
@@ -53,6 +54,14 @@ _Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
     }
 )
 _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
+
+# The credential an operation event's ``action_source_name`` says was
+# presented (zigbee-herdsman-converters ``lockSourceName``). Every other
+# source -- keypad, radio frequency remote, manual -- reports PIN.
+_Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
+    "rfid": CredentialType.RFID,
+    "fingerprint": CredentialType.FINGERPRINT,
+}
 
 # User status 0xFF, which the Door Lock cluster names "Not Supported": the
 # lock cannot report its users at all.
@@ -244,7 +253,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
         """Apply device-topic JSON on the Home Assistant event loop."""
         action = payload.get("action")
 
-        # Handle lock/unlock actions with user identification (keypad PIN usage)
+        # Handle lock/unlock actions with user identification (a PIN, card or
+        # fingerprint, by action_source_name)
         if isinstance(action, str) and action in _Z2M_LOCK_ACTIONS:
             action_user = payload.get("action_user")
             if action_user is not None and not isinstance(action_user, bool):
@@ -261,6 +271,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
                 self.async_fire_code_slot_event(
                     code_slot=code_slot,
                     to_locked=to_locked,
+                    credential_type=_Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(
+                        str(payload.get("action_source_name")), CredentialType.PIN
+                    ),
                 )
             return
 

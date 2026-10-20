@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
     SlotCredential,
     pin_address,
 )
@@ -292,6 +293,7 @@ def test_keypad_unlock_action_fires_code_slot_event() -> None:
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=3,
         to_locked=False,
+        credential_type=CredentialType.PIN,
     )
 
 
@@ -306,6 +308,7 @@ def test_keypad_lock_action_fires_code_slot_event() -> None:
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=1,
         to_locked=True,
+        credential_type=CredentialType.PIN,
     )
 
 
@@ -342,6 +345,7 @@ def test_rf_unlock_action_fires_event() -> None:
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=5,
         to_locked=False,
+        credential_type=CredentialType.PIN,
     )
 
 

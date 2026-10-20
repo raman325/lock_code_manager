@@ -16,6 +16,7 @@ from pytest_homeassistant_custom_component.common import (
     async_capture_events,
 )
 
+from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
 from homeassistant.components.matter import lock_helpers
 from homeassistant.config_entries import SOURCE_USER, ConfigEntriesFlowManager
 from homeassistant.const import (
@@ -31,6 +32,7 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CREDENTIAL_TYPE,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -637,7 +639,232 @@ class TestKeypadAndSwitch:
         await async_advance_sync_ticks(hass, freezer)
 
         assert hass.states.get(event_entity).state != before
-        assert [event.data["name"] for event in used] == ["slot2"]
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", "pin")]
+
+    async def test_a_keypad_use_is_a_pin_whatever_type_the_lock_names(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A keypad PIN the lock logs as a fingerprint is recorded as a PIN.
+
+        The Aqara U400 (firmware 3.1.1.0) writes the operation source into
+        ``credentialType``, so its keypad uses arrive as 3, Fingerprint (#1745).
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN]),
+            reported_as=DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", "pin")]
+
+    async def test_the_admin_code_at_the_keypad_is_no_user_s_use(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A keypad use the lock types as ProgrammingPIN records nothing.
+
+        A keypad use is otherwise a PIN whatever its ``credentialType``, but
+        the lock's admin code is not a user's credential, even when the event
+        names an LCM user.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        event_entity = next(
+            state.entity_id
+            for state in hass.states.async_all("event")
+            if state.attributes.get("code_slot") == 2
+        )
+        before = hass.states.get(event_entity).state
+        index = _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(
+            fake_matter_lock.owner(index),
+            DoorLock.Enums.CredentialTypeEnum.kProgrammingPIN,
+            0,
+            source=DoorLock.Enums.OperationSourceEnum.kKeypad,
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert used == []
+        assert hass.states.get(event_entity).state == before
+
+    @pytest.mark.parametrize(
+        ("kind", "expected"),
+        [
+            pytest.param(DoorLock.Enums.CredentialTypeEnum.kRfid, "rfid", id="rfid"),
+            pytest.param(
+                DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+                "fingerprint",
+                id="fingerprint",
+            ),
+            pytest.param(
+                DoorLock.Enums.CredentialTypeEnum.kFingerVein,
+                "fingerprint",
+                id="finger_vein",
+            ),
+            pytest.param(DoorLock.Enums.CredentialTypeEnum.kFace, "face", id="face"),
+        ],
+    )
+    async def test_a_use_names_the_credential_presented(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        kind: int,
+        expected: str,
+    ) -> None:
+        """
+        A card or a finger the user enrolled in the vendor app is their use.
+
+        The LockOperation for anything but a PIN was dropped, so a user who
+        unlocked with a card was never recorded at all; a keypad use still
+        reads ``pin`` (:meth:`test_a_keypad_use_updates_the_user_s_event_entity`).
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        event_entity = next(
+            state.entity_id
+            for state in hass.states.async_all("event")
+            if state.attributes.get("code_slot") == 2
+        )
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index, kind, 5)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(user_index, kind, 5)
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", expected)]
+        state = hass.states.get(event_entity)
+        assert state.attributes[ATTR_EVENT_TYPE] == expected
+        assert expected in state.attributes[ATTR_EVENT_TYPES]
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(
+                DoorLock.Enums.OperationSourceEnum.kProprietaryRemote, id="app"
+            ),
+            pytest.param(DoorLock.Enums.OperationSourceEnum.kAuto, id="auto"),
+            pytest.param(DoorLock.Enums.OperationSourceEnum.kButton, id="button"),
+        ],
+    )
+    async def test_an_unlock_no_credential_made_is_not_a_use(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        source: int,
+    ) -> None:
+        """
+        An app, auto or button unlock naming the user records no use of theirs.
+
+        The lock writes the source into ``credentialType``, the pattern the
+        Aqara U400 shows for its keypad and Home Key (#1745), extrapolated to
+        these sources: read by type, the app's 2 would be a card, auto's 4 a
+        finger and the button's 5 a face, each spending a Slot Usage Limiter
+        use.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        event_entity = next(
+            state.entity_id
+            for state in hass.states.async_all("event")
+            if state.attributes.get("code_slot") == 2
+        )
+        before = hass.states.get(event_entity).state
+        index = _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(
+            fake_matter_lock.owner(index), source, index, source=source
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert used == []
+        assert hass.states.get(event_entity).state == before
+
+    @pytest.mark.parametrize(
+        ("reported_as", "expected"),
+        [
+            pytest.param(
+                DoorLock.Enums.CredentialTypeEnum.kPin, [("slot2", "pin")], id="pin"
+            ),
+            pytest.param(DoorLock.Enums.CredentialTypeEnum.kRfid, [], id="card"),
+            pytest.param(
+                DoorLock.Enums.CredentialTypeEnum.kFingerprint,
+                [],
+                id="reported_as_fingerprint",
+            ),
+        ],
+    )
+    async def test_a_keypad_use_naming_no_user_is_placed_by_a_pin_alone(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        reported_as: int,
+        expected: list[tuple[str, str]],
+    ) -> None:
+        """
+        With no userIndex, the holder of PIN N owns only a PIN the lock typed at N.
+
+        A keypad use is a PIN whatever ``credentialType`` says, but its index
+        is in the space of that type: a card at N, or the Aqara U400's keypad
+        credential typed 3 (#1745), is not the user holding PIN N.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        index = _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(
+            None,
+            reported_as,
+            index,
+            source=DoorLock.Enums.OperationSourceEnum.kKeypad,
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == expected
 
     async def test_a_keypad_use_reads_only_the_user_it_names(
         self,
