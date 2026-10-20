@@ -158,8 +158,9 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
 - `switch.py`: Slot enabled/disabled toggle
 - `event.py`: per-user `credential_used` event entity. Its `event_types` are
   the credential kinds the entry's locks can report -- each lock's advertised
-  capabilities plus its provider's `reported_credential_types` (for providers
-  that cannot ask the lock), over a floor of `MANAGED_CREDENTIAL_TYPES` -- and
+  capabilities plus its provider's `reported_credential_types` (kinds the
+  protocol cannot ask the lock about; ZHA asks at setup whether the lock reads
+  cards), over a floor of `MANAGED_CREDENTIAL_TYPES` -- and
   a recorded use fires with the kind it was. A use of a kind not listed is
   dropped at DEBUG (the bus event still fired); that is a provider
   under-reporting its lock, fixed in its capabilities.

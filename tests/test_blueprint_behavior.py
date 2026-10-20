@@ -808,7 +808,11 @@ async def test_limiter_spends_a_use_only_on_a_pin(
     )
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    monkeypatch.setattr(lock, "reported_credential_types", frozenset({credential_type}))
+    monkeypatch.setattr(
+        type(lock),
+        "reported_credential_types",
+        property(lambda _: frozenset({credential_type})),
+    )
     lock.async_fire_code_slot_event(1, False, credential_type)
     await hass.async_block_till_done()
     assert hass.states.get(SLOT_1_EVENT_ENTITY).attributes[ATTR_EVENT_TYPE] == (

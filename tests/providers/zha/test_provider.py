@@ -557,6 +557,27 @@ async def test_programming_event_support_without_mask(
     assert result is False
 
 
+async def test_a_card_reader_question_left_hanging_is_no_answer(
+    hass: HomeAssistant, zha_lock: ZHALock
+) -> None:
+    """
+    A read that outlasts its own bound gives up rather than raising.
+
+    The question is asked during setup, so it must never be what fails
+    setup's deadline; no answer lists the reader anyway.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.read_attributes = AsyncMock(side_effect=asyncio.Event().wait)
+
+    with patch(
+        "custom_components.lock_code_manager.providers.zha._CARD_READER_QUESTION_BUDGET",
+        0.01,
+    ):
+        assert await zha_lock._async_ask_whether_it_reads_cards() is None
+    assert CredentialType.RFID in zha_lock.reported_credential_types
+
+
 # ---------------------------------------------------------------------------
 # Connection failure paths
 # ---------------------------------------------------------------------------

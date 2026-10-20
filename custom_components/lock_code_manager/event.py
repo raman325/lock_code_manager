@@ -101,12 +101,11 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         """
         Return the credential kinds the entry's locks can report a use as.
 
-        For each lock, the kinds its cached capabilities advertise and the
-        kinds its provider declares in ``reported_credential_types``, which
-        is how a provider that cannot ask the lock says what it reports. A
-        lock with its own Radio Frequency Identification reader reports uses
-        of a credential this integration never wrote, and they are still
-        this user's uses.
+        For each lock, the kinds its cached capabilities advertise and its
+        provider's ``reported_credential_types``, the kinds it reports that
+        its protocol cannot ask the lock about. A lock with its own Radio
+        Frequency Identification reader reports uses of a credential this
+        integration never wrote, and they are still this user's uses.
 
         ``MANAGED_CREDENTIAL_TYPES`` is a floor under that union. A use
         reported through ``use_credential`` is one of those kinds whatever

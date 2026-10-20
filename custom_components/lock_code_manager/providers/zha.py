@@ -171,6 +171,17 @@ SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
     4: CredentialType.FINGERPRINT,
 }
 
+# Every kind an operation event can report: whatever a source maps to, and the
+# PIN every other source reports.
+_REPORTABLE_CREDENTIAL_TYPES = frozenset(
+    {CredentialType.PIN, *SOURCE_TO_CREDENTIAL_TYPE.values()}
+)
+
+# How long setup waits to hear whether the lock reads cards. An unanswered
+# question lists the reader anyway, so it is not worth more of setup's deadline
+# than this -- a slow answer must not be what fails setup.
+_CARD_READER_QUESTION_BUDGET = 60.0
+
 
 # What one ZCL command to a sleepy lock can legitimately take before zigpy
 # itself gives up. Each of zigpy's three attempts waits for the radio's send
@@ -203,17 +214,30 @@ class ZHALock(BaseLock):
 
     _door_lock_cluster: DoorLock | None = field(init=False, default=None)
     _supports_programming_events: bool | None = field(init=False, default=None)
+    # Whether the lock has a Radio Frequency Identification reader, as it
+    # answered during setup; None while it has not.
+    _reads_cards: bool | None = field(init=False, default=None)
 
     # One ZCL command per slot, each of them slow; see _WORST_CASE_ZCL_COMMAND.
     per_exchange_budget: ClassVar[float | None] = _WORST_CASE_ZCL_COMMAND
 
-    # Nothing here asks the lock which readers it has, so every kind an
-    # operation event's source can name is declared, and the keypad's PIN.
-    reported_credential_types: ClassVar[frozenset[CredentialType]] = frozenset(
-        {CredentialType.PIN, *SOURCE_TO_CREDENTIAL_TYPE.values()}
-    )
-
     # -- Properties ----------------------------------------------------------
+
+    @property
+    @override
+    def reported_credential_types(self) -> frozenset[CredentialType]:
+        """
+        Return every kind an operation event can report, less a reader it lacks.
+
+        The lock is asked during setup whether it reads cards. A fingerprint
+        is a vendor extension with no attribute to ask about, so it is always
+        listed. A card is left out only when the lock said it has no reader:
+        listing a kind the lock cannot produce costs nothing, and dropping a
+        real card use would not.
+        """
+        if self._reads_cards is False:
+            return _REPORTABLE_CREDENTIAL_TYPES - {CredentialType.RFID}
+        return _REPORTABLE_CREDENTIAL_TYPES
 
     @property
     @override
@@ -251,13 +275,15 @@ class ZHALock(BaseLock):
     @override
     async def async_setup(self, config_entry: ConfigEntry) -> None:
         """
-        Initialize provider state and detect programming event support.
+        Initialize provider state and ask the lock what it supports.
 
         Called on initial setup AND on integration reconnect, so we clear
         cached cluster references (which may be stale after a ZHA reload)
         and re-detect programming event support.  The coordinator reads
         ``hard_refresh_interval`` during init, so detection must complete
-        before coordinator creation.
+        before coordinator creation. Whether the lock reads cards is asked
+        here too, so it is known before a use arrives; the worker's first
+        read after setup re-publishes each event entity's kinds.
         """
         self.unsubscribe_push_updates()
         self._door_lock_cluster = None
@@ -265,6 +291,7 @@ class ZHALock(BaseLock):
         self._supports_programming_events = (
             await self._async_check_programming_event_support()
         )
+        self._reads_cards = await self._async_ask_whether_it_reads_cards()
         if not self._supports_programming_events:
             _LOGGER.info(
                 "Lock %s: programming event notifications not supported, "
@@ -639,6 +666,37 @@ class ZHALock(BaseLock):
         if not supported:
             return None
         return min(int(supported), MAX_SEARCHED_SLOT)
+
+    async def _async_ask_whether_it_reads_cards(self) -> bool | None:
+        """
+        Ask the lock whether it has a Radio Frequency Identification reader.
+
+        From its count of RFID users. ``None`` when it gave no answer --
+        unreachable, timed out, or failed the read -- which nothing here
+        treats as a missing reader.
+        """
+        attribute = DoorLock.AttributeDefs.num_of_rfid_users_supported
+        try:
+            cluster = await self._get_connected_cluster()
+            async with asyncio.timeout(_CARD_READER_QUESTION_BUDGET):
+                success, failure = await cluster.read_attributes(
+                    [attribute.id], allow_cache=True, only_cache=False
+                )
+        except Exception:
+            _LOGGER.debug(
+                "Lock %s: could not ask whether it reads cards",
+                self.lock.entity_id,
+                exc_info=True,
+            )
+            return None
+        if failure.get(attribute.id) == foundation.Status.UNSUPPORTED_ATTRIBUTE:
+            return False
+        if (count := success.get(attribute.id)) is None:
+            return None
+        # Zero taken at face value, unlike the PIN count in `async_get_max_slot`:
+        # a lock with a keypad has PIN users whatever it reports, but one with
+        # no reader really has no card users.
+        return count > 0
 
     @override
     async def async_hard_refresh_codes(

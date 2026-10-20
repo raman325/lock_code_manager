@@ -1326,6 +1326,25 @@ class TestLockThatCannotReport:
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+def _unlock_from(door_lock: DoorLockStandIn, source: int) -> None:
+    """Deliver the lock's operation event: slot 1's user unlocked it from ``source``."""
+    event = lock_frame(
+        door_lock.cluster,
+        "operation_event_notification",
+        operation_event_source=source,
+        operation_event_code=DoorLock.OperationEvent.Unlock,
+        user_id=1,
+        pin="",
+        local_time=0,
+    )
+    door_lock.cluster.listener_event(
+        "cluster_command",
+        0,
+        DoorLock.ClientCommandDefs.operation_event_notification.id,
+        event.payload,
+    )
+
+
 class TestCredentialPresented:
     """A use names the credential the lock says was presented."""
 
@@ -1352,8 +1371,9 @@ class TestCredentialPresented:
 
         Every use was announced as a PIN whatever the operation event's
         source said, so an RFID tag read as its holder typing their code.
-        Nothing asks a Zigbee lock which readers it has, so the user's event
-        entity admits every kind the provider can report from setup.
+        This lock answers no attribute read, so whether it reads cards is
+        unknown, and the user's event entity admits every kind the provider
+        can report from setup.
         """
         await _run_ticks(hass)
         event_entity = slot_entity_id(
@@ -1365,22 +1385,79 @@ class TestCredentialPresented:
             "rfid",
         ]
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-        event = lock_frame(
-            door_lock.cluster,
-            "operation_event_notification",
-            operation_event_source=source,
-            operation_event_code=DoorLock.OperationEvent.Unlock,
-            user_id=1,
-            pin="",
-            local_time=0,
-        )
-        door_lock.cluster.listener_event(
-            "cluster_command",
-            0,
-            DoorLock.ClientCommandDefs.operation_event_notification.id,
-            event.payload,
-        )
+        _unlock_from(door_lock, source)
         await hass.async_block_till_done()
 
         assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == [expected]
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == expected
+
+
+def _no_answer(request: Any) -> Frame | None:
+    """Answer nothing, as zigpy reports a lock that never replied."""
+    raise TimeoutError
+
+
+# The Radio Frequency Identification user count, Door Lock attribute 0x0013.
+_RFID_USERS = DoorLock.AttributeDefs.num_of_rfid_users_supported.id
+
+
+class TestCardReader:
+    """Whether a card use is recorded follows what the lock says of its reader."""
+
+    @pytest.mark.parametrize(
+        ("door_lock_attributes", "door_lock_answers", "reads_cards"),
+        [
+            # No Zigbee lock dump on record reports a positive count, so this
+            # one is made up.
+            pytest.param({_RFID_USERS: 30}, {}, True, id="a_reader"),
+            # Nor a zero: made up too.
+            pytest.param({_RFID_USERS: 0}, {}, False, id="no_card_users"),
+            # The Level Home B2 reports the attribute unsupported (zigpy/zha
+            # fc5b0945, tests/data/devices/level-home-b2-0x0300001a.json).
+            pytest.param({}, {}, False, id="unsupported"),
+            # A read zigpy gave up on is no answer at all.
+            pytest.param({}, {"Read_Attributes": _no_answer}, True, id="no_answer"),
+        ],
+    )
+    async def test_a_card_use_is_recorded_unless_the_lock_has_no_reader(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        reads_cards: bool,
+    ) -> None:
+        """
+        The lock is asked at setup whether it reads cards, and believed.
+
+        A count of card users above zero is a reader, and zero or an
+        unsupported attribute is none: a card use there is the lock
+        reporting what it said it cannot do, dropped from the user's event
+        entity though still announced on the bus. A lock that does not
+        answer keeps the reader listed, because recording a kind the lock
+        cannot produce costs nothing and dropping a real card use would not.
+        A fingerprint has no attribute to ask about and is always listed.
+        """
+        await _run_ticks(hass)
+        assert any(
+            request.command.name == "Read_Attributes"
+            and _RFID_USERS in request.attribute_ids
+            for request in door_lock.requests
+        )
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        assert before.attributes[ATTR_EVENT_TYPES] == (
+            ["fingerprint", "pin", "rfid"] if reads_cards else ["fingerprint", "pin"]
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        _unlock_from(door_lock, DoorLock.OperationEventSource.RFID)
+        await hass.async_block_till_done()
+
+        assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == ["rfid"]
+        after = hass.states.get(event_entity)
+        if reads_cards:
+            assert after.attributes[ATTR_EVENT_TYPE] == "rfid"
+        else:
+            assert (after.state, after.attributes) == (before.state, before.attributes)

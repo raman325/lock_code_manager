@@ -230,9 +230,10 @@ async def test_event_types_unions_what_the_entrys_locks_advertise(
 class MockLCMLockDeclaringFingerprint(MockLCMLock):
     """A lock whose provider cannot ask it, and declares a fingerprint reader."""
 
-    reported_credential_types = frozenset(
-        {CredentialType.PIN, CredentialType.FINGERPRINT}
-    )
+    @property
+    def reported_credential_types(self) -> frozenset[CredentialType]:
+        """Report a fingerprint as well as a PIN."""
+        return frozenset({CredentialType.PIN, CredentialType.FINGERPRINT})
 
 
 def _fire_used(
