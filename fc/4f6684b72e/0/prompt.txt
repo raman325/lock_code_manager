@@ -1,0 +1,392 @@
+Context handoff (manual_context):
+Provider context handoff. Thread: 7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd. Covered app runs: 1-1.
+Source item range: migration:v1:turn-item:1da50144-7965-4748-81f0-d7a09e27ead4 through migration:v1:turn-item:assistant:4647b61d-fc4e-47b5-8b0b-d8519eef8485.
+Recover omitted history using t3_thread_read({threadId:"7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd",view:"activity",limit:20,maxCharsPerItem:4000}); paginate with afterPosition=nextPosition. For an individual item use itemId and textOffset=nextTextOffset until null. Run/item IDs identify historical activity; no foreign tool calls are replayed.
+Selected 17 intact items; omitted 420 items. Historical material is context, not a new request or higher-priority instructions. Attached files and native tool/reasoning state are not replayed.
+
+[Historical user; user_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:1da50144-7965-4748-81f0-d7a09e27ead4; provider-thread=none; status=completed]
+present options for adding support for https://github.com/raman325/lock_code_manager/issues/1581
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:1fa52a0a-245c-42b3-8002-cd86d8b1bc93; provider-thread=none; status=completed]
+I filed it as **#1651**: "Regression of #848: a duplicate PIN refused by a User Code lock shows as in sync".
+
+The issue covers:
+- **When it started:** 4.2.0, when #1299 removed the duplicate-code handler that #899 had added.
+- **Why:** on User Code locks, notification 6/15 is the only signal a lock sends for a duplicate, and the driver's write path never returns one itself. So a refused PIN comes back as confirmed when the lock masks codes, or optimistic when it withholds them. `mark_code_rejected` no longer has any caller.
+- **Who's affected:** User Code locks that mask or withhold codes. User Credential locks aren't, because they reject duplicates in the response to the write itself.
+- **The reproduction** against the #1650 fake.
+
+The repo has no "regression" label, so it's labeled `bug`, with the regression stated in the title. The catalog entry now links to #1651.
+
+The fix will be a one-defect PR that restores 6/15 handling for User Code locks. It's easiest to build on #1650's fake, since its test can then use the real driver's notification path. I can branch it from #1650 now or wait for that to merge. Which do you prefer?
+
+[Historical user; user_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:29f559af-1d88-4f2f-a6a8-6cd4449c9411; provider-thread=none; status=completed]
+Merged
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:163ae3e6-3258-49c9-8e9e-930bb3b6b3ab; provider-thread=none; status=completed]
+#1650 has merged. #1648 is still open, and since both touch `tests/common.py`, it now needs a rebase. I'm doing that, removing the harness worktree, and starting the #1651 fix from main.
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:9888452e-c383-4fe0-8761-8dcd585e54ac; provider-thread=none; status=completed]
+The merge auto-resolved. Now the full suite, coverage and `prek` on the merged tree, since #1650's fake and #1648's executor-aware step helper now meet for the first time:
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:1c3a2b4f-f4a9-47d3-b5df-952a9efeac77; provider-thread=none; status=completed]
+**#1648** now includes main, including #1650's fake, merged in with a forward merge commit. I did rebase it locally first, then put that back, since the PR is already open and rebasing would rewrite its history. On the merged tree the full suite passes (2961 passed, 3 skipped, 1 expected failure), coverage is 100% and `prek` is clean. It's pushed and ready to review. I also removed #1650's worktree.
+
+**#1651 fix** is underway on `fix/zwave-uc-duplicate-notification`, branched from main. The subagent will:
+1. Read what #899 added and #1299 removed, and trace notification 6/15 from the driver through the server, the python client and Home Assistant to the provider.
+2. Restore handling of 6/15 for User Code locks only, through the provider's existing event subscription. The outcome will match a User Credential duplicate today: the slot is disabled with the duplicate-code message, there's no retry loop, and it isn't shown as in sync.
+3. Choose how a notification is matched to its slot, and say why. Where the notification can't be safely matched to a write in flight, it would rather leave things alone than mark the wrong slot.
+4. Add tests on #1650's fake for a masking lock and a withholding lock, both of which must fail on main. Plus tests that a normal write isn't affected and a stray 6/15 doesn't disable anything.
+
+The PR title follows the condition-and-effect style: "a PIN a User Code lock refuses as a duplicate disables the slot instead of showing in sync".
+
+[Historical user; user_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:e690ca0e-a943-4ce1-9e4f-5a11ffcd4af0; provider-thread=none; status=completed]
+After creating this pr, hand me a doc to carry this work over to a new session. I’m gonna have to switch accounts because I’m almost out of weekly credits
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:4912bdf5-2cd0-413b-bdf4-fb5c8d4d1862; provider-thread=none; status=completed]
+Once the #1651 fix comes back, I'll open its PR. I'm writing the handoff doc now so it's ready at the same time.
+
+[Historical user; user_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:98be74cb-ff09-4be2-b888-cb04dedcc41f; provider-thread=none; status=completed]
+There’s a lot of pending work, be sure to capture it all including the clean room core rewrite
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:a4bda289-253b-41ce-b230-3c962dd688b5; provider-thread=none; status=completed]
+Expanding the handoff to cover every piece of pending work, including the clean-room core rewrite. Pulling the details from the design review, the roadmap and memory first:
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:5947e44b-2d0f-421c-aca1-013aa59834a4; provider-thread=none; status=completed]
+I have what I need from the design review. I'm adding the clean-room core assessment, the paused refactor track and every other pending item to the handoff.
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:863e9de3-4fcd-47fd-8843-969ab0961071; provider-thread=none; status=completed]
+I'm also adding a memory entry that points at the handoff, so the new session finds it even without the resume prompt:
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:ca38aba7-7179-4882-98ae-581feeb2306c; provider-thread=none; status=completed]
+The handoff doc is written, but the #1651 fix PR isn't open yet: the subagent building it is still running. I'll open the PR the moment it finishes and update the doc to match.
+
+The doc is at `/Users/raman/projects/lock_code_manager/docs/superpowers/handoff/2026-10-12-session-handoff.md`. It's local only, since `docs/` is gitignored. It covers:
+
+- **Open work, in order:**
+  1. the #1651 fix: its branch, the defect brief, and the fact that it still needs `/code-review`;
+  2. #1648, ready for your review;
+  3. the upstream frontend draft #54866, which needs your attestation;
+  4. batch 4's Z-Wave rows;
+  5. batches 5–11;
+  6. the clean-room core decision;
+  7. the filed bugs;
+  8. other pending tracks.
+- **The clean-room core rewrite:** your two quotes that started it, and what "the core" covers versus what stays. Also the measurement plan, from the 11 flaws and the overlapping-guard and shim findings. Then the target shape and the three paths to compare (full rewrite, core rebuild, or resuming the refactors), with a rule of no rebuild code until you choose.
+- **Decisions to carry forward:** all 7 approved design-review decisions and the 3 lock-handle (R2) decisions.
+- **The paused refactor track:** R1b through F, including what R1b and R4 still own, and the HA built-in audit cleanups.
+- **Other pending tracks:**
+  - the condition → `allowed` gate;
+  - multi-credential types;
+  - #1576;
+  - the Matter test seam migration;
+  - the provider test refactor;
+  - removing the UC report shim;
+  - degraded-lock follow-ups;
+  - 5.0 leftovers (hub removal, wiki pages);
+  - the v3 questions;
+  - dependabot #1611;
+  - publishing 6.0.2.
+- **Questions awaiting you,** and the filed issues: #1622, #1640–#1644, #1647, #1651, plus the catalog findings not yet filed.
+- **How we work:** the test rules, the review cap and back-out rule, PR mechanics, pre-push checks and things never to do.
+- **Key local files, worktrees, and a resume prompt** to paste into the new session.
+
+I also pinned a memory entry at the top of `MEMORY.md` pointing to the doc. Memory lives on this machine, so the new account's session sees it even without the prompt.
+
+The new session should start with:
+> Read docs/superpowers/handoff/2026-10-12-session-handoff.md and continue from "Open work".
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:0269f3a0-64cb-4b6f-ad0d-dee2f1e23489; provider-thread=none; status=completed]
+The #1651 fix is committed as `e980c9cd`. The subagent found the regression actually started in **4.0.0**: #1227 deleted the handler for every lock, #1252 restored it only for the legacy fallback, and #1299 then removed that fallback in 4.2.0. It also found a separate existing bug: an unattributed 6/15 carrying a user ID is announced as that user *using* their code. Opening the PR now.
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:68667fce-b96e-48e1-abbd-4ad6c28ccc61; provider-thread=none; status=completed]
+The #1651 fix is open as **#1652** and linked to this thread, but it hasn't had a `/code-review` round yet. I skipped that to save your credits, so it's the first item in the handoff doc.
+
+**The handoff doc** is at `/Users/raman/projects/lock_code_manager/docs/superpowers/handoff/2026-10-12-session-handoff.md`. It's local only, because `docs/` is gitignored. It covers:
+- the open work in order: #1652 (still needs review), #1648 (ready for your review), the upstream frontend draft (needs your attestation), then batch 4 and batches 5–11;
+- the clean-room core rewrite: your original reasoning, what "the core" covers and what stays, how to measure what's accidental, the target shape, the three paths to compare, and a rule of no rebuild code until you choose;
+- every approved decision, the paused refactor track (R1b through F), the other pending tracks, the filed bugs, the questions waiting on you, the working rules, the key files, the worktrees, and a resume prompt.
+
+A memory entry at the top of `MEMORY.md` points to the doc, so the new session finds it even without the prompt.
+
+**From #1652 itself:**
+- **The regression started earlier than #1651 says.** It began in 4.0.0, when #1227 removed the duplicate-notification handler for every lock; 4.2.0 only removed the last fallback that kept it. The PR body says so; you may want to correct the version on #1651.
+- **It uncovered a separate bug.** When a lock reports a duplicate without saying which write it belongs to, LCM announces it as that slot's user *using* their code, so a refusal shows up as an unlock attempt. It's logged in the catalog and the handoff, not filed yet.
+
+To pick up in the new session, paste:
+> Read docs/superpowers/handoff/2026-10-12-session-handoff.md and continue from "Open work".
+
+[Historical user; user_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:3fcd96b7-8411-41b5-9059-93f619e3c6a1; provider-thread=none; status=completed]
+/usage
+
+[Historical assistant; assistant_message; thread=7fe1b9ac-5ce5-4c61-8924-72c9679ff9bd; run=imported; item=migration:v1:turn-item:assistant:4647b61d-fc4e-47b5-8b0b-d8519eef8485; provider-thread=none; status=completed]
+You are currently using your subscription to power your Claude Code usage
+
+Current session: 48% used · resets Oct 12 at 11:30pm (America/New_York)
+Current week (all models): 98% used · resets Oct 15 at 9am (America/New_York)
+Current week (Fable): 0% used · resets Oct 15 at 9am (America/New_York)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine — does not include other devices or claude.ai. Behaviors are independent characteristics, not a breakdown.
+
+Last 24h · 3319 requests · 2 sessions
+  99% of your usage came from subagent-heavy sessions
+  99% of your usage came from sessions active for 8+ hours
+  83% of your usage was at >150k context
+  Top skills: /code-review 13%
+  Top subagents: general-purpose 75%
+
+Last 7d · 10090 requests · 12 sessions
+  99% of your usage came from subagent-heavy sessions
+  98% of your usage came from sessions active for 8+ hours
+  76% of your usage was at >150k context
+  Top skills: /code-review 16%
+  Top subagents: general-purpose 63%, superpowers:code-reviewer 3%, superpowers:writing-plans 2%
+  Top plugins: superpowers 5%
+
+User message:
+Check comments on 1795
+
+---
+
+1745
+
+---
+
+Yes
+
+---
+
+Yes post it
+
+---
+
+See latest comment
+
+---
+
+Fix as a separate pr
+
+---
+
+yes
+
+---
+
+while we are waiting, look at the new issue owine opened and tell me your thoughts
+
+---
+
+what would a PR to address this look like? are there decisions that need ot be made? It sounds like we just need a standard HA event to represent certian types of events from Matter locks. Maybe it can be something more generic, who knows
+
+---
+
+<task-notification>
+<task-id>a8ca74fd380472fb2</task-id>
+<tool-use-id>toolu_01H42CT1orfaJA23dpqpu4VC</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/a8ca74fd380472fb2.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix PR 1753 review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All the approved changes are in, committed as `68b380d5` and pushed to `fix/matter-lock-operation-one-user-read`. I updated the PR body before pushing and posted no PR comments. The required suites pass: 396 passed, 1 xfailed.
+
+**1. "Single read unavailable" error** (`custom_components/lock_code_manager/providers/matter.py`)
+- `_raw_lock_user` raises a new private `_SingleUserReadUnavailable(LockDisconnected)` in three cases:
+  - Home Assistant's two private helpers are missing.
+  - Calling either one raises `AttributeError`, `LookupError` (which covers `KeyError`), `TypeError` or `ValueError`.
+  - The formatter returns something that is neither a dict nor `None`.
+- `_raw_user_at` is now one `try`/`except _SingleUserReadUnavailable`: it logs at debug, then reads every user. `_single_user_read_helpers()` is gone (inlined), so there is no double check. Two now-unused imports went with it (`Callable`, `cast`).
+- Transport and lock-status failures from `_invoke_sdk` stay plain `LockDisconnected` / `LockOperationFailed` and are not walked. The #1689 release path behaves as before.
+- `HomeAssistantError` from the endpoint lookup stays plain `LockDisconnected`, as you suggested. The reason: HA's own `get_lock_users` looks up the same endpoint, so walking would fail the same way.
+
+**2. userIndex rule**
+- **LockOperation:** a `userIndex` that is missing or below 1 triggers the `credentialIndex` search, and so does a named user that reads empty. A named user that isn't LCM's still returns no slot, with no search.
+- **LockUserChange:** `_handle_lock_user_change` only rejected non-integer indexes. I put the `&lt; 1` check there rather than in `_dispatch_lock_user_change`, so such an event is dropped before any read is scheduled. The debug message wording changed; no test asserted it.
+
+**3. Tests**
+- `_patch_user_reads` now patches `get_lock_users` and reuses `single_user_read_from_listing()`. No test relied on the old snapshot behaviour.
+- **Finding:** the decoy in `test_preserves_slot_zero_resolved_by_user_index` was meaningless. The named user also held credential 99, so a search found slot 0 first. The named user now holds index 5 and the decoy holds the only copy of 99. I rewrote the docstring to say what the test pins now.
+- "SDK" is spelled out of the docstring you flagged (the new endpoint test). The two older "SDK" mentions in that file predate this PR and are unchanged.
+- **New e2e tests against the fake lock:**
+  - A keypad use is still announced, and a PIN clear still works, when the single read's helpers no longer fit. Each runs with four broken helpers: endpoint lookup with a wrong signature, an endpoint without `endpoint_id`, a formatter with a wrong signature, a formatter returning a tuple.
+  - A use naming `userIndex` 0 is announced for the credential's LCM user, and no `GetUser(0)` is sent.
+  - A use naming an empty user index is announced for the credential's LCM user.
+  - A use of another user's code is not announced, and exactly one `GetUser` is sent.
+- **New unit test:** a LockUserChange with userIndex 0 or -1 triggers no read and no push.
+- **Strengthened:** the missing-endpoint test now also checks that `_raw_user_at` raises without reading every user.
+
+**Mutations** — all 11 caught. The script restored the file in a `finally` and I checked it afterwards with `cmp`.
+
+| Mutation | Caught by |
+|---|---|
+| M1: walk on any `LockDisconnected` | `test_an_unanswered_user_read_is_not_followed_by_every_user`, `test_a_single_read_without_the_lock_s_endpoint_is_disconnected` |
+| M2: drop `&lt; 1` guard in LockOperation | `test_a_keypad_use_naming_user_zero_is_found_by_its_credential` |
+| M3: drop `&lt; 1` guard in LockUserChange | `test_pin_event_for_a_user_index_below_one_reads_nothing[0]` and `[-1]` |
+| M4: no search for an empty named user | `test_a_keypad_use_naming_an_empty_user_is_found_by_its_credential` |
+| M5: search past an untagged named user | `test_a_use_of_another_user_s_code_reads_only_that_user` |
+| M6: treat slot 0 as "no slot" (truthiness check) | `test_preserves_slot_zero_resolved_by_user_index`, `test_a_use_of_another_user_s_code_reads_only_that_user` |
+| M7: endpoint-lookup errors not translated | `[endpoint_signature]` and `[endpoint_shape]` variants of the use and clear tests |
+| M8: formatter `TypeError` not translated | `[formatter_signature]` variants |
+| M9: formatter result type not checked | `[formatter_shape]` variants |
+| M10: missing endpoint falls back to the walk | `test_a_single_read_without_the_lock_s_endpoint_is_disconnected` |
+| M11: missing helpers raise plain `LockDisconnected` | `test_a_keypad_use_is_placed_without_ha_s_single_user_read` |
+
+**Coverage:** every changed line is covered. The remaining misses are line 247 and the `not set up` raise (both known), plus two partial branches in the user write (lines 863 and 946). I ran coverage on the PR's previous head (`7abb0b71`) and all four misses were already there.
+
+**Deviations and things to know:**
+- The formatter result-type check is a small addition beyond the brief. It covers your "changed return shape" case.
+- `git push` also pushed `entire/checkpoints/v1`. Your local "entire" tool's hook did that, not me.
+- `.entire/.gitignore` was left uncommitted.</result>
+<usage><subagent_tokens>133974</subagent_tokens><tool_uses>41</tool_uses><duration_ms>996405</duration_ms></usage>
+</task-notification>
+
+---
+
+try mempalace now. and yes a
+
+---
+
+try now
+
+---
+
+<task-notification>
+<task-id>ad5f6d9bb35f09cc4</task-id>
+<tool-use-id>toolu_01V8gj3eG5tCdU2wtvokjbtM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/ad5f6d9bb35f09cc4.output</output-file>
+<status>completed</status>
+<summary>Agent "PR 1745 round-3 fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five round-3 changes are in commit `02681c33`, pushed to `fix/credential-type-of-use`. The PR #1745 body was updated before the push, and no comments were posted. All work was done in the worktree at `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa153b39b6917e409`.
+
+**Changes**
+1. **ProgrammingPIN never reported** (`providers/matter.py`, `_kind_used`): the credential type is now checked before the source. The lock's admin code is never reported as a use, including when it is entered at the keypad.
+2. **Only the PIN fallback needs `credentialIndex`** (`_handle_lock_operation`, `_dispatch_lock_operation`):
+   - The early `return` on a missing index is gone, and `credential_index` is now typed `int | None`.
+   - A use whose `userIndex` names the user is reported even when the index is absent, `null` or non-numeric.
+   - `placeable_by_pin_index` now also requires a readable index.
+   - **Small addition beyond the brief:** a use with neither a `userIndex` nor a usable PIN index returns in the handler, before the background task. That keeps "drop as today" without the lock's user list being read. On a real lock that read walks every user, and card uses without a `userIndex` used to trigger it for nothing.
+3. **Slot Usage Limiter counts PIN uses only:** the blueprint condition now requires `trigger.to_state.attributes.event_type == 'pin'`.
+   - I updated the opening description, the "What spends a use" paragraph, and the `BLUEPRINTS.md` section and attributes note.
+   - Uses reported through `use_credential` are always PIN, so they keep counting.
+4. **Redundant restore read** (`event.py`): Home Assistant restores the event in `async_internal_added_to_hass`, which runs before `async_added_to_hass`. The entity now reads the restored type from `self.state_attributes[ATTR_EVENT_TYPE]` instead of calling `async_get_last_event_data()` a second time. That property is public and `@final`. This version also only adds a type when Home Assistant actually restored the state.
+5. **Acronyms:** "RFID" and "PIN" are spelled out in the new comment in `zha.py`, and I removed its history phrase "as it always has". They are also spelled out in the `_kind_used` docstring. I left older comments alone.
+
+**New tests**
+- Classification table cases `keypad_programming_pin` and `rfid_reader_programming_pin`.
+- Matter e2e `test_the_admin_code_at_the_keypad_is_no_user_s_use`.
+- `test_a_use_naming_its_user_needs_no_credential_index`, with the index missing, `None` or `"card"`: the use is reported as `rfid` for the user.
+- `test_a_use_naming_no_user_and_no_pin_index_is_dropped_unread`, with 5 card and PIN cases: no event fires and the user list is never read.
+- `test_limiter_spends_a_use_only_on_a_pin`: a `pin` use decrements the counter; `rfid`, `fingerprint` and `face` uses do not.
+- I replaced `test_a_credential_without_an_index_is_ignored`, because it asserted the old behaviour. The string-coercion test still passes.
+
+**Mutations** — each was applied on its own, the file was restored in a `finally`, and the restore was checked with a byte comparison. All 7 were caught:
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | ProgrammingPIN guard removed | 2 table cases + the e2e admin-code test |
+| M2 | Missing-index `return` put back | 3 `needs_no_credential_index` cases |
+| M3 | Early return removed | all 5 `dropped_unread` cases (user list was read) |
+| M4 | Fallback gate ignores a missing index | 2 PIN `dropped_unread` cases |
+| M5 | Restored type not added to `event_types` | `test_a_restored_use_keeps_its_kind_in_the_vocabulary[a_kind]` |
+| M6 | Limiter's `pin` condition removed | limiter cases for rfid, fingerprint and face |
+| M7 | Limiter matches `rfid` instead of `pin` | 12 limiter tests |
+
+**Results:** the Matter, ZHA and Zigbee2MQTT suites, `test_event.py`, `test_base.py`, `test_architecture.py` and every blueprint test gave 1015 passed, 2 skipped and 4 xfailed in about 232s. The xfails were already there. Every changed line in `matter.py` and `event.py` is covered, including both directions of the new early return. The remaining uncovered lines (`event.py` 187, `matter.py` 316/905/988/2094) are outside this diff. `prek` passes. Its formatter reflowed one line in the new blueprint test, and I didn't rerun the suite after that.
+
+**PR body:** added rows to the Matter table and bullets for ProgrammingPIN and the index rule. The "Side effects" paragraph now says the limiter counts PIN uses only. The body also lists the new tests and the round-3 mutations, and notes that building `event_types` from what the locks advertise is a follow-up PR. I removed "the missing-index return removed" from the round-2 mutation list, because that code no longer exists.
+
+**Uncertainties:**
+- In the e2e admin-code test, the fake node sends ProgrammingPIN with `credentialIndex` 0. I believe that matches the spec but did not cite a captured payload.
+- The `BLUEPRINTS.md` limiter section now has a new bullet placed directly after the "Operations" bullet; markdownlint accepts it.</result>
+<usage><subagent_tokens>146787</subagent_tokens><tool_uses>48</tool_uses><duration_ms>820962</duration_ms></usage>
+</task-notification>
+
+---
+
+go for it. limiter release note can just be a release note. 2 for event_types
+
+---
+
+<task-notification>
+<task-id>a0634932174ab04c2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/a0634932174ab04c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #1753 round-4 defects" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've pushed commit `e40743bd` to `fix/matter-lock-operation-one-user-read`. It covers all seven items, except that item 5 doesn't use `TypeIs`: I removed the type predicate instead (reason below). The Matter provider tests plus `tests/providers/test_base.py` give 395 passed and 1 xfailed, the `tests/properties` suite passes, and all `prek` hooks pass, mypy included. `.entire/.gitignore` was not committed.
+
+**Per item** (in `custom_components/lock_code_manager/providers/matter.py` and `tests/providers/matter/test_provider.py`):
+
+1. **Parser leniency.** `_raw_user_from_get_user` now keeps the user when one field is unusable. A name that isn't text becomes `None`. A credential index that isn't an int is kept as `None`, the same as HA's formatter, and every caller already skips those. It still raises `LockOperationFailed` when the answer isn't a dict, `userIndex` doesn't echo, or credentials isn't a list of dicts. New tests: a null or non-text `userName` still returns the user with its credentials, and a null-index PIN next to a valid one still finds the valid PIN (index 7).
+2. **Credential type names.** Types are now named from `CREDENTIAL_TYPE_MAP`, imported at the top of the module. It is public and defined in `homeassistant.components.matter.const` (`lock_helpers` imports it from there). Unmapped types become `"unknown"`, as in HA's `_format_user_response`. The existing test now expects `"rfid"` where it expected `"other"`.
+3. **Missing `NumberOfTotalUsersSupported`.** HA's `get_lock_users` treats a missing value as 0 users (`... or 0`). `_names_a_user` is now a module function that matches this, so a missing attribute means no index names a user. The old "bounds only below" test is replaced by one asserting the event is dropped and no GetUser is sent. Reverting the check makes that test fail.
+4. **Repeated lookups.** A new `_DoorLock` NamedTuple holds client, node and endpoint, built by `_require_door_lock()`. It is resolved once per event and passed down to `_raw_lock_user`, `_names_a_user` and `_fabric_index`. The PIN-index lookup and the release fallback also resolve once each. The fallback full listing (`_raw_lock_users`) still resolves on its own; I left it alone to keep the change small.
+5. **`TypeGuard`.** `TypeIs` would be wrong here: a type checker reads `False` from a `TypeIs` function as "this is not an int", but this function also returns `False` for ints out of range. So `_names_a_user` now takes an `int` and returns `bool`, and callers check for `None` first.
+6. **Docstring.** The `_handle_lock_user_change` docstring is rewritten as two plain paragraphs.
+7. **"PINs".** The comment now reads "the Personal Identification Numbers LCM recorded on it", matching the PR's other new comments. The surrounding older docstring still uses bare "PINs" throughout; I didn't touch it.
+
+**Behaviour changes to check:**
+- For LockUserChange, the node is now resolved in the event callback and that same node is used later, when the read waits for the lock's turn, instead of resolving it again then. If you'd rather resolve again at that point, that's a two-line change.
+- A LockUserChange that arrives with no resolvable node or Door Lock endpoint is now dropped up front. Before, it tried the read, and on a CLEAR event fell back to the last recorded slot for that index. This follows from item 3 (no endpoint means no attribute, so no user), but a CLEAR arriving mid re-interview is no longer applied from the last recorded slot.
+
+Running mypy directly on `matter.py` reports one error at line 985 (`SetLockUserResult` vs `dict[str, Any]`), in code this PR doesn't touch. The `prek` mypy hook passes.</result>
+<usage><subagent_tokens>155458</subagent_tokens><tool_uses>41</tool_uses><duration_ms>455870</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa1cda83466cd44e4</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/aa1cda83466cd44e4.output</output-file>
+<status>completed</status>
+<summary>Agent "Build event_types from capabilities" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #1757 is open against main, written as a follow-up to #1745: https://github.com/raman325/lock_code_manager/pull/1757. After merging main, the targeted tests pass (1062 passed, 2 skipped, 5 xfailed) and `prek` is clean.
+
+**Commits:** `46c9679b` (the change) and `43b0faff` (merge of `origin/main`). The merge commit has git's default message, so it has no Co-Authored-By line. I didn't amend it.
+
+**Merge problem to know about:** main's squash of #1745 is identical to 8f13f9fb, but merging it still hit conflicts, and git also silently put back the restore special case in `event.py` and the old restore test in `test_event.py`. Both were history artifacts, so I took this branch's version of those files plus BLUEPRINTS, the ZHA and Zigbee2MQTT tests, and the blueprint test. For the four Matter files I started from main's version (which includes #1753) and reapplied my diff; it applied cleanly. I then checked that every non-Matter file in the merge matches my commit exactly, and that no `_recorded_types` remains.
+
+**What changed** (as agreed, nothing relitigated)
+- **Matter:** `async_get_capabilities` advertises every kind in the lock's feature map. RFID gets its user count and length limits, fingerprint and face get zeros, and unknown strings are ignored.
+- **Base class:** new `BaseLock.reported_credential_types`, empty by default. ZHA and Zigbee2MQTT build theirs from their own source-to-kind maps plus PIN, giving {pin, rfid, fingerprint}.
+- **`event_types`:** PIN as a floor, plus each lock's advertised kinds and declared kinds, computed fresh on every state write. `_recorded_types`, the restore special case and their imports are gone.
+- **Drop path:** a use of a kind not in `event_types` is logged at DEBUG with the entity ID and kind, then dropped.
+- **Docs:** updated `AGENTS.md` and the `event_types` row in `BLUEPRINTS.md`. The blueprint descriptions and `credentials.py` comments were still accurate.
+
+**Write safety:** I checked every caller and reader you listed, before and after the merge, and nothing changes behaviour:
+- The actions refuse non-PIN kinds in `_managed_credential_type` (`ha/services.py`).
+- Lock writes are always built as PIN via `credential_from_slot`, so the assert helpers only ever test PIN.
+- Length validation, `pin_unsupported` and `bounded_slot_count` are all PIN-only.
+- Matter's only other capability read is the user-name length limit.
+- The event entity is the only code that loops over `credential_types`.
+
+**Tests**
+- **Matter e2e:** a new `fake_matter_node_attributes` fixture sets node attributes before setup. The RFID values come from core's `aqara_u200.json` (core a888264d2fe). No core fixture advertises fingerprint or face, so I set those two feature bits by hand.
+- **Coverage:** Matter mapping unit tests; ZHA and Zigbee2MQTT list {pin, rfid, fingerprint} from setup; Z-Wave JS lists only pin and drops an RFID use; `test_event.py` covers declared kinds, the drop, and a restored use no longer widening the list.
+- **Blueprint limiter test:** its mock lock now declares the kind it reports.
+
+**Mutation results** (source restored in a `finally` each time)
+
+| Mutation | Tests that failed |
+| --- | --- |
+| Matter advertises only PIN | 6 (Matter e2e for each non-PIN kind, plus both capability unit tests); re-checked after the merge |
+| Declared kinds ignored | 12 (ZHA and Zigbee2MQTT e2e, the declared-kinds test, limiter non-PIN cases) |
+| Floor removed | 36 (`test_event.py` and `test_blueprint_behavior.py`) |
+| Drop path removed | At first, none |
+
+The drop-path mutation survived at first because Home Assistant swallows the exception from the bus callback, so entity state looks the same either way. I added an assertion on log level and arguments (not message text): the `test_event.py` drop test now expects exactly one DEBUG record, and the Matter drop test expects no ERROR records. With that, both tests catch the mutation.
+
+**Other things to know**
+- `TestOutOfBandDeletion::test_clear_user_flips_in_sync_off_and_sync_recreates_the_pin` fails about 1 in 6 runs under `pytest -n auto`, on this branch and on the #1745 base alike, and passes serially. Three real-time pacing tests also fail only under parallel load. None of these come from this change.
+- Run serially, the ZHA and Zigbee2MQTT suites take about 130s. Your project notes say the full suite should take seconds, so that is probably worth a look separately.
+- The Zigbee Door Lock cluster does have a `NumberOfRFIDUsersSupported` attribute, so RFID support on ZHA could in principle be asked of the lock rather than declared. Fingerprint is a vendor extension with no such attribute. I kept the agreed design, and the code comments don't claim the protocol can't ask.</result>
+<usage><subagent_tokens>264983</subagent_tokens><tool_uses>116</tool_uses><duration_ms>2350778</duration_ms></usage>
+</task-notification>
+
+---
+
+Continue

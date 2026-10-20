@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "fc4f6684b72e",
+  "strategy": "manual-commit",
+  "branch": "feat/event-types-from-capabilities",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fc/4f6684b72e/0/metadata.json",
+      "transcript": "/fc/4f6684b72e/0/full.jsonl",
+      "compact_transcript": "/fc/4f6684b72e/0/transcript.jsonl",
+      "content_hash": "/fc/4f6684b72e/0/content_hash.txt",
+      "prompt": "/fc/4f6684b72e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 508,
+    "cache_creation_tokens": 1323393,
+    "cache_read_tokens": 50964586,
+    "output_tokens": 217592,
+    "api_call_count": 249,
+    "subagent_tokens": {
+      "input_tokens": 1110,
+      "cache_creation_tokens": 2717470,
+      "cache_read_tokens": 82382924,
+      "output_tokens": 439870,
+      "api_call_count": 556
+    }
+  }
+}
