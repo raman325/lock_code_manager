@@ -16,7 +16,11 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
-from homeassistant.components.event import DOMAIN as EVENT_DOMAIN
+from homeassistant.components.event import (
+    ATTR_EVENT_TYPE,
+    ATTR_EVENT_TYPES,
+    DOMAIN as EVENT_DOMAIN,
+)
 from homeassistant.config_entries import SOURCE_USER, ConfigEntryState, ConfigFlowResult
 from homeassistant.const import (
     CONF_ENABLED,
@@ -34,6 +38,7 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 import custom_components.lock_code_manager as lcm
 from custom_components.lock_code_manager.const import (
     ATTR_CODE_SLOT,
+    ATTR_CREDENTIAL_TYPE,
     ATTR_IN_SYNC,
     ATTR_OPERATION,
     CONF_LOCKS,
@@ -801,6 +806,44 @@ class TestBridgeEvents:
             assert state.state != STATE_UNKNOWN
             assert state.attributes[ATTR_CODE_SLOT] == 1
             assert state.attributes[ATTR_OPERATION] == CredentialOperation.UNLOCK
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            pytest.param(0, "pin", id="keypad"),
+            pytest.param(1, "pin", id="rf"),
+            pytest.param(3, "rfid", id="rfid"),
+            pytest.param(4, "fingerprint", id="fingerprint"),
+        ],
+    )
+    async def test_an_unlock_names_the_credential_presented(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        source: int,
+        expected: str,
+    ) -> None:
+        """
+        A card unlocking the door is announced as a card, not a PIN.
+
+        Every use carrying an ``action_user`` was announced as a PIN,
+        whatever its ``action_source_name`` said.
+        """
+        lock_id = mqtt_lock_discovered.entity_id
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            event_1 = slot_entity_id(
+                hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
+            )
+
+            fake_z2m_bridge.operation_event("unlock", 1, source)
+            await hass.async_block_till_done()
+
+            state = hass.states.get(event_1)
+            assert state.attributes[ATTR_EVENT_TYPE] == expected
+            assert state.attributes[ATTR_CREDENTIAL_TYPE] == expected
+            assert expected in state.attributes[ATTR_EVENT_TYPES]
 
     @pytest.mark.parametrize(
         "payload",

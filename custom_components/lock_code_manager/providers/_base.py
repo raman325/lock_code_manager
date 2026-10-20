@@ -2036,11 +2036,16 @@ class BaseLock:
         self,
         code_slot: int | None = None,
         to_locked: bool | None = None,
+        credential_type: CredentialType = CredentialType.PIN,
     ) -> None:
         """
         Record that a credential on this lock was used.
 
-        Sub-classes should call this whenever a code slot is used.
+        Sub-classes should call this whenever a code slot is used, passing
+        the kind of credential the lock said was presented. PIN is the
+        default because it is the only kind most locks can report; a
+        provider that can tell a card or a fingerprint apart says so, and
+        the use is still this slot's user's.
 
         The single funnel every provider goes through, so it is also where
         ``BUS_EVENT_CREDENTIAL_USED`` is fired: every provider gets it
@@ -2061,10 +2066,6 @@ class BaseLock:
             # ``unknown`` until it restores after a reload, either of which
             # would announce a name no consumer can match a user to.
             credential_user = get_entry_config(config_entry).name_for(int(code_slot))
-
-        # Only PIN is exercised today, but a consumer that reads it now keeps
-        # working when another kind arrives.
-        credential_type = CredentialType.PIN
 
         # Attribution is the whole content of this event, and every field of
         # it is required, so a use this integration cannot pin to an entry --

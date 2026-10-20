@@ -20,6 +20,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.components import automation
 from homeassistant.components.blueprint import models
+from homeassistant.components.event import ATTR_EVENT_TYPE
 from homeassistant.components.template import config as template_config
 from homeassistant.const import ATTR_FRIENDLY_NAME, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, ServiceCall, State, callback
@@ -36,6 +37,7 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SERVICE_USE_CREDENTIAL,
 )
+from custom_components.lock_code_manager.model.credentials import CredentialType
 from custom_components.lock_code_manager.providers import BaseLock
 
 from .common import (
@@ -765,6 +767,51 @@ async def test_limiter_spends_a_use_on_locking_when_widened(
     _fire_pin_used(lock_code_manager_config_entry, LOCK_1_ENTITY_ID, 1, to_locked=True)
     await hass.async_block_till_done()
     assert float(hass.states.get(counter).state) == 2
+
+
+@pytest.mark.parametrize(
+    ("credential_type", "expected"),
+    [
+        pytest.param(CredentialType.PIN, 2, id="pin"),
+        pytest.param(CredentialType.RFID, 3, id="rfid"),
+        pytest.param(CredentialType.FINGERPRINT, 3, id="fingerprint"),
+        pytest.param(CredentialType.FACE, 3, id="face"),
+    ],
+)
+async def test_limiter_spends_a_use_only_on_a_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    credential_type: CredentialType,
+    expected: int,
+) -> None:
+    """
+    A card, finger or face the lock attributes to the user spends no use.
+
+    The limiter enforces its limit by turning the user off, which takes away
+    only the PIN Lock Code Manager manages: a card enrolled on the lock
+    itself keeps opening the door, so counting its taps would spend a limit
+    it cannot enforce.
+    """
+    counter = await _setup_counter(hass, initial=3)
+
+    await _setup_blueprint_automation(
+        hass,
+        LIMITER_PATH,
+        {
+            "pin_used_entity": SLOT_1_EVENT_ENTITY,
+            "enabled_switch": SLOT_1_ENABLED_ENTITY,
+            "uses_counter": counter,
+        },
+    )
+
+    lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    lock.async_fire_code_slot_event(1, False, credential_type)
+    await hass.async_block_till_done()
+    assert hass.states.get(SLOT_1_EVENT_ENTITY).attributes[ATTR_EVENT_TYPE] == (
+        credential_type
+    )
+    assert float(hass.states.get(counter).state) == expected
 
 
 async def test_limiter_spends_a_use_on_a_reported_use(

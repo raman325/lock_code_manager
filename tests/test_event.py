@@ -4,7 +4,10 @@ import logging
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    mock_restore_cache_with_extra_data,
+)
 
 from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
 from homeassistant.const import ATTR_NAME, STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -261,6 +264,61 @@ async def test_a_use_of_an_unnamed_kind_widens_the_vocabulary(
     assert state.state != STATE_UNKNOWN
     assert state.attributes[ATTR_EVENT_TYPE] == CredentialType.FINGERPRINT
     assert CredentialType.FINGERPRINT in state.attributes[ATTR_EVENT_TYPES]
+
+
+@pytest.mark.parametrize(
+    ("restored_type", "expected_types"),
+    [
+        pytest.param(
+            CredentialType.RFID,
+            sorted(MANAGED_CREDENTIAL_TYPES | {CredentialType.RFID}),
+            id="a_kind",
+        ),
+        pytest.param(
+            LOCK_1_ENTITY_ID, sorted(MANAGED_CREDENTIAL_TYPES), id="not_a_kind"
+        ),
+    ],
+)
+async def test_a_restored_use_keeps_its_kind_in_the_vocabulary(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    restored_type: str,
+    expected_types: list[str],
+):
+    """
+    A card use from before a restart is still one of the entity's kinds.
+
+    Home Assistant restores ``event_type`` from the last use, and these
+    locks advertise nothing, so only that use says a card is possible here.
+    A restored type that is not a kind -- a lock entity ID from the
+    vocabulary this one replaced -- is not one to declare.
+    """
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (
+                State(
+                    SLOT_1_EVENT_ENTITY,
+                    "2026-01-01T12:00:00.000+00:00",
+                    {ATTR_EVENT_TYPE: restored_type},
+                ),
+                {"last_event_type": restored_type, "last_event_attributes": {}},
+            )
+        ],
+    )
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, data=BASE_CONFIG, unique_id="Mock Title"
+    )
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get(SLOT_1_EVENT_ENTITY)
+    assert state
+    assert state.attributes[ATTR_EVENT_TYPE] == restored_type
+    assert state.attributes[ATTR_EVENT_TYPES] == expected_types
+
+    await hass.config_entries.async_unload(config_entry.entry_id)
 
 
 async def test_a_lock_observed_use_is_recorded_once(

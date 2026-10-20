@@ -32,9 +32,9 @@ for additional setup guides and examples.
 
 ### Slot Usage Limiter
 
-Decrements an `input_number` helper each time a user's credential is
-used. When the counter reaches 0, that user is automatically disabled.
-Optionally resets the counter when the user is re-enabled.
+Decrements an `input_number` helper each time a user's PIN is used. When
+the counter reaches 0, that user is automatically disabled. Optionally resets
+the counter when the user is re-enabled.
 
 - Set counter to **-1** for unlimited uses
 - Set counter to **0** to disable on next use
@@ -45,6 +45,10 @@ Optionally resets the counter when the user is re-enabled.
 - **Operations that spend a use** picks which recorded uses count, by what
   the device did with the credential: `unlock` and `unknown` by default,
   `lock` not
+- Only a PIN use (`event_type` `pin`) spends a use. Disabling the user takes
+  away the PIN Lock Code Manager manages, but a card, fingerprint or face
+  enrolled on the lock itself keeps working, so counting those would spend a
+  limit that cannot be enforced on them
 
 > **Breaking: the entity now records more than unlocks.** It used to record
 > only unlocks; it records every use of the user's credential now, including
@@ -292,7 +296,7 @@ template or blueprint reads about that use:
 
 | Attribute | Meaning |
 | --------- | ------- |
-| `event_type` | The kind of credential presented — `pin` today. It says *what* was used, never where |
+| `event_type` | The kind of credential presented — `pin`, or on a lock that reports which: `rfid` or `fingerprint` (Matter, ZHA, Zigbee2MQTT) or `face` (Matter). It says *what* was used, never where |
 | `event_types` | The kinds this user's uses can be: what Lock Code Manager manages, plus everything the configuration's locks advertise |
 | `name` | The user whose credential was used |
 | `target` | What the credential was used against — a lock that reported the use, or whatever `lock_code_manager.use_credential` was told it acted on |
@@ -305,9 +309,10 @@ template or blueprint reads about that use:
 | `slot_field` | Always `credential_used` |
 
 Filtering by credential kind is a template away: `event_type` (or
-`credential_type`) is `pin` for a PIN and would be `rfid` for a card read at
-a lock's own reader, so an automation can act on one kind without acting on
-every other.
+`credential_type`) is `pin` for a PIN and `rfid` for a card read at a lock's
+own reader, so an automation can act on one kind without acting on every
+other. The Slot Usage Limiter counts only `pin` uses, since disabling a user
+cannot stop a card or fingerprint enrolled on the lock itself.
 
 > **Breaking:** the entity used to record only unlocks; it now records every
 > use of the user's credential, including a lock reporting which slot locked
