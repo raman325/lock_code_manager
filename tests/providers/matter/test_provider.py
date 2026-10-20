@@ -1,18 +1,20 @@
 """Test the Matter lock provider."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 import logging
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
+from chip.clusters import Objects as clusters
 from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from homeassistant.components.matter import lock_helpers as matter_lock_helpers
 from homeassistant.components.matter.helpers import get_node_from_device_entry
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
@@ -46,12 +48,14 @@ from custom_components.lock_code_manager.providers.matter import (
     MatterLock,
     SetCredentialFailedError,
     _lcm_slot_from_raw_users_by_credential_index,
-    _lcm_slot_from_raw_users_by_user_index,
+    _raw_user_slot,
 )
 from tests.providers.helpers import (
     ProviderNativeTransportContractTests,
     ServiceProviderConnectionTests,
 )
+
+from .conftest import get_user_answer, get_user_answered_from_listing
 
 # Module path where lock_helpers functions are imported in the provider
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
@@ -713,19 +717,11 @@ class TestLcmSlotResolvers:
                 "credentials": [{"type": "pin", "index": 4}],
             }
         ]
-        assert _lcm_slot_from_raw_users_by_user_index(users, 1, fabric) == slot
+        assert _raw_user_slot(users[0], fabric) == slot
         assert _lcm_slot_from_raw_users_by_credential_index(users, 4, fabric) == slot
 
-    def test_by_user_index_resolves_tagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 1, None) == 5
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 3, None) == 8
-
-    def test_by_user_index_returns_none_for_untagged(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 2, None) is None
-
-    def test_by_user_index_returns_none_for_unknown(self) -> None:
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, 99, None) is None
-        assert _lcm_slot_from_raw_users_by_user_index(self._USERS, None, None) is None
+    def test_a_tagged_user_s_slot(self) -> None:
+        assert [_raw_user_slot(user, None) for user in self._USERS] == [5, None, 8]
 
     def test_by_credential_index_resolves_tagged(self) -> None:
         assert _lcm_slot_from_raw_users_by_credential_index(self._USERS, 7, None) == 5
@@ -770,20 +766,47 @@ def _make_node_event(
     )
 
 
+@contextmanager
+def _patch_user_reads(lock: MatterLock, users: list[dict]) -> Iterator[None]:
+    """
+    Answer the provider's user reads from ``users``.
+
+    Both of them: the walk over every user (``get_lock_users``) and the
+    GetUser for the user an event names, answered as the lock would for
+    the same users.
+    """
+    client, _node = lock._require_client_and_node()
+    with (
+        patch(
+            f"{_PROVIDER_MODULE}.get_lock_users",
+            AsyncMock(return_value={"max_users": 10, "users": users}),
+        ),
+        get_user_answered_from_listing(client),
+    ):
+        yield
+
+
+@contextmanager
+def _patch_user_reads_failing(lock: MatterLock, error: Exception) -> Iterator[None]:
+    """Fail both of the provider's user reads with ``error``, as a lock out of reach does."""
+    client, _node = lock._require_client_and_node()
+    with (
+        patch(f"{_PROVIDER_MODULE}.get_lock_users", AsyncMock(side_effect=error)),
+        patch.object(client, "send_device_command", AsyncMock(side_effect=error)),
+    ):
+        yield
+
+
 class TestLockOperationEvent:
     """Test _handle_lock_operation callback and code-slot event firing.
 
     These tests use ``matter_lock`` (the real Matter integration) so node-event
-    dispatch resolves a live client+node and reaches ``_raw_lock_users``.
+    dispatch resolves a live client+node, sends GetUser for the user an event
+    names (``_raw_lock_user``), and lists every user (``_raw_lock_users``)
+    when it names none the lock can hold, or an empty one.
     """
 
-    @staticmethod
-    def _patch_users(users: list[dict]) -> Any:
-        """Patch get_lock_users so the async dispatch can resolve owners."""
-        return patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(return_value={"max_users": 10, "users": users}),
-        )
+    _patch_users = staticmethod(_patch_user_reads)
 
     async def test_unlock_with_pin_credential(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -798,20 +821,21 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 99,
+                    "user_index": 9,
                     "user_name": "lcm:2:Alice",
                     "credentials": [{"type": "pin", "index": 7}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
                         "lockOperationType": 1,  # kUnlock
-                        "userIndex": 99,
+                        "userIndex": 9,
                         "credentials": [
                             # Matter credential index is opaque; the LCM slot
                             # is resolved from the owning user's tag.
@@ -834,13 +858,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 4,
                     "user_name": "lcm:5:Bob",
                     "credentials": [{"type": "pin", "index": 2}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -875,13 +900,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 1,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 11}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -903,32 +929,33 @@ class TestLockOperationEvent:
     async def test_preserves_slot_zero_resolved_by_user_index(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """Slot 0 from the primary resolver must not fall through to the fallback.
+        """
+        Slot 0 on the named user is reported, and no credentialIndex search runs.
 
-        Pins the explicit ``None`` check that replaced an ``or``-chain in
-        ``_dispatch_lock_operation``: with ``or``, ``code_slot == 0`` is
-        falsy, so the fallback walker would run and likely return a
-        different slot. The fix is to gate on ``is None`` explicitly.
+        A search runs only for a user index that reads empty; slot 0 is
+        falsy, so a check on truth rather than on ``None`` would search and
+        report the decoy's slot 4 instead.
         """
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
-                # User at userIndex 1 maps to LCM slot 0 (legitimate primary hit).
+                # The user the event names, tagged for LCM slot 0.
                 {
                     "user_index": 1,
                     "user_name": "lcm:0:Zero",
-                    "credentials": [{"type": "pin", "index": 99}],
+                    "credentials": [{"type": "pin", "index": 5}],
                 },
-                # Decoy at credentialIndex 99 owned by a different tagged slot.
-                # If the resolver falls through, this would yield slot 4.
+                # The only holder of the event's credentialIndex 9, tagged
+                # for another slot: a search would yield slot 4.
                 {
                     "user_index": 2,
                     "user_name": "lcm:4:Decoy",
-                    "credentials": [{"type": "pin", "index": 99}],
+                    "credentials": [{"type": "pin", "index": 9}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -937,7 +964,7 @@ class TestLockOperationEvent:
                         "lockOperationType": 1,
                         "userIndex": 1,
                         "credentials": [
-                            {"credentialType": 1, "credentialIndex": 99},
+                            {"credentialType": 1, "credentialIndex": 9},
                         ],
                     }
                 ),
@@ -961,13 +988,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 50,
                     "user_name": "lcm:7:Dave",
                     "credentials": [{"type": "pin", "index": 4}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1001,13 +1029,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 50,
                     "user_name": "lcm:7:Dave",
                     "credentials": [{"type": "pin", "index": 4}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1039,13 +1068,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 9,
                     "user_name": "Visitor",  # untagged
                     "credentials": [{"type": "pin", "index": 9}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1070,13 +1100,13 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
                     data={
                         "lockOperationType": 1,
-                        "userIndex": 42,
+                        "userIndex": 4,
                         "credentials": [
                             {"credentialType": 1, "credentialIndex": 4},
                         ],
@@ -1094,9 +1124,8 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(side_effect=HomeAssistantError("transport down")),
+        with _patch_user_reads_failing(
+            matter_lock, HomeAssistantError("transport down")
         ):
             matter_lock._on_node_event(
                 None,
@@ -1134,7 +1163,8 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
-            [{"user_index": 1, "user_name": "lcm:1:Alice", "credentials": []}]
+            matter_lock,
+            [{"user_index": 1, "user_name": "lcm:1:Alice", "credentials": []}],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1206,7 +1236,8 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
-            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}]
+            matter_lock,
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}],
         ):
             matter_lock._on_node_event(None, _make_node_event(data=data))
             await hass.async_block_till_done()
@@ -1226,13 +1257,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 1,
                     "user_name": "lcm:1:Alice",
                     "credentials": [{"type": "pin", "index": 4}],
                 }
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1260,13 +1292,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 1,
                     "user_name": "lcm:1:Alice",
                     "credentials": [{"type": "pin", "index": 4}],
                 }
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1343,7 +1376,8 @@ class TestLockOperationEvent:
             data["operationSource"] = source
 
         with self._patch_users(
-            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}]
+            matter_lock,
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}],
         ):
             matter_lock._on_node_event(None, _make_node_event(data=data))
             await hass.async_block_till_done()
@@ -1375,7 +1409,8 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
-            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}]
+            matter_lock,
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1501,6 +1536,11 @@ class TestLockOperationEvent:
             ),
         ],
     )
+    @pytest.mark.parametrize(
+        "user_index",
+        [None, 2, 11],
+        ids=["no_user", "an_empty_user", "past_the_lock_s_users"],
+    )
     async def test_only_a_pin_the_lock_typed_is_placed_by_its_index(
         self,
         hass: HomeAssistant,
@@ -1508,26 +1548,31 @@ class TestLockOperationEvent:
         source: int,
         credentials: list[dict[str, Any]],
         expected: list[dict[str, Any]],
+        user_index: int | None,
     ) -> None:
         """
-        Without a userIndex, PIN 4's holder owns only a PIN the lock typed at 4.
+        Naming no user, PIN 4's holder owns only a PIN the lock typed at 4.
 
         A keypad use is reported as a PIN whatever its ``credentialType``,
         but the index is in the space of the type the lock gave it: a card
         at 4 -- or the Aqara U400's keypad credential, typed 3 -- says
-        nothing about who holds PIN 4.
+        nothing about who holds PIN 4. An event names no user when it
+        carries no ``userIndex``, names one that reads empty, or names one
+        past the users the lock holds (10).
         """
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        named = {} if user_index is None else {"userIndex": user_index}
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 1,
                     "user_name": "lcm:1:Alice",
                     "credentials": [{"type": "pin", "index": 4}],
                 }
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1537,6 +1582,7 @@ class TestLockOperationEvent:
                         "operationSource": source,
                         "credentials": credentials,
                     }
+                    | named
                 ),
             )
             await hass.async_block_till_done()
@@ -1550,7 +1596,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -1569,7 +1615,7 @@ class TestLockOperationEvent:
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -1619,13 +1665,14 @@ class TestLockOperationEvent:
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 1,
                     "user_name": "lcm:3:Eve",
                     "credentials": [{"type": "pin", "index": 3}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1903,16 +1950,11 @@ class TestLockUserChangeEvent:
     """Test _handle_lock_user_change callback and coordinator push updates.
 
     These tests use ``matter_lock`` (the real Matter integration) so node-event
-    dispatch resolves a live client+node and reaches ``_raw_lock_users``.
+    dispatch resolves a live client+node and sends GetUser for the user an
+    event names (``_raw_lock_user``); it never lists every user.
     """
 
-    @staticmethod
-    def _patch_users(users: list[dict]) -> Any:
-        """Patch get_lock_users so the async dispatch can resolve owners."""
-        return patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(return_value={"max_users": 10, "users": users}),
-        )
+    _patch_users = staticmethod(_patch_user_reads)
 
     async def test_pin_added_pushes_unknown(
         self, hass: HomeAssistant, matter_lock: MatterLock
@@ -1928,13 +1970,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1944,7 +1987,7 @@ class TestLockUserChangeEvent:
                         "lockDataType": 6,  # PIN
                         "dataOperationType": 0,  # Add
                         "dataIndex": 7,  # Matter-auto-allocated credential index
-                        "userIndex": 42,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -1963,13 +2006,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 19,
+                    "user_index": 4,
                     "user_name": "lcm:5:Bob",
                     "credentials": [{"type": "pin", "index": 2}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -1979,7 +2023,7 @@ class TestLockUserChangeEvent:
                         "lockDataType": 6,  # PIN
                         "dataOperationType": 2,  # Modify
                         "dataIndex": 2,
-                        "userIndex": 19,
+                        "userIndex": 4,
                     },
                 ),
             )
@@ -1998,13 +2042,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 8,
                     "user_name": "lcm:2:Alice",
                     "credentials": [],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -2037,13 +2082,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 5,
                     "user_name": "External Alice",  # untagged
                     "credentials": [{"type": "pin", "index": 5}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -2105,13 +2151,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -2121,7 +2168,7 @@ class TestLockUserChangeEvent:
                         "lockDataType": 6,
                         "dataOperationType": 0,
                         # dataIndex omitted -- previously would hard-reject.
-                        "userIndex": 42,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2144,9 +2191,8 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
 
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(side_effect=HomeAssistantError("transport down")),
+        with _patch_user_reads_failing(
+            matter_lock, HomeAssistantError("transport down")
         ):
             matter_lock._on_node_event(
                 None,
@@ -2156,7 +2202,7 @@ class TestLockUserChangeEvent:
                         "lockDataType": 6,
                         "dataOperationType": 0,
                         "dataIndex": 3,
-                        "userIndex": 42,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2177,13 +2223,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 7,
                     "user_name": None,  # lock returned an empty/None name
                     "credentials": [{"type": "pin", "index": 2}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -2236,13 +2283,14 @@ class TestLockUserChangeEvent:
         matter_lock.coordinator = mock_coordinator
 
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 7,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 },
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -2259,6 +2307,107 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.observe_push.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "user_index", [0, -1, 11], ids=["zero", "negative", "past_the_lock_s"]
+    )
+    async def test_pin_event_for_a_user_index_the_lock_cannot_hold_reads_nothing(
+        self, hass: HomeAssistant, matter_lock: MatterLock, user_index: int
+    ) -> None:
+        """
+        A LockUserChange naming an index outside the lock's users names nobody.
+
+        Matter numbers users from 1 to the Door Lock's
+        NumberOfTotalUsersSupported, 10 on this node. The event is dropped
+        without a read, even with the stand-in lock answering a tagged user
+        at that index.
+        """
+        mock_coordinator = _mock_coordinator()
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
+        matter_lock.coordinator = mock_coordinator
+        listing = AsyncMock(
+            return_value={
+                "max_users": 10,
+                "users": [
+                    {
+                        "user_index": user_index,
+                        "user_name": "lcm:3:Carol",
+                        "credentials": [{"type": "pin", "index": 7}],
+                    },
+                ],
+            }
+        )
+
+        client, _node = matter_lock._require_client_and_node()
+
+        with (
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", listing),
+            get_user_answered_from_listing(client),
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,  # PIN
+                        "dataOperationType": 0,  # Add
+                        "dataIndex": 7,
+                        "userIndex": user_index,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+            client.send_device_command.assert_not_awaited()
+
+        listing.assert_not_awaited()
+        mock_coordinator.observe_push.assert_not_called()
+
+    async def test_a_lock_that_does_not_say_how_many_users_it_holds_holds_none(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        Without NumberOfTotalUsersSupported, no index names a user: nothing is read.
+
+        Home Assistant's ``get_lock_users`` lists no user on such a lock, so
+        the single read agrees with it, even with the stand-in lock
+        answering a tagged user at the index.
+        """
+        client, node = matter_lock._require_client_and_node()
+        door_lock = node.endpoints[1].get_cluster(clusters.DoorLock)
+        monkeypatch.setattr(door_lock, "numberOfTotalUsersSupported", None)
+        mock_coordinator = _mock_coordinator()
+        mock_coordinator.data = {pin_address(3): SlotCredential.empty()}
+        matter_lock.coordinator = mock_coordinator
+
+        with self._patch_users(
+            matter_lock,
+            [
+                {
+                    "user_index": 3,
+                    "user_name": "lcm:3:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                },
+            ],
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=4,
+                    data={
+                        "lockDataType": 6,  # PIN
+                        "dataOperationType": 0,  # Add
+                        "dataIndex": 7,
+                        "userIndex": 3,
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+            client.send_device_command.assert_not_awaited()
+
+        mock_coordinator.observe_push.assert_not_called()
+
     async def test_user_cleared_resolves_through_the_last_read(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
@@ -2272,17 +2421,18 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
 
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -2290,8 +2440,8 @@ class TestLockUserChangeEvent:
                     data={
                         "lockDataType": 2,  # a user record
                         "dataOperationType": 1,  # Clear
-                        "dataIndex": 42,
-                        "userIndex": 42,
+                        "dataIndex": 6,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2301,8 +2451,8 @@ class TestLockUserChangeEvent:
             pin_address(3), SlotCredential.empty()
         )
         # Forgotten once used: a later event for a reused index is not ours.
-        with self._patch_users([]):
-            matter_lock._on_node_event(None, _cleared_event(42))
+        with self._patch_users(matter_lock, []):
+            matter_lock._on_node_event(None, _cleared_event(6))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_called_once()
 
@@ -2313,17 +2463,18 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
                     "user_index": 8,
                     "user_name": "lcm:2:Alice",
                     "credentials": [{"type": "pin", "index": 11}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
 
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -2350,13 +2501,14 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             matter_lock._on_node_event(
                 None,
@@ -2365,8 +2517,8 @@ class TestLockUserChangeEvent:
                     data={
                         "lockDataType": 2,
                         "dataOperationType": operation,
-                        "dataIndex": 42,
-                        "userIndex": 42,
+                        "dataIndex": 6,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2386,17 +2538,18 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
 
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -2405,7 +2558,7 @@ class TestLockUserChangeEvent:
                         "lockDataType": 6,
                         "dataOperationType": 0,  # Add
                         "dataIndex": 7,
-                        "userIndex": 42,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2413,8 +2566,8 @@ class TestLockUserChangeEvent:
 
         mock_coordinator.observe_push.assert_not_called()
         # ...and the anchor is still there for the deletion that follows.
-        with self._patch_users([]):
-            matter_lock._on_node_event(None, _cleared_event(42))
+        with self._patch_users(matter_lock, []):
+            matter_lock._on_node_event(None, _cleared_event(6))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_called_once_with(
             pin_address(3), SlotCredential.empty()
@@ -2431,16 +2584,17 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             await matter_lock.async_get_users()  # the user is already gone
             matter_lock._on_node_event(
                 None,
@@ -2449,8 +2603,8 @@ class TestLockUserChangeEvent:
                     data={
                         "lockDataType": 2,
                         "dataOperationType": 1,
-                        "dataIndex": 42,
-                        "userIndex": 42,
+                        "dataIndex": 6,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2467,26 +2621,28 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "Carol at the vendor app",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -2494,8 +2650,8 @@ class TestLockUserChangeEvent:
                     data={
                         "lockDataType": 2,
                         "dataOperationType": 1,
-                        "dataIndex": 42,
-                        "userIndex": 42,
+                        "dataIndex": 6,
+                        "userIndex": 6,
                     },
                 ),
             )
@@ -2509,7 +2665,7 @@ class TestLockUserChangeEvent:
         """A cleared user LCM never saw anchors no slot of ours."""
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(
                 None,
                 _make_node_event(
@@ -2517,8 +2673,8 @@ class TestLockUserChangeEvent:
                     data={
                         "lockDataType": 2,
                         "dataOperationType": 1,
-                        "dataIndex": 77,
-                        "userIndex": 77,
+                        "dataIndex": 10,
+                        "userIndex": 10,
                     },
                 ),
             )
@@ -2533,7 +2689,7 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with (
-            self._patch_users([]),
+            self._patch_users(matter_lock, []),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",
                 AsyncMock(return_value={"user_index": 9}),
@@ -2547,7 +2703,7 @@ class TestLockUserChangeEvent:
         )
 
         with (
-            self._patch_users([]),
+            self._patch_users(matter_lock, []),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",
                 AsyncMock(return_value={"user_index": 9}),
@@ -2574,14 +2730,14 @@ class TestLockUserChangeEvent:
             }
         ]
         with (
-            self._patch_users(untagged_holder),
+            self._patch_users(matter_lock, untagged_holder),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_user",
                 AsyncMock(return_value={"user_index": 5}),
             ),
         ):
             await matter_lock.async_set_user(User(user_id=3, name="lcm:3:Carol"))
-        with self._patch_users([]):
+        with self._patch_users(matter_lock, []):
             matter_lock._on_node_event(None, _cleared_event(5))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_called_once_with(
@@ -2595,20 +2751,18 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(side_effect=HomeAssistantError("offline")),
-        ):
-            matter_lock._on_node_event(None, _cleared_event(42))
+        with _patch_user_reads_failing(matter_lock, HomeAssistantError("offline")):
+            matter_lock._on_node_event(None, _cleared_event(6))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_called_once_with(
             pin_address(3), SlotCredential.empty()
@@ -2625,25 +2779,26 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
         vendor_user = [
-            {"user_index": 42, "user_name": "Vendor app user", "credentials": []}
+            {"user_index": 6, "user_name": "Vendor app user", "credentials": []}
         ]
-        with self._patch_users(vendor_user):
-            matter_lock._on_node_event(None, _cleared_event(42, data_type=6))
+        with self._patch_users(matter_lock, vendor_user):
+            matter_lock._on_node_event(None, _cleared_event(6, data_type=6))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_not_called()
         # And the anchor is gone: the vendor user's own deletion resolves nothing.
-        with self._patch_users([]):
-            matter_lock._on_node_event(None, _cleared_event(42))
+        with self._patch_users(matter_lock, []):
+            matter_lock._on_node_event(None, _cleared_event(6))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_not_called()
 
@@ -2654,19 +2809,21 @@ class TestLockUserChangeEvent:
         mock_coordinator = _mock_coordinator()
         matter_lock.coordinator = mock_coordinator
         with self._patch_users(
+            matter_lock,
             [
                 {
-                    "user_index": 42,
+                    "user_index": 6,
                     "user_name": "lcm:3:Carol",
                     "credentials": [{"type": "pin", "index": 7}],
                 }
-            ]
+            ],
         ):
             await matter_lock.async_get_users()
         with self._patch_users(
-            [{"user_index": 42, "user_name": "lcm:4:Carol", "credentials": []}]
+            matter_lock,
+            [{"user_index": 6, "user_name": "lcm:4:Carol", "credentials": []}],
         ):
-            matter_lock._on_node_event(None, _cleared_event(42, data_type=6))
+            matter_lock._on_node_event(None, _cleared_event(6, data_type=6))
             await hass.async_block_till_done()
         mock_coordinator.observe_push.assert_called_once_with(
             pin_address(4), SlotCredential.empty()
@@ -3740,13 +3897,7 @@ class TestDeleteUser:
 class TestReleaseManagedSlot:
     """async_release_managed_slot tears down the user anchoring a removed slot."""
 
-    @staticmethod
-    def _patch_users(users: list[dict]) -> Any:
-        """Patch get_lock_users with the given user list."""
-        return patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(return_value={"max_users": 10, "users": users}),
-        )
+    _patch_users = staticmethod(_patch_user_reads)
 
     # The mock_door_lock node's CurrentFabricIndex (0/62/5).
     _HA_FABRIC = 1
@@ -3773,7 +3924,7 @@ class TestReleaseManagedSlot:
         """Finds the lcm:<slot>: user and clears it via clear_lock_user."""
         mock_clear_user = AsyncMock(return_value=None)
         with (
-            self._patch_users([self._CAROL]),
+            self._patch_users(matter_lock, [self._CAROL]),
             self._patch_status(creator_fabric_index=self._HA_FABRIC),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", mock_clear_user),
         ):
@@ -3799,7 +3950,7 @@ class TestReleaseManagedSlot:
         status = AsyncMock()
         _client, node = matter_lock._require_client_and_node()
         with (
-            self._patch_users([self._CAROL]),
+            self._patch_users(matter_lock, [self._CAROL]),
             patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
             patch.object(
@@ -3821,7 +3972,7 @@ class TestReleaseManagedSlot:
         """Whose the PIN is went unanswered: raised, to retry, and nothing cleared."""
         clear_user = AsyncMock(return_value=None)
         with (
-            self._patch_users([self._CAROL]),
+            self._patch_users(matter_lock, [self._CAROL]),
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_credential_status",
                 AsyncMock(side_effect=HomeAssistantError("timed out")),
@@ -3856,7 +4007,9 @@ class TestReleaseManagedSlot:
         set_user = AsyncMock(return_value=None)
         _client, node = matter_lock._require_client_and_node()
         with (
-            self._patch_users([self._CAROL | {"credentials": credentials}]),
+            self._patch_users(
+                matter_lock, [self._CAROL | {"credentials": credentials}]
+            ),
             patch(f"{_PROVIDER_MODULE}.get_lock_credential_status", status),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
             patch(f"{_PROVIDER_MODULE}.set_lock_user", set_user),
@@ -3889,7 +4042,7 @@ class TestReleaseManagedSlot:
         clear_credential = AsyncMock(return_value=None)
         set_user = AsyncMock(return_value=None)
         with (
-            self._patch_users([carol]),
+            self._patch_users(matter_lock, [carol]),
             self._patch_status(creator_fabric_index=self._HA_FABRIC, **status),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
@@ -4052,43 +4205,6 @@ class TestReleaseManagedSlot:
         assert matter_lock._pins_by_user_index == {42: {8}}
         assert "index(es) 7 on user 42" in caplog.text
         assert "remove it in the lock vendor's app" in caplog.text
-
-    @pytest.mark.parametrize(
-        "missing", ["_get_lock_endpoint_or_raise", "_format_user_response"]
-    )
-    async def test_unlisted_release_without_ha_s_single_user_read_clears_the_pin(
-        self,
-        matter_lock: MatterLock,
-        monkeypatch: pytest.MonkeyPatch,
-        missing: str,
-    ) -> None:
-        """
-        Home Assistant no longer has the private helpers the single read uses.
-
-        The read fails like an unanswered one, so the release falls back to
-        clearing LCM's recorded PIN, rather than the integration failing to
-        load.
-        """
-        monkeypatch.delattr(matter_lock_helpers, missing)
-        matter_lock._slot_by_user_index[42] = 5
-        matter_lock._pins_by_user_index[42] = {7}
-        send = AsyncMock()
-        clear_user = AsyncMock(return_value=None)
-        clear_credential = AsyncMock(return_value=None)
-        client, _node = matter_lock._require_client_and_node()
-        with (
-            self._patch_unlisted(),
-            patch.object(client, "send_device_command", send),
-            self._patch_status(creator_fabric_index=self._HA_FABRIC),
-            patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
-            patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
-        ):
-            await matter_lock.async_release_managed_slot(5)
-
-        send.assert_not_called()
-        clear_user.assert_not_called()
-        clear_credential.assert_called_once()
-        assert clear_credential.call_args.kwargs["credential_index"] == 7
 
     @pytest.mark.parametrize(
         "status",
@@ -4319,7 +4435,7 @@ class TestReleaseManagedSlot:
         clear_user = AsyncMock(return_value=None)
         clear_credential = AsyncMock(return_value=None)
         with (
-            self._patch_users([self._CAROL]),
+            self._patch_users(matter_lock, [self._CAROL]),
             self._patch_status(creator_fabric_index=self._HA_FABRIC),
             patch(f"{_PROVIDER_MODULE}.clear_lock_user", clear_user),
             patch(f"{_PROVIDER_MODULE}.clear_lock_credential", clear_credential),
@@ -4344,12 +4460,12 @@ class TestReleaseManagedSlot:
             "user_name": "Guest",
             "credentials": [{"type": "pin", "index": 1}],
         }
-        with self._patch_users([self._CAROL, stranger]):
+        with self._patch_users(matter_lock, [self._CAROL, stranger]):
             await matter_lock.async_get_users()
         assert matter_lock._pins_by_user_index == {42: {7}}
 
         with (
-            self._patch_users([self._CAROL]),
+            self._patch_users(matter_lock, [self._CAROL]),
             self._patch_status(),
             patch(
                 f"{_PROVIDER_MODULE}.set_lock_credential",
@@ -4375,6 +4491,213 @@ class TestReleaseManagedSlot:
         assert 42 not in matter_lock._slot_by_user_index
 
 
+class TestGetUserRead:
+    """``_raw_lock_user``: one GetUser, sent and parsed by the provider itself."""
+
+    @staticmethod
+    def _answering(matter_lock: MatterLock, answer: Any) -> Any:
+        """Patch the client's ``send_device_command`` to answer ``answer``."""
+        client, _node = matter_lock._require_client_and_node()
+        return patch.object(
+            client, "send_device_command", AsyncMock(return_value=answer)
+        )
+
+    async def test_a_user_reads_as_the_listing_lists_it(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """
+        The answer keeps what the provider reads, under ``get_lock_users``'s names.
+
+        The command goes to the node's Door Lock endpoint. A credential that
+        is not a Personal Identification Number is kept, its type named as
+        Home Assistant names it.
+        """
+        answer = get_user_answer(
+            3,
+            [
+                {
+                    "user_index": 3,
+                    "user_name": "lcm:5:Carol",
+                    "creator_fabric_index": 2,
+                    "credentials": [
+                        {"type": "pin", "index": 7},
+                        {"type": "rfid", "index": 2},
+                    ],
+                }
+            ],
+        )
+        with self._answering(matter_lock, answer) as send:
+            user = await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+
+        assert user == {
+            "user_index": 3,
+            "user_name": "lcm:5:Carol",
+            "creator_fabric_index": 2,
+            "credentials": [
+                {"type": "pin", "index": 7},
+                {"type": "rfid", "index": 2},
+            ],
+        }
+        _client, node = matter_lock._require_client_and_node()
+        send.assert_awaited_once()
+        assert send.call_args.kwargs["node_id"] == node.node_id
+        assert send.call_args.kwargs["endpoint_id"] == 1
+        assert send.call_args.kwargs["command"] == (
+            clusters.DoorLock.Commands.GetUser(userIndex=3)
+        )
+
+    async def test_an_empty_index_reads_as_no_user(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """An index the lock holds no user at answers no ``userStatus``."""
+        with self._answering(matter_lock, get_user_answer(3, [])):
+            assert (
+                await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+                is None
+            )
+
+    @pytest.mark.parametrize("name", [None, 5], ids=["null", "not_text"])
+    async def test_a_name_that_is_not_text_reads_as_no_name(
+        self, matter_lock: MatterLock, name: Any
+    ) -> None:
+        """The user is still read, its credentials with it: it has no name."""
+        answer = get_user_answer(
+            3,
+            [
+                {
+                    "user_index": 3,
+                    "user_name": "lcm:5:Carol",
+                    "credentials": [{"type": "pin", "index": 7}],
+                }
+            ],
+        ) | {"userName": name}
+        with self._answering(matter_lock, answer):
+            user = await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+
+        assert user is not None
+        assert user["user_name"] is None
+        assert user["credentials"] == [{"type": "pin", "index": 7}]
+
+    async def test_a_credential_without_its_index_does_not_hide_the_pin(
+        self, matter_lock: MatterLock
+    ) -> None:
+        """
+        A credential the lock gives no index is kept without one, and skipped.
+
+        The user's Personal Identification Number beside it is still found,
+        as it is in Home Assistant's listing.
+        """
+        answer = get_user_answer(
+            3,
+            [
+                {
+                    "user_index": 3,
+                    "user_name": "lcm:5:Carol",
+                    "credentials": [
+                        {"type": "pin", "index": 2},
+                        {"type": "pin", "index": 7},
+                    ],
+                }
+            ],
+        )
+        answer["credentials"][0]["credentialIndex"] = None
+        with self._answering(matter_lock, answer):
+            user = await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+            index = await matter_lock._find_pin_credential_index_for_user(3)
+
+        assert user is not None
+        assert user["credentials"] == [
+            {"type": "pin", "index": None},
+            {"type": "pin", "index": 7},
+        ]
+        assert index == 7
+
+    @pytest.mark.parametrize(
+        "answer",
+        [
+            None,
+            [],
+            get_user_answer(4, [{"user_index": 4, "user_name": "lcm:5:Carol"}]),
+            get_user_answer(3, [{"user_index": 3, "user_name": "lcm:5:Carol"}])
+            | {"credentials": {"credentialType": 1, "credentialIndex": 7}},
+            get_user_answer(3, [{"user_index": 3, "user_name": "lcm:5:Carol"}])
+            | {"credentials": [7]},
+        ],
+        ids=[
+            "nothing",
+            "not_a_record",
+            "another_user_s",
+            "credentials_not_a_list",
+            "a_credential_not_a_record",
+        ],
+    )
+    async def test_an_answer_that_is_not_a_user_record_fails_the_operation(
+        self, matter_lock: MatterLock, answer: Any
+    ) -> None:
+        """
+        The lock answered, but not with a user: ``LockOperationFailed``, never a raw error.
+
+        Every caller handles ``LockOperationError``; anything else escaped them.
+        """
+        with (
+            self._answering(matter_lock, answer),
+            pytest.raises(LockOperationFailed, match="GetUser answered"),
+        ):
+            await matter_lock._raw_lock_user(matter_lock._require_door_lock(), 3)
+
+    async def test_a_use_whose_user_reads_malformed_reads_nothing_more(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """
+        A LockOperation whose named user answers malformed goes unannounced.
+
+        Nobody is searched for the credential used: the user was named, and
+        the lock answered for it.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        listing = AsyncMock(return_value={"max_users": 10, "users": []})
+        with (
+            self._answering(
+                matter_lock, {"userIndex": 3, "userStatus": 1, "credentials": 7}
+            ),
+            patch(f"{_PROVIDER_MODULE}.get_lock_users", listing),
+        ):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    event_id=2,
+                    data={
+                        "lockOperationType": 1,
+                        "userIndex": 3,
+                        "credentials": [{"credentialType": 1, "credentialIndex": 7}],
+                    },
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert fired == []
+        listing.assert_not_awaited()
+
+    async def test_a_node_without_its_door_lock_endpoint_is_disconnected(
+        self, matter_lock: MatterLock, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """
+        A node without its Door Lock endpoint (mid re-interview) reads as disconnected.
+
+        Nothing is sent: there is no endpoint to send GetUser to.
+        """
+        _client, node = matter_lock._require_client_and_node()
+        monkeypatch.setattr(node, "endpoints", {0: node.endpoints[0]})
+
+        with (
+            self._answering(matter_lock, None) as send,
+            pytest.raises(LockDisconnected, match="no Door Lock endpoint"),
+        ):
+            await matter_lock._find_pin_credential_index_for_user(1)
+        send.assert_not_awaited()
+
+
 # =============================================================================
 # async_set_credential tests
 # =============================================================================
@@ -4384,7 +4707,7 @@ class TestSetCredential:
     """Test async_set_credential writes Personal Identification Number credentials."""
 
     @pytest.fixture(autouse=True)
-    def _empty_user_list(self) -> AsyncMock:
+    def _empty_user_list(self, matter_client: MagicMock) -> AsyncMock:
         """Default get_lock_users to an empty list so the new CREATE path runs.
 
         async_set_credential now looks up the user's existing PIN credential
@@ -4393,6 +4716,7 @@ class TestSetCredential:
         in their own context manager.
         """
         with (
+            get_user_answered_from_listing(matter_client),
             patch(
                 f"{_PROVIDER_MODULE}.get_lock_users",
                 AsyncMock(return_value={"max_users": 10, "users": []}),
@@ -5023,7 +5347,7 @@ class TestDeleteCredential:
     """Test async_delete_credential clears Personal Identification Number credentials."""
 
     @pytest.fixture(autouse=True)
-    def _user_owning_slot_pin(self) -> AsyncMock:
+    def _user_owning_slot_pin(self, matter_client: MagicMock) -> AsyncMock:
         """Default the lock to a single user owning a PIN at the slot the tests address.
 
         async_delete_credential now rediscovers the Matter credential index
@@ -5033,26 +5357,29 @@ class TestDeleteCredential:
         positive-path tests. Tests that need different lock state can patch
         get_lock_users in their own context manager.
         """
-        with patch(
-            f"{_PROVIDER_MODULE}.get_lock_users",
-            AsyncMock(
-                return_value={
-                    "max_users": 10,
-                    "users": [
-                        {
-                            "user_index": 1,
-                            "user_name": "lcm:1:test",
-                            "credentials": [{"type": "pin", "index": 1}],
-                        },
-                        {
-                            "user_index": 4,
-                            "user_name": "lcm:4:test",
-                            "credentials": [{"type": "pin", "index": 4}],
-                        },
-                    ],
-                },
-            ),
-        ) as mock:
+        with (
+            get_user_answered_from_listing(matter_client),
+            patch(
+                f"{_PROVIDER_MODULE}.get_lock_users",
+                AsyncMock(
+                    return_value={
+                        "max_users": 10,
+                        "users": [
+                            {
+                                "user_index": 1,
+                                "user_name": "lcm:1:test",
+                                "credentials": [{"type": "pin", "index": 1}],
+                            },
+                            {
+                                "user_index": 4,
+                                "user_name": "lcm:4:test",
+                                "credentials": [{"type": "pin", "index": 4}],
+                            },
+                        ],
+                    },
+                ),
+            ) as mock,
+        ):
             yield mock
 
     async def test_delete_credential_returns_true(

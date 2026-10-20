@@ -11,10 +11,12 @@ and occupancy updates (LockUserChange).
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, Literal, cast, override
+from functools import partial
+from typing import Any, Literal, NamedTuple, override
 
 from chip.clusters import Objects as clusters
 from matter_server.client.exceptions import MatterClientException
+from matter_server.client.models.node import MatterEndpoint, MatterNode
 from matter_server.common.errors import (
     MatterError,
     NodeNotExists,
@@ -23,8 +25,8 @@ from matter_server.common.errors import (
 )
 from matter_server.common.models import EventType
 
-from homeassistant.components.matter import lock_helpers as matter_lock_helpers
 from homeassistant.components.matter.const import (
+    CREDENTIAL_TYPE_MAP,
     DOMAIN as MATTER_DOMAIN,
     ID_TYPE_DEVICE_ID,
 )
@@ -175,6 +177,88 @@ def _transient_status_disconnect(
     )
 
 
+# How many users the lock holds: user indices run from 1 to this.
+_NUMBER_OF_TOTAL_USERS = clusters.DoorLock.Attributes.NumberOfTotalUsersSupported
+
+
+class _DoorLock(NamedTuple):
+    """A Matter lock's client, node and Door Lock endpoint, resolved together."""
+
+    client: Any
+    node: MatterNode
+    endpoint: MatterEndpoint
+
+
+def _door_lock_endpoint(node: MatterNode) -> MatterEndpoint | None:
+    """Return the node's first endpoint with the Door Lock cluster, as Home Assistant finds it."""
+    return next(
+        (
+            endpoint
+            for endpoint in node.endpoints.values()
+            if endpoint.has_cluster(clusters.DoorLock)
+        ),
+        None,
+    )
+
+
+def _names_a_user(endpoint: MatterEndpoint, user_index: int) -> bool:
+    """
+    Return whether ``user_index`` can name a user on this lock.
+
+    Matter numbers users from 1 to the Door Lock endpoint's
+    NumberOfTotalUsersSupported, which the node holds from the Matter
+    server's subscription: no exchange with the lock. A lock that does not
+    report it holds no user, as Home Assistant's ``get_lock_users`` lists it.
+    """
+    total = endpoint.get_attribute_value(None, _NUMBER_OF_TOTAL_USERS)
+    return isinstance(total, int) and 1 <= user_index <= total
+
+
+def _raw_user_from_get_user(answer: Any, user_index: int) -> dict[str, Any] | None:
+    """
+    Return a GetUser answer as ``get_lock_users`` lists a user; ``None`` if the index is empty.
+
+    ``answer`` is the GetUserResponse as the Matter server relays it: a dict
+    of its fields by their camelCase names, a null field as ``None``. An
+    empty index answers with no ``userStatus``. Only what the provider reads
+    is kept: the index, name, creating fabric, and each credential's type
+    and index, the type named as Home Assistant's ``CREDENTIAL_TYPE_MAP``
+    names it. One unusable field does not lose the user: a name that is not
+    text reads as no name, and a credential index that is not a number as
+    no index, which every caller skips. Raises ``ValueError`` for an answer
+    that is not a user record for ``user_index``, or whose credentials are
+    not a list of records.
+    """
+    if not isinstance(answer, dict) or answer.get("userIndex") != user_index:
+        raise ValueError(f"no record for user {user_index}: {answer!r}")
+    if answer.get("userStatus") is None:
+        return None
+    credentials = answer.get("credentials") or []
+    if not isinstance(credentials, list) or not all(
+        isinstance(credential, dict) for credential in credentials
+    ):
+        raise ValueError(f"a malformed record for user {user_index}: {answer!r}")
+    name = answer.get("userName")
+    return {
+        "user_index": user_index,
+        "user_name": name if isinstance(name, str) else None,
+        "creator_fabric_index": answer.get("creatorFabricIndex"),
+        "credentials": [
+            {
+                "type": CREDENTIAL_TYPE_MAP.get(
+                    credential.get("credentialType"), "unknown"
+                ),
+                "index": (
+                    index
+                    if type(index := credential.get("credentialIndex")) is int
+                    else None
+                ),
+            }
+            for credential in credentials
+        ],
+    }
+
+
 def _raw_user_slot(raw_user: dict[str, Any], fabric: int | None) -> int | None:
     """
     Return the LCM slot a raw lock user is tagged for, or ``None``.
@@ -197,27 +281,6 @@ def _raw_user_slot(raw_user: dict[str, Any], fabric: int | None) -> int | None:
     return parse_short_tag(name)
 
 
-def _lcm_slot_from_raw_users_by_user_index(
-    raw_users: list[dict[str, Any]], user_index: int | None, fabric: int | None
-) -> int | None:
-    """
-    Resolve the LCM slot by matching a raw lock user by ``user_index``.
-
-    Pure helper over the already-fetched user list -- the caller owns the
-    ``_raw_lock_users`` round-trip and the transport-error handling.
-    """
-    if user_index is None:
-        return None
-    return next(
-        (
-            _raw_user_slot(raw_user, fabric)
-            for raw_user in raw_users
-            if raw_user.get("user_index") == user_index
-        ),
-        None,
-    )
-
-
 def _lcm_slot_from_raw_users_by_credential_index(
     raw_users: list[dict[str, Any]], credential_index: int | None, fabric: int | None
 ) -> int | None:
@@ -227,7 +290,7 @@ def _lcm_slot_from_raw_users_by_credential_index(
     Walks each raw user's credentials list for a Personal Identification
     Number credential whose Matter index matches; if found, reads the
     owning user's tag. Used as a fallback when the LockOperation event
-    omits ``userIndex``.
+    names no user the lock can hold, or one that reads empty.
     """
     if credential_index is None:
         return None
@@ -575,34 +638,49 @@ class MatterLock(BaseLock):
         )
         return lock_data.get("users", [])
 
-    async def _raw_lock_user(self, user_index: int) -> dict[str, Any] | None:
+    def _require_door_lock(self) -> _DoorLock:
+        """
+        Resolve the client, node and Door Lock endpoint, or raise ``LockDisconnected``.
+
+        Resolved once per event or operation and passed down, so every read
+        that follows asks the same node. A node without its Door Lock
+        endpoint (mid re-interview) is disconnected: listing every user
+        needs it too.
+        """
+        client, node = self._require_client_and_node()
+        if (endpoint := _door_lock_endpoint(node)) is None:
+            raise LockDisconnected(
+                f"{self.lock.entity_id}: node has no Door Lock endpoint"
+            )
+        return _DoorLock(client, node, endpoint)
+
+    async def _raw_lock_user(
+        self, door_lock: _DoorLock, user_index: int
+    ) -> dict[str, Any] | None:
         """
         Return one raw user, as ``get_lock_users`` lists it, or ``None`` if empty.
 
-        One GetUser for ``user_index``, for a lock that fails the full walk
-        (#1689). Home Assistant's lock helpers have no single-user read, so
-        this sends the command and formats the answer with their private
-        helpers. They are looked up here, not imported, so a rename in Home
-        Assistant costs only this read (``LockDisconnected``: the caller falls
-        back to the PIN-only release), never the integration's import.
+        One GetUser: reading every user to find one costs a round trip each
+        over the lock's radio. A lock that does not answer raises
+        ``LockDisconnected`` (asking it for every user instead would only
+        send it more). An answer that is not a record for ``user_index``
+        raises ``LockOperationFailed``: the lock answered, but not with a
+        user.
         """
-        endpoint_of = getattr(matter_lock_helpers, "_get_lock_endpoint_or_raise", None)
-        format_user = getattr(matter_lock_helpers, "_format_user_response", None)
-        if endpoint_of is None or format_user is None:
-            raise LockDisconnected(
-                f"{self.lock.entity_id}: Home Assistant's Matter lock helpers "
-                f"no longer provide a single-user read"
-            )
-        client, node = self._require_client_and_node()
-        response = await self._invoke_sdk(
+        answer = await self._invoke_sdk(
             "get_lock_user",
-            client.send_device_command(
-                node_id=node.node_id,
-                endpoint_id=endpoint_of(node).endpoint_id,
+            door_lock.client.send_device_command(
+                node_id=door_lock.node.node_id,
+                endpoint_id=door_lock.endpoint.endpoint_id,
                 command=clusters.DoorLock.Commands.GetUser(userIndex=user_index),
             ),
         )
-        return cast(dict[str, Any] | None, format_user(response))
+        try:
+            return _raw_user_from_get_user(answer, user_index)
+        except ValueError as err:
+            raise LockOperationFailed(
+                f"{self.lock.entity_id}: GetUser answered {err}"
+            ) from err
 
     @override
     async def async_get_users(self, slots: Collection[int] | None = None) -> list[User]:
@@ -1087,11 +1165,12 @@ class MatterLock(BaseLock):
 
         A lock that cannot list its users (#1689) is asked for the one user
         index recorded for ``slot`` instead (one GetUser), which is released
-        as above if it still carries the tag. If that read fails too, LCM's
-        recorded PINs on it are cleared without seeing the user
-        (``_release_recorded_pins``). No single recorded user, or (for the
-        PIN-only path) no recorded PIN: the listing's failure is raised. A
-        listing that works always wins over the record.
+        as above if it still carries the tag. If that read goes unanswered
+        too, the Personal Identification Numbers LCM recorded on it are
+        cleared without seeing the user (``_release_recorded_pins``); an
+        answer that is not a user record raises. No single recorded user,
+        or (for the PIN-only path) no recorded PIN: the listing's failure is
+        raised. A listing that works always wins over the record.
 
         Lock-side failures raise, so the release is retried: nothing is
         deleted on an unanswered question about whose a PIN is.
@@ -1108,13 +1187,14 @@ class MatterLock(BaseLock):
                 raise
             recorded_index = recorded[0]
             try:
-                user = await self._raw_lock_user(recorded_index)
+                door_lock = self._require_door_lock()
+                user = await self._raw_lock_user(door_lock, recorded_index)
             except LockDisconnected:
                 if not self._pins_by_user_index.get(recorded_index):
                     raise err from None
                 await self._release_recorded_pins(slot, recorded_index, written=written)
                 return
-            fabric = self._fabric_index()
+            fabric = self._fabric_index(door_lock.node)
             if user is None or _raw_user_slot(user, fabric) != slot:
                 self._forget_user_index(recorded_index)
                 user = None
@@ -1418,18 +1498,17 @@ class MatterLock(BaseLock):
         Return the user's current Matter PIN credential index, or ``None``.
 
         LCM treats Matter's credential index as opaque and rediscovers it
-        per operation. This helper deliberately walks the **raw**
-        lock-side user data (not ``async_get_users``) so the returned
-        value is the Matter credential index Matter expects for
+        per operation, from the user's **raw** lock-side record
+        (``_raw_lock_user``, one GetUser; not ``async_get_users``) so the
+        returned value is the Matter credential index Matter expects for
         ``set_lock_credential`` / ``clear_lock_credential`` -- not the
         LCM-projected slot that ``async_get_users`` exposes upward.
         """
+        user = await self._raw_lock_user(self._require_door_lock(), user_id)
         return next(
             (
                 cred.get("index")
-                for raw_user in await self._raw_lock_users()
-                if raw_user.get("user_index") == user_id
-                for cred in raw_user.get("credentials") or []
+                for cred in (user or {}).get("credentials") or []
                 if cred.get("type") == "pin" and cred.get("index") is not None
             ),
             None,
@@ -1869,8 +1948,9 @@ class MatterLock(BaseLock):
         model. To find the LCM slot we resolve via the event's top-level
         ``userIndex`` -> user.name -> ``lcm:<slot>:`` tag, falling back --
         for a PIN only -- to walking the user list for a PIN credential at
-        ``credentialIndex`` when ``userIndex`` is absent. The lookup is
-        async so the callback schedules a task rather than blocking the
+        ``credentialIndex`` when ``userIndex`` names no user the lock can
+        hold, or one that reads empty (``_lock_operation_slot``). The lookup
+        is async so the callback schedules a task rather than blocking the
         event loop.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
@@ -1924,6 +2004,37 @@ class MatterLock(BaseLock):
             f"Matter LockOperation dispatch for {self.lock.entity_id}",
         )
 
+    async def _lock_operation_slot(
+        self,
+        user_index: int | None,
+        credential_index: int | None,
+        *,
+        placeable_by_pin_index: bool,
+    ) -> int | None:
+        """
+        Return the LCM slot a LockOperation's user holds, or ``None``.
+
+        The user the event names, read alone (``_raw_lock_user``). An event
+        naming no user, or an index outside the lock's users
+        (``_names_a_user``), names nobody; for that, and for a named index
+        that reads empty, every user is read for the Personal Identification
+        Number credential at ``credentialIndex`` -- but only when
+        ``placeable_by_pin_index``: a card's index says nothing about who
+        holds a PIN at that index. A named user that is not LCM's answers
+        ``None`` without that search.
+        """
+        door_lock = self._require_door_lock()
+        fabric = self._fabric_index(door_lock.node)
+        if user_index is not None and _names_a_user(door_lock.endpoint, user_index):
+            user = await self._raw_lock_user(door_lock, user_index)
+            if user is not None:
+                return _raw_user_slot(user, fabric)
+        if not placeable_by_pin_index:
+            return None
+        return _lcm_slot_from_raw_users_by_credential_index(
+            await self._raw_lock_users(), credential_index, fabric
+        )
+
     async def _dispatch_lock_operation(
         self,
         user_index: int | None,
@@ -1936,18 +2047,23 @@ class MatterLock(BaseLock):
         """
         Resolve the Lock Code Manager slot for a LockOperation event and fire it.
 
-        Primary path: lock-reported ``userIndex`` -> user.name -> tag.
+        Primary path: lock-reported ``userIndex`` -> user.name -> tag, read
+        with one GetUser: the use is announced only once this answers, and
+        walking every user takes seconds on a lock with a handful of them.
         Fallback path, when ``placeable_by_pin_index`` (a credential the
-        lock typed as a PIN, with a readable ``credentialIndex``): walk the
-        user list to find the PIN credential at that index and parse the
-        owning user's tag. Events whose owning user carries no Lock Code
-        Manager tag are silently dropped so out-of-band PIN uses on
-        credentials Lock Code Manager doesn't manage don't drive spurious code
-        slot events.
+        lock typed as a PIN, with a readable ``credentialIndex``) and the
+        event names no user the lock can hold or an empty one: walk the user
+        list to find the PIN credential at that index and parse the owning
+        user's tag. Events whose owning user carries no Lock Code Manager tag
+        are silently dropped so out-of-band PIN uses on credentials Lock Code
+        Manager doesn't manage don't drive spurious code slot events.
         """
         try:
-            raw_users = await self._raw_lock_users()
-            fabric = self._fabric_index()
+            code_slot = await self._lock_operation_slot(
+                user_index,
+                credential_index,
+                placeable_by_pin_index=placeable_by_pin_index,
+            )
         except LockOperationError as err:
             LOGGER.debug(
                 "Lock %s: could not resolve LockOperation userIndex=%s "
@@ -1959,18 +2075,6 @@ class MatterLock(BaseLock):
             )
             return
 
-        # Explicit ``None`` check (not ``or``) so a valid LCM slot of 0
-        # from the primary resolver doesn't fall through to the fallback.
-        code_slot = _lcm_slot_from_raw_users_by_user_index(
-            raw_users, user_index, fabric
-        )
-        # The fallback walks PIN credentials, so it can only place a PIN
-        # index: a card's index says nothing about who holds a PIN at that
-        # index.
-        if code_slot is None and placeable_by_pin_index:
-            code_slot = _lcm_slot_from_raw_users_by_credential_index(
-                raw_users, credential_index, fabric
-            )
         if code_slot is None:
             LOGGER.debug(
                 "Lock %s: LockOperation userIndex=%s credentialIndex=%s did not "
@@ -2018,16 +2122,19 @@ class MatterLock(BaseLock):
         user with its credentials, and for a deletion made outside LCM that
         event is the only word the lock gives.
 
-        The LCM slot is resolved by walking the event's ``userIndex`` to
-        the owning user's name and parsing its ``lcm:<slot>:`` tag --
-        ``userIndex`` alone is sufficient. ``dataIndex`` (the Matter
-        credential index) is captured best-effort for log context only;
-        under the user-tag model it is opaque to LCM, and dropping
-        otherwise-resolvable events when it's missing or malformed would
-        silently lose state updates. The lookup is async (a fresh
-        ``_raw_lock_users`` round-trip) so the callback schedules a task
-        rather than blocking the event loop. Events for users LCM
-        doesn't own (untagged names) are ignored.
+        The event's ``userIndex`` is all LCM needs: the user at that index
+        is read with one GetUser (``_raw_lock_user``), and the
+        ``lcm:<slot>:`` tag in its name gives the LCM slot. That read is
+        async, so this callback schedules it as a task rather than blocking
+        the event loop. An event whose ``userIndex`` names no user the lock
+        can hold (``_names_a_user``), or that arrives while the node has no
+        Door Lock endpoint, is dropped before any read; so is a change to a
+        user LCM does not own (an untagged name).
+
+        ``dataIndex``, the Matter credential index, is parsed for log
+        context only. LCM treats it as opaque, and dropping an event whose
+        user resolves just because ``dataIndex`` is missing or malformed
+        would lose the update.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
 
@@ -2036,9 +2143,19 @@ class MatterLock(BaseLock):
             return
 
         user_index = parse_slot_num(data.get("userIndex"))
-        if user_index is None:
+        try:
+            door_lock = self._require_door_lock()
+        except LockDisconnected as err:
             LOGGER.debug(
-                "Lock %s: LockUserChange has non-integer userIndex %r, ignoring",
+                "Lock %s: LockUserChange for userIndex %r, ignoring: %s",
+                self.lock.entity_id,
+                data.get("userIndex"),
+                err,
+            )
+            return
+        if user_index is None or not _names_a_user(door_lock.endpoint, user_index):
+            LOGGER.debug(
+                "Lock %s: LockUserChange names no user (userIndex %r), ignoring",
                 self.lock.entity_id,
                 data.get("userIndex"),
             )
@@ -2069,12 +2186,13 @@ class MatterLock(BaseLock):
             return
 
         self._create_background_task(
-            self._dispatch_lock_user_change(user_index, resolved, operation),
+            self._dispatch_lock_user_change(door_lock, user_index, resolved, operation),
             f"Matter LockUserChange dispatch for {self.lock.entity_id}",
         )
 
     async def _dispatch_lock_user_change(
         self,
+        door_lock: _DoorLock,
         user_index: int,
         resolved: SlotCredential,
         operation: int,
@@ -2082,39 +2200,38 @@ class MatterLock(BaseLock):
         """
         Resolve the LCM slot for a LockUserChange and push the update.
 
-        Fetches the lock's current user list, finds the owner by
-        ``user_index``, parses its ``lcm:<slot>:`` tag, and hands the
-        observation to the coordinator. A cleared user is no longer in
-        that list, so a CLEAR falls back to the slot the index anchored at
-        the last read or write. Events whose owning user isn't LCM-tagged
-        are ignored so out-of-band credential changes on non-LCM users
-        don't drive spurious coordinator updates.
+        Reads the user at ``user_index`` on ``door_lock``, as the event's
+        callback resolved it (``_raw_lock_user``), parses its
+        ``lcm:<slot>:`` tag, and hands the observation to the coordinator.
+        A cleared user is no longer on the lock, so a CLEAR falls back to
+        the slot the index anchored at the last read or write. Events whose
+        owning user isn't LCM-tagged are ignored so out-of-band credential
+        changes on non-LCM users don't drive spurious coordinator updates.
         """
         code_slot: int | None = None
         try:
             if self.coordinator is None:
                 raise LockDisconnected("not set up")
             # In the lock's turn: nothing reaches it once its worker stops.
-            raw_users = await self.coordinator.async_in_turn(self._raw_lock_users)
-            fabric = self._fabric_index()
+            user = await self.coordinator.async_in_turn(
+                partial(self._raw_lock_user, door_lock, user_index)
+            )
+            fabric = self._fabric_index(door_lock.node)
         except LockOperationError as err:
             LOGGER.debug(
-                "Lock %s: could not read users to resolve LockUserChange "
+                "Lock %s: could not read user to resolve LockUserChange "
                 "userIndex %s: %s",
                 self.lock.entity_id,
                 user_index,
                 err,
             )
         else:
-            code_slot = _lcm_slot_from_raw_users_by_user_index(
-                raw_users, user_index, fabric
-            )
-            if code_slot is None and any(
-                raw_user.get("user_index") == user_index for raw_user in raw_users
-            ):
-                # Present but untagged: somebody else's user now, whatever
-                # this index anchored before.
-                self._forget_user_index(user_index)
+            if user is not None:
+                code_slot = _raw_user_slot(user, fabric)
+                if code_slot is None:
+                    # Present but untagged: somebody else's user now,
+                    # whatever this index anchored before.
+                    self._forget_user_index(user_index)
         if code_slot is None and resolved.is_empty:
             code_slot = self._forget_user_index(user_index)
         if code_slot is None:

@@ -44,6 +44,8 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialRef,
+    CredentialType,
     SlotCredential,
     WriteResult,
 )
@@ -340,10 +342,10 @@ class TestAddingThroughTheUserInterface:
 
     @pytest.fixture(autouse=True)
     def _helpers_patched(
-        self, matter_mock_helpers: dict[str, AsyncMock]
+        self, matter_mock_helpers: dict[str, AsyncMock], matter_client: MagicMock
     ) -> Iterator[None]:
         """Keep the helpers patched for the entry the flow creates and sets up."""
-        with matter_helpers_patched(matter_mock_helpers):
+        with matter_helpers_patched(matter_mock_helpers, matter_client):
             yield
 
     async def _start_flow(
@@ -864,6 +866,207 @@ class TestKeypadAndSwitch:
             (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
         ] == expected
 
+    async def test_a_keypad_use_reads_only_the_user_it_names(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        The use is announced after one GetUser, not one per user on the lock.
+
+        Every user was read in turn first, which on an Aqara U400 with seven
+        users held the event back for about 8.6 seconds (#1745).
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", user_index)]
+
+    async def test_an_unanswered_user_read_is_not_followed_by_every_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A lock that does not answer the named user's read is asked nothing more.
+
+        Reading every user instead would send the same lock one request per
+        user; the use goes unannounced, as when any read of the walk failed.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        fake_matter_lock.fail("GetUser", user_index, times=1)
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert used == []
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", user_index)]
+
+    async def test_a_keypad_use_needs_none_of_ha_s_private_lock_helpers(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """
+        The named user is read and parsed by Lock Code Manager itself.
+
+        Home Assistant's lock helpers have no single-user read, and the
+        private ones that find the lock's endpoint and format a GetUser
+        answer may change in any release; the use is announced without them.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        for private in ("_get_lock_endpoint_or_raise", "_format_user_response"):
+            monkeypatch.delattr(lock_helpers, private, raising=False)
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+        assert [exchange.command for exchange in fake_matter_lock.commands[sent:]] == [
+            "GetUser"
+        ]
+
+    async def test_a_keypad_use_naming_user_zero_is_found_by_its_credential(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        Matter numbers users from 1, so a use naming user 0 names nobody.
+
+        The credential used finds its user, as for a use naming no user;
+        GetUser for index 0 is never sent, as the lock refuses it.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN]), user_index=0
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+        assert 0 not in [
+            exchange.payload.get("userIndex")
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command == "GetUser"
+        ]
+
+    async def test_a_keypad_use_naming_a_user_past_the_lock_s_is_found_by_its_credential(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A use naming an index past the lock's NumberOfTotalUsersSupported names nobody.
+
+        The credential used finds its user, as for a use naming no user;
+        GetUser for that index is never sent, as the lock refuses it.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        past = fake_matter_lock.max_users + 1
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN]),
+            user_index=past,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+        assert past not in [
+            exchange.payload.get("userIndex")
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command == "GetUser"
+        ]
+
+    async def test_a_keypad_use_naming_an_empty_user_is_found_by_its_credential(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A use naming a user index the lock holds no user at is found by its credential.
+
+        The named user reads empty, so the user holding the credential used
+        is the one announced.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        empty = next(
+            index
+            for index in range(1, fake_matter_lock.max_users + 1)
+            if index not in fake_matter_lock.users
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN]),
+            user_index=empty,
+        )
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [event.data["name"] for event in used] == ["slot2"]
+
     async def test_turning_a_user_off_takes_its_pin_off_the_lock(
         self,
         hass: HomeAssistant,
@@ -890,6 +1093,42 @@ class TestKeypadAndSwitch:
             STATE_ON,
             "",
         )
+
+    async def test_clearing_a_pin_reads_only_its_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A clear finds the PIN's credential index with one GetUser, not one per user.
+
+        A write or clear names its user, so that user's record holds the index.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        lock = fake_matter_lock_entry.runtime_data.locks[
+            fake_matter_lock_entity.entity_id
+        ]
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        assert user_index is not None
+        sent = len(fake_matter_lock.commands)
+
+        assert await lock.async_delete_credential(
+            CredentialRef(user_id=user_index, type=CredentialType.PIN, slot=2)
+        )
+
+        assert FAKE_MATTER_SLOTS[2][CONF_PIN] not in fake_matter_lock.codes.values()
+        assert [
+            exchange.payload["userIndex"]
+            for exchange in fake_matter_lock.commands[sent:]
+            if exchange.command == "GetUser"
+        ] == [user_index]
 
 
 class TestStartup:
@@ -1142,6 +1381,64 @@ class TestOtherUsersOnTheLock:
         await async_advance_sync_ticks(hass, freezer, 5)
 
         assert FAKE_MATTER_SLOTS[1][CONF_PIN] in fake_matter_lock.codes.values()
+
+    async def test_a_change_to_another_user_reads_only_that_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A user added in the vendor's app costs one GetUser, not one per user on the lock.
+
+        The LockUserChange names its user, so that user is all there is to
+        read to learn it isn't Lock Code Manager's.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        sent = len(fake_matter_lock.commands)
+
+        fake_matter_lock.program(9, "999999", name="Mom", credential_index=9)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", 9)]
+
+    async def test_a_use_of_another_user_s_code_reads_only_that_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A use by a user that is not Lock Code Manager's is not announced, after one GetUser.
+
+        The named user answers whose the use is, so no user is searched for
+        the credential used.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        fake_matter_lock.program(9, "999999", name="Mom", credential_index=9)
+        await hass.async_block_till_done(wait_background_tasks=True)
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(9)
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+        assert used == []
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", 9)]
 
     async def test_a_turned_off_user_leaves_a_homeowner_s_code_alone(
         self,
