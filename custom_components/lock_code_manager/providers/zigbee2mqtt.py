@@ -143,6 +143,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
     # silent, so that bound always speaks first.
     per_exchange_budget: ClassVar[float | None] = 15.0
 
+    # Nothing here asks the lock which readers it has, so every kind an
+    # operation event's source can name is declared, and the keypad's PIN.
+    reported_credential_types: ClassVar[frozenset[CredentialType]] = frozenset(
+        {CredentialType.PIN, *_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values()}
+    )
+
     _pending_codes: dict[int, asyncio.Future[SlotAnswer]] = field(
         init=False, default_factory=dict
     )

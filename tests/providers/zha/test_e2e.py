@@ -1352,8 +1352,18 @@ class TestCredentialPresented:
 
         Every use was announced as a PIN whatever the operation event's
         source said, so an RFID tag read as its holder typing their code.
+        Nothing asks a Zigbee lock which readers it has, so the user's event
+        entity admits every kind the provider can report from setup.
         """
         await _run_ticks(hass)
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == [
+            "fingerprint",
+            "pin",
+            "rfid",
+        ]
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
         event = lock_frame(
             door_lock.cluster,
@@ -1373,10 +1383,4 @@ class TestCredentialPresented:
         await hass.async_block_till_done()
 
         assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == [expected]
-        state = hass.states.get(
-            slot_entity_id(
-                hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
-            )
-        )
-        assert state.attributes[ATTR_EVENT_TYPE] == expected
-        assert expected in state.attributes[ATTR_EVENT_TYPES]
+        assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == expected

@@ -460,6 +460,12 @@ class BaseLock:
     # from before it). Until then a slot just written reads as silent: the
     # write is trusted, and the first read after decides.
     read_lag: ClassVar[float] = 0.0
+    # The credential kinds this provider reports a use as, for a provider whose
+    # protocol gives no way to ask the lock which kinds it supports. A provider
+    # that can ask advertises them through ``async_get_capabilities`` instead,
+    # and one that only ever reports a Personal Identification Number leaves
+    # this empty: every per-user event entity admits that kind already.
+    reported_credential_types: ClassVar[frozenset[CredentialType]] = frozenset()
     # Slots the last read asked about that the lock said nothing about, for
     # providers that can tell: the core reads them as silent, not unreadable.
     last_silent_slots: frozenset[int] = field(default=frozenset(), init=False)

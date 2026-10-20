@@ -704,19 +704,41 @@ class MatterLock(BaseLock):
         Read lock capabilities from the Matter DoorLock cluster.
 
         Maps the get_lock_info result to a platform-neutral LockCapabilities.
-        Only the Personal Identification Number credential type is surfaced
-        when the lock advertises PIN support. None capacity fields default
-        to 0 (unknown capacity) rather than raising.
+        Every credential kind the lock's feature map advertises is surfaced,
+        not only the ones Lock Code Manager writes: what a lock can report a
+        use as is part of what it can do. A kind outside ``CredentialType``
+        is ignored. None capacity fields default to 0 (unknown capacity)
+        rather than raising.
         """
         client, node = self._require_client_and_node()
         info = await self._invoke_sdk("get_lock_info", get_lock_info(client, node))
 
+        # The Door Lock cluster has capacity and length attributes for
+        # Personal Identification Numbers and Radio Frequency Identification
+        # cards only, so a finger or a face is advertised with every limit
+        # unknown.
+        limits = {
+            CredentialType.PIN: (
+                info.get("max_pin_users"),
+                info.get("min_pin_length"),
+                info.get("max_pin_length"),
+            ),
+            CredentialType.RFID: (
+                info.get("max_rfid_users"),
+                info.get("min_rfid_length"),
+                info.get("max_rfid_length"),
+            ),
+        }
         credential_types: dict[CredentialType, CredentialTypeCapability] = {}
-        if "pin" in (info.get("supported_credential_types") or []):
-            credential_types[CredentialType.PIN] = CredentialTypeCapability(
-                num_slots=info.get("max_pin_users") or 0,
-                min_length=info.get("min_pin_length") or 0,
-                max_length=info.get("max_pin_length") or 0,
+        for advertised in info.get("supported_credential_types") or []:
+            if advertised not in CredentialType:
+                continue
+            kind = CredentialType(advertised)
+            num_slots, min_length, max_length = limits.get(kind, (None, None, None))
+            credential_types[kind] = CredentialTypeCapability(
+                num_slots=num_slots or 0,
+                min_length=min_length or 0,
+                max_length=max_length or 0,
                 supports_learn=False,
             )
 

@@ -207,6 +207,12 @@ class ZHALock(BaseLock):
     # One ZCL command per slot, each of them slow; see _WORST_CASE_ZCL_COMMAND.
     per_exchange_budget: ClassVar[float | None] = _WORST_CASE_ZCL_COMMAND
 
+    # Nothing here asks the lock which readers it has, so every kind an
+    # operation event's source can name is declared, and the keypad's PIN.
+    reported_credential_types: ClassVar[frozenset[CredentialType]] = frozenset(
+        {CredentialType.PIN, *SOURCE_TO_CREDENTIAL_TYPE.values()}
+    )
+
     # -- Properties ----------------------------------------------------------
 
     @property

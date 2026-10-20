@@ -25,6 +25,7 @@ from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialRef,
     CredentialType,
+    CredentialTypeCapability,
     LockCapabilities,
     SetUserResult,
     SlotCredential,
@@ -3063,10 +3064,57 @@ class TestGetCapabilities:
         assert pin_cap.min_length == 0
         assert pin_cap.max_length == 0
 
-    async def test_get_capabilities_no_pin_support_empty_types(
+    async def test_get_capabilities_advertises_every_kind_the_lock_supports(
         self, hass: HomeAssistant, matter_lock: MatterLock
     ) -> None:
-        """Lock without PIN support has empty credential_types mapping."""
+        """
+        Every kind in the feature map is advertised, with what limits it has.
+
+        RFID has capacity and length attributes; a finger and a face have
+        none, so theirs are unknown. A string that is no ``CredentialType``
+        is not a kind this integration can name, and is left out.
+        """
+        mock_get_lock_info = AsyncMock(
+            return_value={
+                "supports_user_management": True,
+                "supported_credential_types": [
+                    "pin",
+                    "rfid",
+                    "fingerprint",
+                    "face",
+                    "finger_vein",
+                ],
+                "max_users": 20,
+                "max_pin_users": 15,
+                "min_pin_length": 4,
+                "max_pin_length": 8,
+                "max_rfid_users": 12,
+                "min_rfid_length": 10,
+                "max_rfid_length": 74,
+            }
+        )
+        with patch(f"{_PROVIDER_MODULE}.get_lock_info", mock_get_lock_info):
+            caps = await matter_lock.async_get_capabilities()
+
+        assert dict(caps.credential_types) == {
+            CredentialType.PIN: CredentialTypeCapability(
+                num_slots=15, min_length=4, max_length=8, supports_learn=False
+            ),
+            CredentialType.RFID: CredentialTypeCapability(
+                num_slots=12, min_length=10, max_length=74, supports_learn=False
+            ),
+            CredentialType.FINGERPRINT: CredentialTypeCapability(
+                num_slots=0, min_length=0, max_length=0, supports_learn=False
+            ),
+            CredentialType.FACE: CredentialTypeCapability(
+                num_slots=0, min_length=0, max_length=0, supports_learn=False
+            ),
+        }
+
+    async def test_get_capabilities_no_pin_support_advertises_no_pin(
+        self, hass: HomeAssistant, matter_lock: MatterLock
+    ) -> None:
+        """A lock with a card reader and no keypad advertises the reader alone."""
         mock_get_lock_info = AsyncMock(
             return_value={
                 "supports_user_management": True,
@@ -3084,6 +3132,7 @@ class TestGetCapabilities:
 
         assert caps.capability_for(CredentialType.PIN) is None
         assert not caps.supports(CredentialType.PIN)
+        assert list(caps.credential_types) == [CredentialType.RFID]
 
     async def test_get_capabilities_disconnected(
         self, hass: HomeAssistant, matter_lock: MatterLock

@@ -157,8 +157,12 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
 - `text.py`: Name and PIN configuration entities
 - `switch.py`: Slot enabled/disabled toggle
 - `event.py`: per-user `credential_used` event entity. Its `event_types` are
-  credential kinds -- `MANAGED_CREDENTIAL_TYPES` unioned with everything the
-  entry's locks advertise -- and a recorded use fires with the kind it was.
+  the credential kinds the entry's locks can report -- each lock's advertised
+  capabilities plus its provider's `reported_credential_types` (for providers
+  that cannot ask the lock), over a floor of `MANAGED_CREDENTIAL_TYPES` -- and
+  a recorded use fires with the kind it was. A use of a kind not listed is
+  dropped at DEBUG (the bus event still fired); that is a provider
+  under-reporting its lock, fixed in its capabilities.
   It records from `BUS_EVENT_CREDENTIAL_USED` alone and publishes that
   payload (`name`, `config_entry_id`, `config_entry_title`, `source`,
   `target`, `credential_type`, `operation`) as its state attributes,

@@ -829,13 +829,20 @@ class TestBridgeEvents:
         A card unlocking the door is announced as a card, not a PIN.
 
         Every use carrying an ``action_user`` was announced as a PIN,
-        whatever its ``action_source_name`` said.
+        whatever its ``action_source_name`` said. Nothing asks the lock which
+        readers it has, so the user's event entity admits every kind the
+        provider can report from setup.
         """
         lock_id = mqtt_lock_discovered.entity_id
         async with _bridge_entry(hass, freezer, lock_id) as entry:
             event_1 = slot_entity_id(
                 hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
             )
+            assert hass.states.get(event_1).attributes[ATTR_EVENT_TYPES] == [
+                "fingerprint",
+                "pin",
+                "rfid",
+            ]
 
             fake_z2m_bridge.operation_event("unlock", 1, source)
             await hass.async_block_till_done()
@@ -843,7 +850,6 @@ class TestBridgeEvents:
             state = hass.states.get(event_1)
             assert state.attributes[ATTR_EVENT_TYPE] == expected
             assert state.attributes[ATTR_CREDENTIAL_TYPE] == expected
-            assert expected in state.attributes[ATTR_EVENT_TYPES]
 
     @pytest.mark.parametrize(
         "payload",

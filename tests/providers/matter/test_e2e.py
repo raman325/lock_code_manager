@@ -76,6 +76,19 @@ from .fake_node import OTHER_FABRIC, DlStatus, DoorLock, FakeMatterLock, ImStatu
 
 _PIN = DoorLock.Enums.CredentialTypeEnum.kPin
 
+# The Aqara U200's card reader, from Home Assistant core's Matter fixtures
+# (core a888264d2fe, aqara_u200.json): FeatureMap 387 (PIN, RFID, USR, COTA),
+# fifteen RFID users, cards of 10 to 74 bytes. No lock in those fixtures
+# advertises a finger or a face, so those two features are added by hand.
+_EVERY_READER = {
+    "1/257/65532": 387
+    | DoorLock.Bitmaps.Feature.kFingerCredentials
+    | DoorLock.Bitmaps.Feature.kFaceCredentials,
+    "1/257/19": 15,
+    "1/257/25": 74,
+    "1/257/26": 10,
+}
+
 _PROVIDER_MODULE = "custom_components.lock_code_manager.providers.matter"
 WORKER = "custom_components.lock_code_manager.sync.worker"
 
@@ -725,6 +738,7 @@ class TestKeypadAndSwitch:
             pytest.param(DoorLock.Enums.CredentialTypeEnum.kFace, "face", id="face"),
         ],
     )
+    @pytest.mark.parametrize("fake_matter_node_attributes", [_EVERY_READER])
     async def test_a_use_names_the_credential_presented(
         self,
         hass: HomeAssistant,
@@ -741,6 +755,8 @@ class TestKeypadAndSwitch:
         The LockOperation for anything but a PIN was dropped, so a user who
         unlocked with a card was never recorded at all; a keypad use still
         reads ``pin`` (:meth:`test_a_keypad_use_updates_the_user_s_event_entity`).
+        Every kind the lock's feature map advertises is one the user's event
+        entity can record from setup, before any use.
         """
         await _async_settle(
             hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
@@ -750,6 +766,12 @@ class TestKeypadAndSwitch:
             for state in hass.states.async_all("event")
             if state.attributes.get("code_slot") == 2
         )
+        assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == [
+            "face",
+            "fingerprint",
+            "pin",
+            "rfid",
+        ]
         user_index = fake_matter_lock.owner(
             _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
         )
@@ -765,7 +787,52 @@ class TestKeypadAndSwitch:
         ] == [("slot2", expected)]
         state = hass.states.get(event_entity)
         assert state.attributes[ATTR_EVENT_TYPE] == expected
-        assert expected in state.attributes[ATTR_EVENT_TYPES]
+
+    async def test_a_card_use_on_a_lock_without_a_reader_is_not_recorded(
+        self,
+        hass: HomeAssistant,
+        caplog: pytest.LogCaptureFixture,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A kind the lock does not advertise reaches the bus but not the entity.
+
+        This lock's feature map advertises PIN alone, so a card use is a lock
+        reporting what it said it cannot do. Home Assistant refuses an event
+        type the entity did not declare, so the use is dropped before it is
+        asked, as an expected condition rather than a logged error, and an
+        automation on the bus event still sees it.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        event_entity = next(
+            state.entity_id
+            for state in hass.states.async_all("event")
+            if state.attributes.get("code_slot") == 2
+        )
+        before = hass.states.get(event_entity)
+        assert before.attributes[ATTR_EVENT_TYPES] == ["pin"]
+        user_index = fake_matter_lock.owner(
+            _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        )
+        assert user_index is not None
+        fake_matter_lock.enroll(user_index, DoorLock.Enums.CredentialTypeEnum.kRfid, 5)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(user_index, DoorLock.Enums.CredentialTypeEnum.kRfid, 5)
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", "rfid")]
+        after = hass.states.get(event_entity)
+        assert after.state == before.state
+        assert after.attributes == before.attributes
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
 
     @pytest.mark.parametrize(
         "source",
