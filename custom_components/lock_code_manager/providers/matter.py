@@ -712,23 +712,22 @@ class MatterLock(BaseLock):
         # credential index are narrowed by explicit guards before use: the
         # Matter helper types both as ``int | None``.
         users: list[User] = []
-        anchors: dict[int, int | None] = {}
-        pins: dict[int, set[int]] = {}
         raw_users = await self._raw_lock_users()
         fabric = self._fabric_index()
+        # Each user listed is recorded as it reads; a user that has vanished
+        # keeps its entry, so the CLEAR event that follows can still say
+        # which slot emptied.
         for raw_user in raw_users:
             user_index = raw_user.get("user_index")
             if user_index is None:
                 continue
             user_name = raw_user.get("user_name")
-            lcm_slot_from_tag = _raw_user_slot(raw_user, fabric)
-            anchors[user_index] = lcm_slot_from_tag
+            lcm_slot_from_tag = self._record_user(user_index, raw_user, fabric)
             pin_credentials: list[Credential] = []
             for cred in raw_user.get("credentials") or []:
                 credential_index = cred.get("index")
                 if cred.get("type") != "pin" or credential_index is None:
                     continue
-                pins.setdefault(user_index, set()).add(credential_index)
                 slot = (
                     lcm_slot_from_tag
                     if lcm_slot_from_tag is not None
@@ -749,16 +748,31 @@ class MatterLock(BaseLock):
                     credentials=pin_credentials,
                 )
             )
-        # Merge, never replace: a user that has vanished keeps its entry, so
-        # the CLEAR event that follows can still say which slot emptied. A
-        # user still present overwrites its entry -- or, untagged, removes it.
-        for index, anchored in anchors.items():
-            if anchored is None:
-                self._forget_user_index(index)
-            else:
-                self._slot_by_user_index[index] = anchored
-                self._pins_by_user_index[index] = pins.get(index, set())
         return users
+
+    def _record_user(
+        self, user_index: int, raw_user: dict[str, Any], fabric: int | None
+    ) -> int | None:
+        """
+        Record the slot a user just read from the lock is tagged for, and its PINs.
+
+        Returns that slot. An untagged user is somebody else's, whatever its
+        index anchored before, so its entry is dropped and ``None`` returned.
+        The listing of every user and a write's read of the one user recorded
+        for its slot both record through here, so either leaves the record as
+        the other would.
+        """
+        slot = _raw_user_slot(raw_user, fabric)
+        if slot is None:
+            self._forget_user_index(user_index)
+            return None
+        self._slot_by_user_index[user_index] = slot
+        self._pins_by_user_index[user_index] = {
+            cred["index"]
+            for cred in raw_user.get("credentials") or []
+            if cred.get("type") == "pin" and cred.get("index") is not None
+        }
+        return slot
 
     def _forget_user_index(self, user_index: int) -> int | None:
         """Drop what LCM recorded about a lock user; return the slot it anchored."""
@@ -823,11 +837,12 @@ class MatterLock(BaseLock):
         The base seam passes a tagged ``user.name`` (``lcm:<slot>:<display>``)
         whose slot is the LCM-side identity for this credential. The Matter
         lock's own ``user_index`` is whatever Matter happens to allocate;
-        LCM does NOT pin it to the slot. Discovery on every call walks the
-        lock's user list and matches by tag:
+        LCM does NOT pin it to the slot. Discovery on every call matches by
+        tag (``_find_user_index_for_slot``):
 
-        1. Scan ``async_get_users()`` for a user whose name parses to the
-           same LCM slot as ``user`` carries.
+        1. Find the user whose name parses to the same LCM slot as ``user``
+           carries: the one recorded for the slot if it still does, else
+           the first of every user on the lock.
         2. If found (UPDATE): rename via ``set_lock_user`` with the
            existing ``user_index``, return that index.
         3. If not found (CREATE): allocate a fresh ``user_index`` via
@@ -1098,8 +1113,27 @@ class MatterLock(BaseLock):
            would mis-adopt slot-A's user as slot-B's anchor.
 
         Returns ``None`` when neither lookup matches.
+
+        Both lookups need every user read, one GetUser each over the lock's
+        radio, so the user recorded for ``slot`` is asked first
+        (``_recorded_user_for_slot``). Only when that does not answer for the
+        slot is every user read.
         """
+        if (recorded := await self._recorded_user_for_slot(slot)) is not None:
+            return recorded, False
         users = await self.async_get_users()
+        # The listing keeps a vanished user's record for the CLEAR event that
+        # may follow, but this listing settles who holds ``slot``: a record
+        # for it the lock no longer lists would only leave two records for
+        # the slot, so every later write would read every user, and a late
+        # CLEAR for it would empty a slot another user now holds.
+        listed = {user.user_id for user in users}
+        for vanished in [
+            index
+            for index, anchored in self._slot_by_user_index.items()
+            if anchored == slot and index not in listed
+        ]:
+            self._forget_user_index(vanished)
         try:
             return next(
                 (existing.user_id, False)
@@ -1117,6 +1151,55 @@ class MatterLock(BaseLock):
                 ),
                 None,
             )
+
+    async def _recorded_user_for_slot(self, slot: int) -> int | None:
+        """
+        Return the user index recorded for ``slot`` if that user still carries its tag.
+
+        One GetUser, of the one index LCM last saw tagged for ``slot``. The
+        read is recorded as reading every user would record it
+        (``_record_user``), so a stale record costs this one read and is
+        corrected, never a write to the wrong user. ``None`` sends the
+        caller to read every user:
+
+        - Nothing is recorded for ``slot`` (nothing read since setup), or
+          more than one index is: reading every user decides which one is
+          the slot's, as it always has.
+        - The recorded index is past what the lock can hold.
+        - The user there is gone (its record is dropped: whatever the slot's
+          user is now, it is not there), or carries no tag for ``slot``.
+
+        No user tagged for ``slot`` is also the only case in which an
+        untagged user is adopted, so a user found here leaves nothing to
+        adopt. A lock that does not answer raises, as reading every user
+        would: asking it for every user instead would only send it more.
+        """
+        recorded = [
+            index
+            for index, anchored in self._slot_by_user_index.items()
+            if anchored == slot
+        ]
+        if len(recorded) != 1:
+            return None
+        user_index = recorded[0]
+        door_lock = self._require_door_lock()
+        if not _names_a_user(door_lock.endpoint, user_index):
+            return None
+        user = await self._raw_lock_user(door_lock, user_index)
+        if user is None:
+            self._forget_user_index(user_index)
+        elif (
+            self._record_user(user_index, user, self._fabric_index(door_lock.node))
+            == slot
+        ):
+            return user_index
+        LOGGER.debug(
+            "Lock %s: user %s no longer carries slot %s's tag; reading every user",
+            self.lock.entity_id,
+            user_index,
+            slot,
+        )
+        return None
 
     @override
     async def async_delete_user(self, user_id: int) -> None:
