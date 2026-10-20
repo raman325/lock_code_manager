@@ -1122,6 +1122,18 @@ class MatterLock(BaseLock):
         if (recorded := await self._recorded_user_for_slot(slot)) is not None:
             return recorded, False
         users = await self.async_get_users()
+        # The listing keeps a vanished user's record for the CLEAR event that
+        # may follow, but this listing settles who holds ``slot``: a record
+        # for it the lock no longer lists would only leave two records for
+        # the slot, so every later write would read every user, and a late
+        # CLEAR for it would empty a slot another user now holds.
+        listed = {user.user_id for user in users}
+        for vanished in [
+            index
+            for index, anchored in self._slot_by_user_index.items()
+            if anchored == slot and index not in listed
+        ]:
+            self._forget_user_index(vanished)
         try:
             return next(
                 (existing.user_id, False)

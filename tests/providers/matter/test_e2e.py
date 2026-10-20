@@ -1432,19 +1432,23 @@ class TestAWriteFindsItsUser:
         assert set(read) == {ours}
         assert fake_matter_lock.owner(_index_of(fake_matter_lock, "246802")) == ours
 
+    @pytest.mark.parametrize("polled", [False, True], ids=["write_first", "poll_first"])
     async def test_a_user_moved_out_of_band_is_found_by_reading_every_user(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
         fake_matter_lock: FakeMatterLock,
         fake_matter_lock_entry: MockConfigEntry,
+        polled: bool,
     ) -> None:
         """
         Slot 1's user, made again at another index and the old one removed unannounced, gets the PIN.
 
-        The index last seen holding slot 1 reads empty, so every user is
-        read and the one now tagged for slot 1 is written to; no second user
-        is made for the slot. The next write reads only that user.
+        Every user is read and the one now tagged for slot 1 is written to;
+        no second user is made for the slot. The next write reads only that
+        user, whether the write found the old index empty or a poll had
+        listed the new user beside the old one's record first: a listing
+        keeps a vanished user's record, which would leave slot 1 with two.
         """
         old = fake_matter_lock.owner(
             _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
@@ -1455,12 +1459,20 @@ class TestAWriteFindsItsUser:
         moved = fake_matter_lock.owner(5)
         assert moved not in (None, old)
         fake_matter_lock.forget(old)
+        if polled:
+            sent = len(fake_matter_lock.commands)
+            await async_advance_clock(hass, freezer, 65 * 60)
+            assert {moved, 9} <= {
+                exchange.payload["userIndex"]
+                for exchange in fake_matter_lock.commands[sent:]
+                if exchange.command == "GetUser"
+            }, "no poll listed the users"
 
         read = await self._async_write(
             hass, freezer, fake_matter_lock, fake_matter_lock_entry, "246802"
         )
 
-        assert {old, moved, 9} <= set(read)
+        assert {moved, 9} <= set(read)
         assert fake_matter_lock.owner(_index_of(fake_matter_lock, "246802")) == moved
         assert [
             index
