@@ -197,17 +197,18 @@ def _reads_cards(success: dict[Any, Any], failure: dict[Any, Any]) -> bool | Non
     """
     Return whether the lock's answer says it has a card reader, or None.
 
-    None when the lock gave no value for its card user count, which nothing
-    here treats as a missing reader.
+    Only an unsupported attribute says there is no reader. None when the
+    lock gave no count, or a count of zero, which nothing here treats as a
+    missing reader.
     """
     if failure.get(_RFID_USERS.id) == foundation.Status.UNSUPPORTED_ATTRIBUTE:
         return False
-    if (count := success.get(_RFID_USERS.id)) is None:
+    # A zero is taken as the lock not saying, as the PIN count is in
+    # `async_get_max_slot`. Listing a kind the lock cannot produce costs
+    # nothing; dropping a real card use does not.
+    if not success.get(_RFID_USERS.id):
         return None
-    # Zero taken at face value, unlike the PIN count in `async_get_max_slot`:
-    # a lock with a keypad has PIN users whatever it reports, but one with no
-    # reader really has no card users.
-    return count > 0
+    return True
 
 
 # What one ZCL command to a sleepy lock can legitimately take before zigpy

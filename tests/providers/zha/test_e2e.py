@@ -1421,8 +1421,8 @@ class TestCardReader:
             pytest.param(
                 {_RFID_USERS: 30}, {}, True, False, id="a_reader_without_masks"
             ),
-            # Nor a zero: made up too.
-            pytest.param({_RFID_USERS: 0}, {}, False, False, id="no_card_users"),
+            # Nor a zero, which is the lock not saying: made up too.
+            pytest.param({_RFID_USERS: 0}, {}, True, False, id="a_zero_count"),
             # The Level Home B2 reports the attribute unsupported (zigpy/zha
             # fc5b0945, tests/data/devices/level-home-b2-0x0300001a.json); the
             # mask beside it is still believed.
@@ -1442,15 +1442,16 @@ class TestCardReader:
         notifies: bool,
     ) -> None:
         """
-        The lock is asked at setup whether it reads cards, and believed.
+        The lock is asked at setup whether it reads cards.
 
-        A count of card users above zero is a reader, and zero or an
-        unsupported attribute is none: a card use there is the lock
-        reporting what it said it cannot do, dropped from the user's event
-        entity though still announced on the bus. A lock that does not
-        answer keeps the reader listed, because recording a kind the lock
-        cannot produce costs nothing and dropping a real card use would not.
-        A fingerprint has no attribute to ask about and is always listed.
+        A count of card users above zero is a reader, and an unsupported
+        attribute is none: a card use there is the lock reporting what it
+        said it cannot do, dropped from the user's event entity though still
+        announced on the bus. A zero is the lock not saying, as with its PIN
+        count; that and no answer keep the reader listed, because recording
+        a kind the lock cannot produce costs nothing and dropping a real card
+        use would not. A fingerprint has no attribute to ask about and is
+        always listed.
 
         Asked in the same read as the programming event masks, and each
         answer stands on its own: a lock refusing one says nothing of the
