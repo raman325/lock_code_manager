@@ -247,3 +247,61 @@ try mempalace now. and yes a
 ---
 
 try now
+
+---
+
+<task-notification>
+<task-id>ad5f6d9bb35f09cc4</task-id>
+<tool-use-id>toolu_01V8gj3eG5tCdU2wtvokjbtM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/ad5f6d9bb35f09cc4.output</output-file>
+<status>completed</status>
+<summary>Agent "PR 1745 round-3 fixes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All five round-3 changes are in commit `02681c33`, pushed to `fix/credential-type-of-use`. The PR #1745 body was updated before the push, and no comments were posted. All work was done in the worktree at `/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-aa153b39b6917e409`.
+
+**Changes**
+1. **ProgrammingPIN never reported** (`providers/matter.py`, `_kind_used`): the credential type is now checked before the source. The lock's admin code is never reported as a use, including when it is entered at the keypad.
+2. **Only the PIN fallback needs `credentialIndex`** (`_handle_lock_operation`, `_dispatch_lock_operation`):
+   - The early `return` on a missing index is gone, and `credential_index` is now typed `int | None`.
+   - A use whose `userIndex` names the user is reported even when the index is absent, `null` or non-numeric.
+   - `placeable_by_pin_index` now also requires a readable index.
+   - **Small addition beyond the brief:** a use with neither a `userIndex` nor a usable PIN index returns in the handler, before the background task. That keeps "drop as today" without the lock's user list being read. On a real lock that read walks every user, and card uses without a `userIndex` used to trigger it for nothing.
+3. **Slot Usage Limiter counts PIN uses only:** the blueprint condition now requires `trigger.to_state.attributes.event_type == 'pin'`.
+   - I updated the opening description, the "What spends a use" paragraph, and the `BLUEPRINTS.md` section and attributes note.
+   - Uses reported through `use_credential` are always PIN, so they keep counting.
+4. **Redundant restore read** (`event.py`): Home Assistant restores the event in `async_internal_added_to_hass`, which runs before `async_added_to_hass`. The entity now reads the restored type from `self.state_attributes[ATTR_EVENT_TYPE]` instead of calling `async_get_last_event_data()` a second time. That property is public and `@final`. This version also only adds a type when Home Assistant actually restored the state.
+5. **Acronyms:** "RFID" and "PIN" are spelled out in the new comment in `zha.py`, and I removed its history phrase "as it always has". They are also spelled out in the `_kind_used` docstring. I left older comments alone.
+
+**New tests**
+- Classification table cases `keypad_programming_pin` and `rfid_reader_programming_pin`.
+- Matter e2e `test_the_admin_code_at_the_keypad_is_no_user_s_use`.
+- `test_a_use_naming_its_user_needs_no_credential_index`, with the index missing, `None` or `"card"`: the use is reported as `rfid` for the user.
+- `test_a_use_naming_no_user_and_no_pin_index_is_dropped_unread`, with 5 card and PIN cases: no event fires and the user list is never read.
+- `test_limiter_spends_a_use_only_on_a_pin`: a `pin` use decrements the counter; `rfid`, `fingerprint` and `face` uses do not.
+- I replaced `test_a_credential_without_an_index_is_ignored`, because it asserted the old behaviour. The string-coercion test still passes.
+
+**Mutations** — each was applied on its own, the file was restored in a `finally`, and the restore was checked with a byte comparison. All 7 were caught:
+
+| # | Mutation | Caught by |
+|---|---|---|
+| M1 | ProgrammingPIN guard removed | 2 table cases + the e2e admin-code test |
+| M2 | Missing-index `return` put back | 3 `needs_no_credential_index` cases |
+| M3 | Early return removed | all 5 `dropped_unread` cases (user list was read) |
+| M4 | Fallback gate ignores a missing index | 2 PIN `dropped_unread` cases |
+| M5 | Restored type not added to `event_types` | `test_a_restored_use_keeps_its_kind_in_the_vocabulary[a_kind]` |
+| M6 | Limiter's `pin` condition removed | limiter cases for rfid, fingerprint and face |
+| M7 | Limiter matches `rfid` instead of `pin` | 12 limiter tests |
+
+**Results:** the Matter, ZHA and Zigbee2MQTT suites, `test_event.py`, `test_base.py`, `test_architecture.py` and every blueprint test gave 1015 passed, 2 skipped and 4 xfailed in about 232s. The xfails were already there. Every changed line in `matter.py` and `event.py` is covered, including both directions of the new early return. The remaining uncovered lines (`event.py` 187, `matter.py` 316/905/988/2094) are outside this diff. `prek` passes. Its formatter reflowed one line in the new blueprint test, and I didn't rerun the suite after that.
+
+**PR body:** added rows to the Matter table and bullets for ProgrammingPIN and the index rule. The "Side effects" paragraph now says the limiter counts PIN uses only. The body also lists the new tests and the round-3 mutations, and notes that building `event_types` from what the locks advertise is a follow-up PR. I removed "the missing-index return removed" from the round-2 mutation list, because that code no longer exists.
+
+**Uncertainties:**
+- In the e2e admin-code test, the fake node sends ProgrammingPIN with `credentialIndex` 0. I believe that matches the spec but did not cite a captured payload.
+- The `BLUEPRINTS.md` limiter section now has a new bullet placed directly after the "Operations" bullet; markdownlint accepts it.</result>
+<usage><subagent_tokens>146787</subagent_tokens><tool_uses>48</tool_uses><duration_ms>820962</duration_ms></usage>
+</task-notification>
+
+---
+
+go for it. limiter release note can just be a release note. 2 for event_types
