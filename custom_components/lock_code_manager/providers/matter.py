@@ -246,15 +246,21 @@ def _kind_used(source: Any, matter_credential_type: Any) -> CredentialType | Non
     """
     Name the kind of credential a LockOperation reports, or None for no use.
 
-    The operation source decides ahead of ``credentialType``, because some
-    firmware writes the source into ``credentialType``: the Aqara U400 logs
-    a keypad PIN as 3 (Fingerprint) and a Home Key as 10. On such firmware,
+    A credential the lock typed as ProgrammingPIN is never a use, whatever
+    the source: it is the lock's admin code, not a user's, even when it is
+    entered at the keypad. Otherwise the operation source decides ahead of
+    ``credentialType``, because some firmware writes the source into
+    ``credentialType``: the Aqara U400 logs a keypad Personal Identification
+    Number as 3 (Fingerprint) and a Home Key as 10. On such firmware,
     trusting the type would read an app unlock as a card and an auto-relock
-    as a fingerprint. The keypad and the RFID reader each take one kind; the
-    biometric reader leaves finger or face to the type. Only a source that
-    does not say -- Remote, Unspecified, a vendor's own, or none at all --
-    leaves the kind wholly to ``credentialType``.
+    as a fingerprint. The keypad and the Radio Frequency Identification
+    reader each take one kind; the biometric reader leaves finger or face to
+    the type. Only a source that does not say -- Remote, Unspecified, a
+    vendor's own, or none at all -- leaves the kind wholly to
+    ``credentialType``.
     """
+    if matter_credential_type == _MatterCredentialType.kProgrammingPIN:
+        return None
     if source == _OperationSource.kKeypad:
         return CredentialType.PIN
     if source == _OperationSource.kRfid:
@@ -1890,19 +1896,21 @@ class MatterLock(BaseLock):
         )
         # Coerce via ``parse_slot_num`` because some Matter implementations
         # send the index as a string -- the int-keyed comparison in the
-        # fallback walker would then never match.
+        # fallback walker would then never match. Only that fallback reads
+        # the index, so a use that names its user is reported without one.
         credential_index = parse_slot_num(credential.get("credentialIndex"))
-        if credential_index is None:
-            return
-
         user_index = parse_slot_num(data.get("userIndex"))
         # A keypad use is a PIN whatever the lock typed it, but only an index
         # the lock typed as a PIN is a PIN index: a card at 4 under a keypad
         # source says nothing about who holds PIN 4.
         placeable_by_pin_index = (
-            credential_type is CredentialType.PIN
+            credential_index is not None
+            and credential_type is CredentialType.PIN
             and credential.get("credentialType") == _MatterCredentialType.kPin
         )
+        # Nothing could name the user, so the lock's user list is not read.
+        if user_index is None and not placeable_by_pin_index:
+            return
 
         self._create_background_task(
             self._dispatch_lock_operation(
@@ -1918,7 +1926,7 @@ class MatterLock(BaseLock):
     async def _dispatch_lock_operation(
         self,
         user_index: int | None,
-        credential_index: int,
+        credential_index: int | None,
         data: dict[str, Any],
         credential_type: CredentialType,
         *,
@@ -1928,11 +1936,12 @@ class MatterLock(BaseLock):
         Resolve the LCM slot for a LockOperation event and fire it.
 
         Primary path: lock-reported ``userIndex`` -> user.name -> tag.
-        Fallback path, when ``placeable_by_pin_index``: walk the user list to
-        find the PIN credential at ``credentialIndex`` and parse the owning
-        user's tag. Events whose owning user isn't LCM-tagged are silently
-        dropped so out-of-band PIN uses on non-LCM credentials don't drive
-        spurious code slot events.
+        Fallback path, when ``placeable_by_pin_index`` (a credential the
+        lock typed as a PIN, with a readable ``credentialIndex``): walk the
+        user list to find the PIN credential at that index and parse the
+        owning user's tag. Events whose owning user isn't LCM-tagged are
+        silently dropped so out-of-band PIN uses on non-LCM credentials don't
+        drive spurious code slot events.
         """
         try:
             raw_users = await self._raw_lock_users()

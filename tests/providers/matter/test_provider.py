@@ -1310,6 +1310,9 @@ class TestLockOperationEvent:
             pytest.param(0, 5, CredentialType.FACE, id="unspecified_face"),
             pytest.param(200, 3, CredentialType.FINGERPRINT, id="vendor_source"),
             pytest.param(None, 2, CredentialType.RFID, id="no_source"),
+            # The lock's admin code is no user's use, whichever reader took it.
+            pytest.param(3, 0, None, id="keypad_programming_pin"),
+            pytest.param(8, 0, None, id="rfid_reader_programming_pin"),
         ],
     )
     async def test_the_source_names_the_kind_ahead_of_the_type(
@@ -1351,10 +1354,23 @@ class TestLockOperationEvent:
             else [{"code_slot": 4, "to_locked": False, "credential_type": expected}]
         )
 
-    async def test_a_credential_without_an_index_is_ignored(
-        self, hass: HomeAssistant, matter_lock: MatterLock
+    @pytest.mark.parametrize(
+        "credential",
+        [
+            pytest.param({"credentialType": 2}, id="missing"),
+            pytest.param({"credentialType": 2, "credentialIndex": None}, id="none"),
+            pytest.param({"credentialType": 2, "credentialIndex": "card"}, id="text"),
+        ],
+    )
+    async def test_a_use_naming_its_user_needs_no_credential_index(
+        self, hass: HomeAssistant, matter_lock: MatterLock, credential: dict[str, Any]
     ) -> None:
-        """A use whose credential has no readable index fires nothing."""
+        """
+        A card use naming its user is that user's, whatever its index reads.
+
+        Only the fallback that places a PIN by its index reads the index; the
+        userIndex alone names the user.
+        """
         fired: list[dict[str, Any]] = []
         matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
 
@@ -1366,15 +1382,77 @@ class TestLockOperationEvent:
                 _make_node_event(
                     data={
                         "lockOperationType": 1,
-                        "operationSource": 3,
+                        "operationSource": 8,
                         "userIndex": 4,
-                        "credentials": [{"credentialType": 1}],
+                        "credentials": [credential],
+                    }
+                ),
+            )
+            await hass.async_block_till_done()
+
+        assert fired == [
+            {"code_slot": 4, "to_locked": False, "credential_type": CredentialType.RFID}
+        ]
+
+    @pytest.mark.parametrize(
+        ("source", "credential"),
+        [
+            pytest.param(8, {"credentialType": 2}, id="card_missing"),
+            pytest.param(
+                8, {"credentialType": 2, "credentialIndex": None}, id="card_none"
+            ),
+            pytest.param(
+                8, {"credentialType": 2, "credentialIndex": "card"}, id="card_text"
+            ),
+            pytest.param(3, {"credentialType": 1}, id="pin_missing"),
+            pytest.param(
+                3, {"credentialType": 1, "credentialIndex": "four"}, id="pin_text"
+            ),
+        ],
+    )
+    async def test_a_use_naming_no_user_and_no_pin_index_is_dropped_unread(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        source: int,
+        credential: dict[str, Any],
+    ) -> None:
+        """
+        Without a userIndex or a readable PIN index, nothing names the user.
+
+        So the use is dropped without reading the lock's user list, which on
+        a real lock is a walk of every user.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        get_users = AsyncMock(
+            return_value={
+                "max_users": 10,
+                "users": [
+                    {
+                        "user_index": 4,
+                        "user_name": "lcm:4:Gue",
+                        "credentials": [{"type": "pin", "index": 4}],
+                    }
+                ],
+            }
+        )
+
+        with patch(f"{_PROVIDER_MODULE}.get_lock_users", get_users):
+            matter_lock._on_node_event(
+                None,
+                _make_node_event(
+                    data={
+                        "lockOperationType": 1,
+                        "operationSource": source,
+                        "credentials": [credential],
                     }
                 ),
             )
             await hass.async_block_till_done()
 
         assert fired == []
+        get_users.assert_not_awaited()
 
     @pytest.mark.parametrize(
         ("source", "credentials", "expected"),

@@ -670,6 +670,44 @@ class TestKeypadAndSwitch:
             (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
         ] == [("slot2", "pin")]
 
+    async def test_the_admin_code_at_the_keypad_is_no_user_s_use(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A keypad use the lock types as ProgrammingPIN records nothing.
+
+        A keypad use is otherwise a PIN whatever its ``credentialType``, but
+        the lock's admin code is not a user's credential, even when the event
+        names an LCM user.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        event_entity = next(
+            state.entity_id
+            for state in hass.states.async_all("event")
+            if state.attributes.get("code_slot") == 2
+        )
+        before = hass.states.get(event_entity).state
+        index = _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.present(
+            fake_matter_lock.owner(index),
+            DoorLock.Enums.CredentialTypeEnum.kProgrammingPIN,
+            0,
+            source=DoorLock.Enums.OperationSourceEnum.kKeypad,
+        )
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert used == []
+        assert hass.states.get(event_entity).state == before
+
     @pytest.mark.parametrize(
         ("kind", "expected"),
         [
