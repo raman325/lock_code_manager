@@ -1,0 +1,111 @@
+<task-notification>
+<task-id>ab04187cebe4f3f49</task-id>
+<tool-use-id>toolu_01RYFTH1RxWd63mtWWKoMQbp</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/ab04187cebe4f3f49.output</output-file>
+<status>completed</status>
+<summary>Agent "Code review PR #1757" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no significant issues in PR #1757: no correctness bugs or style violations at confidence ≥ 80. I reviewed `git diff origin/main...HEAD` (15 files) against the PR description and the agreed design, and ran the drop-path tests against a mutant with the guard removed.
+
+**1. Advertising RFID, fingerprint and face on Matter changes no other path.** Every reader is PIN-only or doesn't look at the kind:
+- `pin_unsupported` (`providers/_base.py:863`) only asks whether PIN is present. A card-only lock still fails validation exactly as before.
+- `_assert_credential_type_supported` and `_assert_credential_ref_supported` (`_base.py:1578`, `:1632`) only ever see PIN. Writes are built through `credential_from_slot`, and the services refuse other kinds in `_managed_credential_type` (`ha/services.py:175`).
+- `bounded_slot_count(PIN)` (`_base.py:1614`, `:1954`, `ha/allocation.py:180`) is PIN-only. `length_bounds` (`ha/slot_coordinator.py:326`) only checks the kind it is asked about.
+- Matter's only other capabilities read is `max_user_name_length` (`matter.py:1456`). `_keeps_user_records` looks only at user management and name length.
+- Nothing iterates `credential_types` except `event.py`. `websocket.py`, `diagnostics.py` and `ts/` don't serialize capabilities at all.
+
+**2. Timing: no realistic window drops a legitimate Matter RFID use.**
+- Core's `get_lock_info` reads the node's cached attributes locally, with no radio exchange.
+- The probe runs in `_run_provider_setup_bounded` before push subscription, both at first setup and on the integration's LOADED transition. If setup is deferred because Matter isn't loaded yet, push subscription waits too. If the probe fails because the client or node is missing, subscribing fails for the same reason.
+- The cache is never cleared on reconnect. The only reset is the `pin_unsupported` path (`_base.py:868`), and a lock that fails that check isn't managed anyway.
+- The membership check in `_handle_credential_used` reads `event_types` at the moment of the use. So if the published `event_types` attribute lags, no use is dropped. Filling the cache doesn't dispatch `signal_lock_changed` itself; the attribute catches up on the next lock change. That behaviour predates this PR.
+
+**3. Removing `_recorded_types`.**
+- No path now raises inside `_trigger_event`: the guard runs the same check HA does (`event/__init__.py:166`) and returns first.
+- The comparison is between like types: `event_types` is a list of `CredentialType` values (a `StrEnum`), so a string or an enum in the event data compares equal either way.
+- A restored `event_type` outside the list is harmless. HA restores it without checking it against `event_types`.
+
+**4. `use_credential` can't hit the drop.** It always reports PIN (`ha/services.py:315`), and PIN is the floor. Zigbee2MQTT and ZHA fall back to PIN for any other source, and both their maps are covered by `reported_credential_types`.
+
+**5. The merge reverted nothing.**
+- The two-dot and three-dot diffs against `origin/main` (8b7ca407) are identical. The only `matter.py` change is the `async_get_capabilities` hunk, so the #1745/#1753 work is intact.
+- Nothing stale came back: no `_recorded_types` or restore special case remains anywhere. A parse of the changed source and test files found no duplicate function or class definitions.
+
+**6. Tests.**
+- With the guard removed, `test_a_use_of_a_kind_no_lock_reports_is_dropped` and the Matter `test_a_card_use_on_a_lock_without_a_reader_is_not_recorded` both fail.
+- The Z-Wave JS `test_the_event_entity_records_pins_alone` still passes its body against that mutant, but the harness's teardown check catches the swallowed `ValueError`. It isn't unfalsifiable.
+- The Matter attribute IDs in `_EVERY_READER` (19/25/26) match the RFID user count, maximum length and minimum length.
+- The comments follow the project style.
+
+**Below-threshold notes (optional):**
+- `tests/providers/zwave_js/test_e2e.py` (`test_the_event_entity_records_pins_alone`) fires an RFID use by hand, which a Z-Wave lock can never produce. The `event_types == ["pin"]` assertion is worth keeping; the drop half repeats `test_event.py`. Consider cutting it to the first assertion. (~55)
+- `tests/providers/matter/test_provider.py` (`test_get_capabilities_advertises_every_kind_the_lock_supports`) feeds in `"finger_vein"`, which core's `_get_supported_credential_types` never returns: it only returns pin, rfid, fingerprint and face. The skip branch is reasonable defensive code; just know the test pins input the real helper can't emit. (~40)
+- Matter capabilities are cached for the provider's lifetime and not re-read on reconnect. If a firmware update adds a reader to the feature map, that reader's uses are dropped at DEBUG until Lock Code Manager reloads. This predates the PR, but this PR is what makes a stale cache drop uses. (~50)
+
+Relevant files:
+- `/Users/raman/projects/lock_code_manager/.worktrees/event-types-from-capabilities/custom_components/lock_code_manager/event.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/event-types-from-capabilities/custom_components/lock_code_manager/providers/matter.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/event-types-from-capabilities/custom_components/lock_code_manager/providers/_base.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/event-types-from-capabilities/tests/providers/zwave_js/test_e2e.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/event-types-from-capabilities/tests/providers/matter/test_provider.py`</result>
+<usage><subagent_tokens>152163</subagent_tokens><tool_uses>30</tool_uses><duration_ms>262550</duration_ms></usage>
+</task-notification>
+
+---
+
+1757 have zha ask
+1754 defer for now
+
+---
+
+<task-notification>
+<task-id>abad2faae71a9849f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/49a45042-9300-407f-a979-72d5d018a702/tasks/abad2faae71a9849f.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #1756 write-path user walk" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>A Matter PIN write now reads only the user recorded for its slot (one `GetUser`) instead of every user on the lock. I opened it as PR https://github.com/raman325/lock_code_manager/pull/1758, commit `3e178ca1` on `fix/matter-write-reads-only-its-user`. All tests pass and `prek` is clean.
+
+**Design** (in `custom_components/lock_code_manager/providers/matter.py`):
+- `_find_user_index_for_slot` first calls a new `_recorded_user_for_slot(slot)`. When exactly one user index is recorded for the slot in `_slot_by_user_index`, that user is read with `_raw_lock_user`. It is used only if `_raw_user_slot(user, fabric)` still says it belongs to this slot, so the fabric rule for short tags still applies. Otherwise the existing walk runs, unchanged.
+- The read-repair is shared rather than copied. What `async_get_users` did to the two record maps for each user it lists is now a new method, `_record_user(user_index, raw_user, fabric)`, and the single read goes through it too. Both reads update `_slot_by_user_index` and `_pins_by_user_index` the same way; the release path for locks that can't list their users depends on the second. `async_get_users` still keeps entries for users that have vanished.
+
+**Edge-case decisions:**
+- **No record:** the map is in memory only and the first poll rebuilds it, so a write before that poll walks, as before.
+- **Two or more indices recorded for the slot:** walk, which picks the first listed user, as it always has.
+- **Recorded index past `NumberOfTotalUsersSupported`:** walk, and no `GetUser` is sent for that index.
+- **Recorded user gone (index reads empty):** the record is dropped, then walk. Without the drop, the old entry plus the newly found one would make the slot ambiguous and force a walk on every later write.
+- **Recorded user now tagged for another slot, untagged, or a bare-number name made by another fabric:** `_record_user` corrects the record, then walk.
+- **Legacy adoption:** the walk adopts only when no user is tagged for the slot. A user the fast path accepts is tagged for the slot, so it never skips an adoption. When the record is stale the walk adopts as before, including the recorded user itself if it lost its tag.
+- **Read fails:** it raises `LockDisconnected` or `LockOperationFailed`, the same types as a failed walk. There is no fallback into a walk and the record is left unchanged.
+- **Known limit:** if a second user tagged for the slot appears with no read since, it can't be seen without a walk. The write goes to the recorded user, which still carries the slot's tag, so it is never a wrong user. The next poll records both users and later writes walk.
+
+**Tests:** `tests/providers/matter` went from 455 to 472 passing, and the one strict xfail is unchanged.
+- **End to end** (`TestAWriteFindsItsUser` in `tests/providers/matter/test_e2e.py`, with a homeowner's user on the lock):
+  - A PIN change reads only the slot's user before `SetCredential`.
+  - A user re-made at another index with the old one removed silently: every user is read and the right user gets the PIN. No second user is made, and the next write reads only that user.
+  - An unanswered read: the write is retried and lands on the same user, with no slot suspended.
+- **Unit** (14 tests, `TestSetUserFromTheRecord` in `tests/providers/matter/test_provider.py`): the fast path itself, the record matching what the walk would leave, four kinds of stale record, adoption from a stale record (two), no record, two records, out of range, and three read failures.
+- The other provider and integration suites (2408 tests, run in parallel) passed except `tests/providers/zwave_js/test_e2e.py::TestPacing::test_writes_at_startup_are_spaced`. It passes on its own and doesn't touch Matter code, so I take it to be a timing flake under parallel load.
+
+**Mutation results** (scripted, source restored in `finally`, sha256 checked identical afterwards):
+
+| Mutant | Tests that caught it |
+|---|---|
+| Fast path disabled | 10, including both end-to-end write tests |
+| Tag check removed | 4: stale record (tagged for another slot, untagged, short tag from another fabric), adoption of the untagged recorded user |
+| Fallback walk removed | 9, including the end-to-end moved-user test |
+| Drop of an empty record removed | 2: end-to-end moved-user test, stale record `[gone]` |
+| Read not recorded | 1: `test_the_read_records_the_user_as_listing_every_user_would` |
+| Two-records check removed | 1: `test_two_users_recorded_for_the_slot_reads_every_user` |
+| Range check removed | 1: `test_a_recorded_index_past_the_lock_s_users_is_not_read` |
+| Failed read falls back to the walk | 3: all `test_a_failed_read_raises_without_listing_every_user` cases |
+
+**Surprises:**
+- Home Assistant's `set_lock_user` sends its own `GetUser` for the index before `SetUser`, and `async_set_credential` reads the same user again. So the slot's user is read three times per write (once by the lookup, twice after). The tests check that only the slot's user is read before `SetCredential`, not that there is exactly one `GetUser`. Merging those reads would be a separate change.
+- After a failed read the worker probes the lock by reading every user before retrying. That probe already existed and isn't part of the lookup, so the "no walk after a failure" check is only in the unit tests.
+- My first mutation run disabled pytest's logging plugin, which made 32 tests that use `caplog` error out. I reran with it enabled; the results above are from that rerun.
+- PR body follows the template with the Bugfix box ticked, no Breaking Change section, and "fixes #1756". The issue itself is labeled `enhancement`.</result>
+<usage><subagent_tokens>229440</subagent_tokens><tool_uses>71</tool_uses><duration_ms>1590557</duration_ms></usage>
+</task-notification>

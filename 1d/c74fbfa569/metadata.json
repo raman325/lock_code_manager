@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "1dc74fbfa569",
+  "strategy": "manual-commit",
+  "branch": "feat/event-types-from-capabilities",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "custom_components/lock_code_manager/event.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "tests/test_blueprint_behavior.py",
+    "tests/test_event.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1d/c74fbfa569/0/metadata.json",
+      "transcript": "/1d/c74fbfa569/0/full.jsonl",
+      "compact_transcript": "/1d/c74fbfa569/0/transcript.jsonl",
+      "content_hash": "/1d/c74fbfa569/0/content_hash.txt",
+      "prompt": "/1d/c74fbfa569/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 35232,
+    "cache_read_tokens": 4384644,
+    "output_tokens": 15182,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 480,
+      "cache_creation_tokens": 1326411,
+      "cache_read_tokens": 43505473,
+      "output_tokens": 172013,
+      "api_call_count": 240
+    }
+  }
+}
