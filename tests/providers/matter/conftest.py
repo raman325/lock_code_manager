@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import ExitStack, contextmanager
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
 
 from matter_server.client.models.node import MatterNode
 from matter_server.common.const import SCHEMA_VERSION
@@ -12,6 +12,7 @@ from matter_server.common.models import ServerInfoMessage
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
+from homeassistant.components.matter.const import CREDENTIAL_TYPE_REVERSE_MAP
 from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
@@ -25,10 +26,11 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.providers import matter as matter_provider
 from custom_components.lock_code_manager.providers.matter import MatterLock
 
 from ...common import user_subentries
-from .fake_node import FakeMatterLock
+from .fake_node import DoorLock, FakeMatterLock
 from .helpers import create_node_from_fixture, setup_matter_integration_with_node
 
 MOCK_FABRIC_ID = 12341234
@@ -264,16 +266,100 @@ def matter_mock_helpers() -> dict[str, AsyncMock]:
 
 
 @contextmanager
-def matter_helpers_patched(helpers: dict[str, AsyncMock]) -> Iterator[None]:
+def matter_helpers_patched(
+    helpers: dict[str, AsyncMock], client: MagicMock
+) -> Iterator[None]:
     """
     Answer every Matter lock helper the provider calls from ``helpers``.
 
     Patched where the provider imports them, for as long as anything the test
-    sets up -- an entry, or a flow creating one -- may call them.
+    sets up -- an entry, or a flow creating one -- may call them. The
+    provider's own GetUser, sent through ``client``, answers from the
+    ``get_lock_users`` mock too, so a test sees one lock whichever way the
+    provider reads it.
     """
     with ExitStack() as stack:
         for name, mock in helpers.items():
             stack.enter_context(patch(f"{_PROVIDER_MODULE}.{name}", mock))
+        if "get_lock_users" in helpers:
+            stack.enter_context(get_user_answered_from_listing(client))
+        yield
+
+
+def get_user_answer(user_index: int, users: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Return the GetUserResponse a lock listing ``users`` gives for ``user_index``.
+
+    In the shape the Matter server relays it, and ``FakeMatterLock`` answers
+    it: the response's fields by their camelCase names, all of them, with an
+    empty index carrying no user-specific fields. ``users`` is what
+    ``get_lock_users`` lists.
+    """
+    answer: dict[str, Any] = {
+        "userIndex": user_index,
+        "userName": None,
+        "userUniqueID": None,
+        "userStatus": None,
+        "userType": None,
+        "credentialRule": None,
+        "credentials": None,
+        "creatorFabricIndex": None,
+        "lastModifiedFabricIndex": None,
+        "nextUserIndex": min(
+            (
+                index
+                for user in users
+                if (index := user.get("user_index")) is not None and index > user_index
+            ),
+            default=None,
+        ),
+    }
+    user = next((user for user in users if user.get("user_index") == user_index), None)
+    if user is None:
+        return answer
+    return answer | {
+        "userName": user.get("user_name"),
+        "userStatus": DoorLock.Enums.UserStatusEnum.kOccupiedEnabled,
+        "userType": DoorLock.Enums.UserTypeEnum.kUnrestrictedUser,
+        "credentialRule": DoorLock.Enums.CredentialRuleEnum.kSingle,
+        "credentials": [
+            {
+                "credentialType": CREDENTIAL_TYPE_REVERSE_MAP[credential["type"]],
+                "credentialIndex": credential["index"],
+            }
+            for credential in user.get("credentials") or []
+        ],
+        "creatorFabricIndex": user.get("creator_fabric_index"),
+        "lastModifiedFabricIndex": user.get("creator_fabric_index"),
+    }
+
+
+@contextmanager
+def get_user_answered_from_listing(client: MagicMock) -> Iterator[None]:
+    """
+    Answer a GetUser sent through ``client`` from ``get_lock_users`` as patched.
+
+    For tests that stand in for the lock with a ``get_lock_users`` mock: the
+    provider's own read sends GetUser and parses the answer for real, and
+    finds the same users, or fails the same way, as the listing. Looked up
+    when called, so a test's own patch counts. Any other command is answered
+    as the client mock answered it before.
+    """
+
+    async def _send_device_command(*_args: Any, command: Any, **_kwargs: Any) -> Any:
+        if not isinstance(command, DoorLock.Commands.GetUser):
+            return DEFAULT
+        lock_data = await matter_provider.get_lock_users(None, None)
+        return get_user_answer(command.userIndex, lock_data["users"])
+
+    with patch.object(
+        client,
+        "send_device_command",
+        AsyncMock(
+            side_effect=_send_device_command,
+            return_value=client.send_device_command.return_value,
+        ),
+    ):
         yield
 
 
@@ -283,6 +369,7 @@ async def lcm_config_entry(
     matter_node: MatterNode,
     lock_entity: er.RegistryEntry,
     matter_mock_helpers: dict[str, AsyncMock],
+    matter_client: MagicMock,
 ) -> MockConfigEntry:
     """
     Set up a full LCM config entry managing the Matter lock.
@@ -300,7 +387,7 @@ async def lcm_config_entry(
         unique_id="test_matter_e2e",
     )
     lcm_entry.add_to_hass(hass)
-    with matter_helpers_patched(matter_mock_helpers):
+    with matter_helpers_patched(matter_mock_helpers, matter_client):
         assert await hass.config_entries.async_setup(lcm_entry.entry_id)
         await hass.async_block_till_done()
 
