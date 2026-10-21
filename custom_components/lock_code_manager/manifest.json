@@ -16,6 +16,9 @@
     "zha",
     "zwave_js"
   ],
+  "categories": [
+    "security_safety.locks_access"
+  ],
   "codeowners": [
     "@raman325"
   ],
