@@ -491,6 +491,12 @@ def test_pin_address_builds_a_pin_credential_address() -> None:
     assert pin_address(5) == CredentialAddress(5, CredentialType.PIN)
 
 
+def test_a_credential_address_names_its_slot_and_type_in_logs() -> None:
+    """The worker logs keys with ``%s``: an address reads as its slot and type."""
+    assert str(pin_address(3)) == "3 pin"
+    assert str(CredentialAddress(3, CredentialType.PASSWORD)) == "3 password"
+
+
 def test_credential_address_distinguishes_types_at_the_same_user_ref() -> None:
     """Two credential types on one user are different addresses."""
     assert pin_address(1) != CredentialAddress(1, CredentialType.RFID)

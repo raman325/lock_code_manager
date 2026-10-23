@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, NamedTuple
+from typing import Final, NamedTuple, override
 
 
 class SlotCode(StrEnum):
@@ -250,6 +250,11 @@ class CredentialAddress(NamedTuple):
 
     user_ref: int
     credential_type: CredentialType
+
+    @override
+    def __str__(self) -> str:
+        """Name the address in logs: its slot and credential type."""
+        return f"{self.user_ref} {self.credential_type}"
 
 
 def managed_addresses(user_ref: int) -> tuple[CredentialAddress, ...]:
