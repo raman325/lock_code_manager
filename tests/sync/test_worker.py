@@ -3470,3 +3470,25 @@ async def test_a_probe_from_outside_leaves_no_stale_backoff_timer(rig_factory) -
         await asyncio.sleep(0)
     assert rig.worker.reachable
     stuck.set()
+
+
+async def test_two_keys_on_one_slot_converge_on_their_own(rig_factory) -> None:
+    """
+    The worker never looks inside a key: two values in one slot are two keys.
+
+    One is refused and held; the other still reaches the lock. The
+    integration keys by (slot, credential type), so this is a PIN and a
+    password on one user.
+    """
+    pin, password = (3, "pin"), (3, "password")
+    lock = FakeLock(refuse_value={"bad"})
+    rig = rig_factory(lock)
+    rig.worker.want(pin, "1234")
+    rig.worker.want(password, "bad")
+    rig.worker.start()
+    await rig.settle()
+
+    assert lock.codes == {pin: "1234"}
+    assert rig.status(pin) == (Status.IN_SYNC, None)
+    assert rig.status(password) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
+    assert rig.disabled == [password]

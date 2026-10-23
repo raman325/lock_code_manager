@@ -17,7 +17,7 @@ import logging
 import time
 from typing import Any, Protocol
 
-from .slot import Reading, Repair, Seen, Slot, Status, Want
+from .slot import Key, Reading, Repair, Seen, Slot, Status, Want
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,9 +53,11 @@ def _ms(start: float) -> float:
     return (time.monotonic() - start) * 1000
 
 
-def _where(slot: int | None, slots: tuple[int, ...]) -> Any:
-    """Return the slot, or slots, an exchange or job is about (for logs)."""
-    return slots[0] if len(slots) == 1 else slots or slot
+def _where(key: object, keys: tuple[object, ...]) -> object:
+    """Return the key, or keys, an exchange or job is about (for logs)."""
+    if len(keys) == 1:
+        return keys[0]
+    return f"({', '.join(map(str, keys))})" if keys else key
 
 
 class LockError(Exception):
@@ -77,10 +79,10 @@ class LockError(Exception):
         self.cause = cause
 
 
-class LockPort(Protocol):
+class LockPort[K](Protocol):
     """What the worker needs from a provider."""
 
-    async def read(self, slots: Collection[int]) -> Mapping[int, Reading]:
+    async def read(self, slots: Collection[K]) -> Mapping[K, Reading]:
         """
         Return what the lock says about each of ``slots`` now; raise ``LockError``.
 
@@ -91,9 +93,9 @@ class LockPort(Protocol):
         """
         ...
 
-    async def write(self, slot: int, pin: str | None) -> bool | None:
+    async def write(self, slot: K, value: str | None) -> bool | None:
         """
-        Put ``pin`` in ``slot``, or clear it for None; raise ``LockError``.
+        Put ``value`` in ``slot``, or clear it for None; raise ``LockError``.
 
         False when the lock answered that there was nothing to change -- a
         clear that found nothing: that says nothing about what the slot holds.
@@ -102,12 +104,12 @@ class LockPort(Protocol):
 
 
 @dataclass
-class _Job:
+class _Job[K]:
     kind: str
-    slot: int | None = None
-    slots: tuple[int, ...] = ()
+    slot: K | None = None
+    slots: tuple[K, ...] = ()
     # Held slots a read also asks about, each on its own (``_read_held``).
-    held: tuple[int, ...] = ()
+    held: tuple[K, ...] = ()
     reading: Reading | None = None
     # When a push was taken in: dropped if its slot was written since.
     seq: int = 0
@@ -131,8 +133,14 @@ def _resolve(
 
 
 @dataclass
-class LockWorker[P: LockPort]:
-    """The one owner of a lock's slots and of every exchange with it."""
+class LockWorker[K: Key, P: LockPort[Any]]:
+    """
+    The one owner of a lock's slots and of every exchange with it.
+
+    A slot here is one value kept in line, under a key the integration
+    chooses: a slot number, or a slot and a kind of credential. The worker
+    never looks inside a key.
+    """
 
     port: P
     salt: bytes
@@ -148,20 +156,20 @@ class LockWorker[P: LockPort]:
     on_send: Callable[[], None] = lambda: None
     # The lock refused this slot's PIN: the integration turns the slot off and
     # owns the repair that says why.
-    on_disable: Callable[[int], None] = lambda slot: None
+    on_disable: Callable[[K], None] = lambda slot: None
     # What was last written to a slot before this worker, by an earlier run:
     # a slot starts from it, so a lock that will not show its codes is not
     # written again (#405).
-    recall: Callable[[int], str | None] = lambda slot: None
+    recall: Callable[[K], str | None] = lambda slot: None
     # The lock answered an earlier run: one not answering now is offline.
     answered_before: bool = False
-    slots: dict[int, Slot] = field(default_factory=dict)
+    slots: dict[K, Slot] = field(default_factory=dict)
     # What the logs call the lock (its entity id).
     name: str = "lock"
 
     def __post_init__(self) -> None:
         """Start idle: nothing queued, the lock never yet reached."""
-        self._queue: asyncio.Queue[_Job | None] = asyncio.Queue()
+        self._queue: asyncio.Queue[_Job[K] | None] = asyncio.Queue()
         self._task: asyncio.Task[None] | None = None
         # Set when a job is queued: the loop, waiting for a slot's pause or
         # the next probe, takes it at once.
@@ -169,12 +177,12 @@ class LockWorker[P: LockPort]:
         self._started = False
         self._stopping = False
         self._stopped = asyncio.Event()
-        self._queued: set[int] = set()
+        self._queued: set[K] = set()
         # The slot whose sync is running now.
-        self._syncing: int | None = None
+        self._syncing: K | None = None
         self._seq = 0
         self._sent = 0
-        self._written: dict[int, int] = {}
+        self._written: dict[K, int] = {}
         self._last_exchange: float | None = None
         # Exchanges the lock answered: proof it is there.
         self._answers = 0
@@ -184,29 +192,29 @@ class LockWorker[P: LockPort]:
         self._lost = False
         # Slots charged a try since the lock last answered, by Slot and epoch:
         # an outage costs each target one try at most.
-        self._charged: dict[int, tuple[Slot, int]] = {}
+        self._charged: dict[K, tuple[Slot, int]] = {}
         # Slots written since the lock last gave a reading of them, by the
         # Slot and epoch written for: the write may have landed, so what it
         # said before is no guide to a new target.
-        self._unsure: dict[int, tuple[Slot, int]] = {}
+        self._unsure: dict[K, tuple[Slot, int]] = {}
         # Slots whose sync failed with nothing answering, by epoch: charged
         # when the lock next answers, as nothing else tells an outage from a
         # slot the lock ignores.
-        self._owed: dict[int, tuple[Slot, int]] = {}
+        self._owed: dict[K, tuple[Slot, int]] = {}
         self._probes = 0
         # Slots probed since the lock last answered.
-        self._probed: set[int] = set()
+        self._probed: set[K] = set()
         self._no_answers = 0
         self._down_until: float | None = None
         # When the next backoff probe is due, while backing off.
         self._probe_at: float | None = None
         # When each slot's last write was sent, on the monotonic clock: for
         # the logs' timing of pushes, nothing else.
-        self._write_sent: dict[int, float] = {}
+        self._write_sent: dict[K, float] = {}
 
     # The integration's side -------------------------------------------------
 
-    def want(self, slot: int, pin: Want, *, release: bool = False) -> None:
+    def want(self, slot: K, pin: Want, *, release: bool = False) -> None:
         """Say what ``slot`` should hold; a release clear when ``release``."""
         if (current := self.slots.get(slot)) is None:
             self.slots[slot] = Slot(pin, wrote=self.recall(slot), release=release)
@@ -216,11 +224,11 @@ class LockWorker[P: LockPort]:
                 current.doubt(self.salt)
         self.request_sync((slot,), why="want change")
 
-    def forget(self, slot: int) -> None:
+    def forget(self, slot: K) -> None:
         """Stop tracking ``slot`` without touching what the lock holds."""
         self.slots.pop(slot, None)
 
-    def resume(self, slot: int) -> None:
+    def resume(self, slot: K) -> None:
         """Lift ``slot``'s hold: the user acknowledged its repair."""
         if (current := self.slots.get(slot)) is not None:
             current.resume()
@@ -228,7 +236,7 @@ class LockWorker[P: LockPort]:
             current.seen = None
             self.request_sync((slot,), why="resume")
 
-    def status(self, slot: int) -> tuple[Status, Repair | None]:
+    def status(self, slot: K) -> tuple[Status, Repair | None]:
         """Return ``slot``'s sync status and the repair it raises, if any."""
         current = self.slots[slot]
         return current.status(self.salt), current.hold
@@ -245,7 +253,7 @@ class LockWorker[P: LockPort]:
         self._down_until = self._probe_at = self.clock()
         self._probe()
 
-    def syncing(self, slot: int) -> bool:
+    def syncing(self, slot: K) -> bool:
         """Return whether a sync of ``slot`` is queued or running."""
         return slot in self._queued or slot == self._syncing
 
@@ -283,7 +291,7 @@ class LockWorker[P: LockPort]:
         return self.answered_ever and self._no_answers >= OFFLINE_AFTER
 
     def request_sync(
-        self, slots: Collection[int] | None = None, *, why: str = "request"
+        self, slots: Collection[K] | None = None, *, why: str = "request"
     ) -> None:
         """
         Queue a sync of ``slots`` (every tracked one by default), once each.
@@ -298,7 +306,7 @@ class LockWorker[P: LockPort]:
                 self._queued.add(slot)
                 self._put(_Job("slot", slot=slot), why)
 
-    def push(self, slot: int, reading: Reading) -> None:
+    def push(self, slot: K, reading: Reading) -> None:
         """
         Take what the lock reported on its own about ``slot``.
 
@@ -315,8 +323,8 @@ class LockWorker[P: LockPort]:
         self._put(_Job("push", slot=slot, reading=reading, seq=self._next()), None)
 
     async def read(
-        self, slots: Collection[int] | None = None, *, probe: bool = False
-    ) -> dict[int, Reading]:
+        self, slots: Collection[K] | None = None, *, probe: bool = False
+    ) -> dict[K, Reading]:
         """
         Read ``slots`` in the lock's turn: by default every tracked slot.
 
@@ -412,7 +420,7 @@ class LockWorker[P: LockPort]:
                 )
             self._queue.task_done()
 
-    def _put(self, job: _Job, why: str | None) -> None:
+    def _put(self, job: _Job[K], why: str | None) -> None:
         """Queue ``job``; log why, unless ``why`` is None (logged already)."""
         if not self._stopping:
             if why is not None:
@@ -458,7 +466,7 @@ class LockWorker[P: LockPort]:
                 _LOGGER.exception("Lock change callback failed")
         self._queue.task_done()
 
-    async def _take(self) -> _Job | None:
+    async def _take(self) -> _Job[K] | None:
         """
         Take the next job, queueing slots and the probe as they fall due.
 
@@ -501,13 +509,13 @@ class LockWorker[P: LockPort]:
             slot.not_before = None
         return slot.not_before is not None
 
-    def _statuses(self) -> dict[int, Status] | None:
+    def _statuses(self) -> dict[K, Status] | None:
         """Return each slot's status, for logging its changes; None if not logged."""
         if not _LOGGER.isEnabledFor(logging.DEBUG):
             return None
         return {number: slot.status(self.salt) for number, slot in self.slots.items()}
 
-    def _log_transitions(self, before: dict[int, Status] | None, kind: str) -> None:
+    def _log_transitions(self, before: dict[K, Status] | None, kind: str) -> None:
         """Log each slot whose status a job changed."""
         if before is None:
             return
@@ -522,7 +530,7 @@ class LockWorker[P: LockPort]:
                     kind,
                 )
 
-    async def _do(self, job: _Job) -> None:
+    async def _do(self, job: _Job[K]) -> None:
         if job.kind == "push":
             self._take_push(job)
             return
@@ -553,7 +561,7 @@ class LockWorker[P: LockPort]:
             readings.update(await self._read_held(number))
         _resolve(job.done, readings)
 
-    async def _read_held(self, number: int) -> dict[int, Reading]:
+    async def _read_held(self, number: K) -> dict[K, Reading]:
         """
         Read a slot held after its tries on its own: an agreeing reading lifts it.
 
@@ -566,7 +574,7 @@ class LockWorker[P: LockPort]:
         except LockError:
             return {}
 
-    def _take_push(self, job: _Job) -> None:
+    def _take_push(self, job: _Job[K]) -> None:
         assert job.slot is not None and job.reading is not None
         slot = self.slots.get(job.slot)
         if slot is None or self._written.get(job.slot, 0) > job.seq:
@@ -585,12 +593,12 @@ class LockWorker[P: LockPort]:
             slot.observe(job.reading, self.salt, self.clock(), fresh=False)
         self.request_sync((job.slot,), why="push")
 
-    def _unsure_of(self, number: int, slot: Slot) -> bool:
+    def _unsure_of(self, number: K, slot: Slot) -> bool:
         """Return whether a write for another target may have landed since a reading."""
         unsure = self._unsure.get(number)
         return unsure is not None and (unsure[0] is not slot or unsure[1] != slot.epoch)
 
-    async def _sync(self, number: int) -> None:
+    async def _sync(self, number: K) -> None:
         """
         Bring one slot in line: read it if never read, write it if it differs.
 
@@ -641,23 +649,23 @@ class LockWorker[P: LockPort]:
     def _failed(self, slot: Slot) -> bool:
         return slot.status(self.salt) in (Status.UNKNOWN, Status.OUT_OF_SYNC)
 
-    def _charge(self, number: int, slot: Slot) -> None:
+    def _charge(self, number: K, slot: Slot) -> None:
         """Charge ``slot`` one try, unless charged since the lock last answered."""
         if not self._was_charged(number, slot):
             self._charged[number] = (slot, slot.epoch)
             slot.tried()
 
-    def _was_charged(self, number: int, slot: Slot) -> bool:
+    def _was_charged(self, number: K, slot: Slot) -> bool:
         """Return whether this target was charged since the lock last answered."""
         charged = self._charged.get(number)
         return charged is not None and charged[0] is slot and charged[1] == slot.epoch
 
-    async def _write(self, number: int, slot: Slot) -> None:
+    async def _write(self, number: K, slot: Slot) -> None:
         """
         Write what is wanted, then read it back.
 
         What was sent is what is recorded; if the slot changed hands or wants
-        another PIN by the time the write is back, nothing is recorded or read
+        another value by the time the write is back, nothing is recorded or read
         back; the write may have landed, so ``want`` doubted what the lock
         last said (``Slot.doubt``). A refusal holds at once.
         Anything else, even a write that never left, is read back -- unless
@@ -669,15 +677,15 @@ class LockWorker[P: LockPort]:
         whether the write failed (#1397). Silence is never an answer: it
         still counts toward the lock backing off.
         """
-        pin = slot.want
+        value = slot.want
         slot.wrote = None
         took = False
 
         def current() -> bool:
             # Still the slot in place, still wanting what was sent.
-            return self.slots.get(number) is slot and slot.want == pin
+            return self.slots.get(number) is slot and slot.want == value
 
-        op = "clear" if pin is None else "set"
+        op = "clear" if value is None else "set"
         # Forgotten or retargeted while waiting its turn: send nothing.
         await self._pace(op, number)
         if not current():
@@ -690,7 +698,7 @@ class LockWorker[P: LockPort]:
         try:
             # Reports taken in before the write is sent are older than it.
             changed = await self._exchange(
-                lambda: self.port.write(number, pin), mark=number, op=op
+                lambda: self.port.write(number, value), mark=number, op=op
             )
         except LockError as err:
             if not current():
@@ -703,7 +711,7 @@ class LockWorker[P: LockPort]:
                 took = True
             elif err.kind is ErrorKind.VALUE_REFUSED:
                 slot.refused(value=True, why=err.message)
-                if pin is not None:
+                if value is not None:
                     self.on_disable(number)
                 return
             elif err.kind is ErrorKind.SLOT_REFUSED:
@@ -734,12 +742,12 @@ class LockWorker[P: LockPort]:
 
     async def _read(
         self,
-        numbers: Collection[int],
+        numbers: Collection[K],
         *,
         follow: bool = True,
         op: str = "read",
         count: bool = True,
-    ) -> dict[int, Reading]:
+    ) -> dict[K, Reading]:
         """
         Read ``numbers``; unless ``follow`` is off, queue any slot that needs work.
 
@@ -755,7 +763,7 @@ class LockWorker[P: LockPort]:
             # Reading nothing asks the lock nothing: no answer, no no-answer.
             return {}
 
-        async def _readings() -> dict[int, Reading]:
+        async def _readings() -> dict[K, Reading]:
             # Inside the exchange: a provider returning garbage is its bug.
             return dict(await self.port.read(numbers))
 
@@ -778,7 +786,7 @@ class LockWorker[P: LockPort]:
         self._pay(due)
         return readings
 
-    def _again(self, number: int) -> None:
+    def _again(self, number: K) -> None:
         """
         Queue another sync of ``number`` if it still needs one.
 
@@ -811,8 +819,8 @@ class LockWorker[P: LockPort]:
         call: Callable[[], Awaitable[Any]],
         *,
         op: str,
-        mark: int | None = None,
-        slots: tuple[int, ...] = (),
+        mark: K | None = None,
+        slots: tuple[K, ...] = (),
         pay: bool = True,
         count: bool = True,
     ) -> Any:
@@ -926,7 +934,7 @@ class LockWorker[P: LockPort]:
             # Every slot dropped while backing off is synced again.
             self.request_sync(why="lock back")
 
-    def _due(self) -> list[tuple[int, Slot]]:
+    def _due(self) -> list[tuple[K, Slot]]:
         """Take the owed tries: the lock answered, so they were the slots'."""
         owed, self._owed = self._owed, {}
         return [
@@ -935,7 +943,7 @@ class LockWorker[P: LockPort]:
             if owing.epoch == epoch and self._failed(owing)
         ]
 
-    def _pay(self, due: list[tuple[int, Slot]] | None = None) -> None:
+    def _pay(self, due: list[tuple[K, Slot]] | None = None) -> None:
         """Charge owed tries still failing once the answer's reading is in."""
         for number, slot in self._due() if due is None else due:
             if self._failed(slot):
