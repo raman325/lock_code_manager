@@ -687,3 +687,78 @@ async def _check_retry(registry, worker, lock, _settle) -> None:
     await _settle(worker)
 
     assert 7 not in lock.codes
+
+
+# Keys that are not slot numbers ------------------------------------------------
+
+
+def _slot_of(key: tuple[int, str]) -> int:
+    return key[0]
+
+
+@pytest.fixture
+async def keyed():
+    """A registry whose workers key by (slot, kind), owning by slot."""
+    registries: list[LockRegistry] = []
+
+    def _build(**locks: FakeLock) -> tuple[LockRegistry, Locks]:
+        fakes = Locks(**locks)
+        registry = LockRegistry(fakes.make, grace=0.1, slot_of=_slot_of)
+        registries.append(registry)
+        return registry, fakes
+
+    yield _build
+    for registry in registries:
+        await registry.stop()
+
+
+async def test_an_entry_owns_every_kind_in_its_slot(keyed) -> None:
+    """Another entry wanting another kind in an owned slot is refused."""
+    registry, _ = keyed(front=FakeLock())
+    await registry.hold("front", "a", {(3, "pin"): "1234"})
+    await registry.hold("front", "b", {})
+
+    with pytest.raises(SlotTaken) as taken:
+        registry.want("front", "b", (3, "password"), "secret")
+
+    assert (taken.value.slot, taken.value.owner) == (3, "a")
+    assert registry.owner("front", 3) == "a"
+
+
+async def test_giving_up_a_slot_releases_every_kind_in_it(keyed) -> None:
+    """One give-up clears the slot's PIN and password, and leaves other slots."""
+    lock = FakeLock()
+    registry, _ = keyed(front=lock)
+    worker = await registry.hold(
+        "front",
+        "a",
+        {(3, "pin"): "1234", (3, "password"): "secret", (4, "pin"): "5678"},
+    )
+    await _settle(worker)
+    assert lock.codes == {
+        (3, "pin"): "1234",
+        (3, "password"): "secret",
+        (4, "pin"): "5678",
+    }
+
+    registry.give_up("front", "a", 3)
+    await _settle(worker)
+
+    assert lock.codes == {(4, "pin"): "5678"}
+    assert registry.owner("front", 3) is None
+
+
+async def test_unclaiming_a_slot_forgets_every_kind_in_it(keyed) -> None:
+    """Letting go of a slot stops tracking all of it and leaves the lock as it is."""
+    lock = FakeLock()
+    registry, _ = keyed(front=lock)
+    worker = await registry.hold(
+        "front", "a", {(3, "pin"): "1234", (3, "password"): "secret"}
+    )
+    await _settle(worker)
+
+    registry.unclaim("front", "a", 3)
+
+    assert worker.slots == {}
+    assert lock.codes == {(3, "pin"): "1234", (3, "password"): "secret"}
+    assert registry.owner("front", 3) is None
