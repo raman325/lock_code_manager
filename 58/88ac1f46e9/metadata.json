@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "5888ac1f46e9",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-address-core",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/58/88ac1f46e9/0/metadata.json",
+      "transcript": "/58/88ac1f46e9/0/full.jsonl",
+      "compact_transcript": "/58/88ac1f46e9/0/transcript.jsonl",
+      "content_hash": "/58/88ac1f46e9/0/content_hash.txt",
+      "prompt": "/58/88ac1f46e9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 8637,
+    "cache_read_tokens": 1349483,
+    "output_tokens": 2558,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 34,
+      "cache_creation_tokens": 24710,
+      "cache_read_tokens": 1004004,
+      "output_tokens": 8720,
+      "api_call_count": 17
+    }
+  }
+}
