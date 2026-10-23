@@ -7,10 +7,10 @@ from homeassistant.const import Platform
 from homeassistant.util.hass_dict import HassKey
 
 if TYPE_CHECKING:
-    from .ha.adapter import ProviderPort
+    from .ha.adapter import PortWorker, ProviderPort
     from .ha.lock_store import LockStore
+    from .model.credentials import CredentialAddress
     from .sync.registry import LockRegistry
-    from .sync.worker import LockWorker
 
 DOMAIN = "lock_code_manager"
 VERSION = "0.0.0"  # this will be automatically updated as part of the release workflow
@@ -77,9 +77,9 @@ class LockCodeManagerData(TypedDict, total=False):
     resources: bool
     instance_id: str
     migration_renames: dict[str, str]
-    lock_registry: LockRegistry[ProviderPort]
+    lock_registry: LockRegistry[CredentialAddress, ProviderPort]
     locks_leaving: set[str]
-    slots_given_up: dict[tuple[str, int], tuple[str, LockWorker[ProviderPort] | None]]
+    slots_given_up: dict[tuple[str, int], tuple[str, PortWorker | None]]
     slot_issues: dict[str, set[str]]
     lock_store: LockStore
     locks_reporting: dict[str, bool]

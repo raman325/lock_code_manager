@@ -348,8 +348,9 @@ class ProviderPort:
                 ErrorKind.SLOT_REFUSED,
                 sent=False,
                 message=(
-                    f"{self.provider.lock.entity_id} is not written "
-                    f"{address.credential_type} credentials"
+                    "Lock Code Manager does not write "
+                    f"{address.credential_type} credentials to "
+                    f"{self.provider.lock.entity_id}"
                 ),
             )
         return address.user_ref

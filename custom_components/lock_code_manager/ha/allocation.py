@@ -19,7 +19,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util.async_ import create_eager_task
 
 from ..const import MAX_SEARCHED_SLOT
-from ..model.credentials import CredentialType
+from ..model.credentials import CredentialType, pin_address
 from ..model.exceptions import LockCodeManagerError
 from ..model.occupancy import LockOccupancy, Occupancy
 from ..model.queries import slots_configured_on
@@ -544,10 +544,12 @@ async def _async_occupied(
     and over-reserving costs a user a slot number, while under-reserving
     costs them the code on their door. Silence says nothing, so it does not.
     """
-    readings = await lock_registry(hass).read_once(lock_entity_id, indices)
+    readings = await lock_registry(hass).read_once(
+        lock_entity_id, [pin_address(index) for index in indices]
+    )
     return frozenset(
-        slot
-        for slot, reading in readings.items()
+        address.user_ref
+        for address, reading in readings.items()
         if reading is not Seen.EMPTY and reading is not Seen.SILENT
     )
 
