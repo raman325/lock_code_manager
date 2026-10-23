@@ -1,0 +1,114 @@
+check if we have any existing documentation in docs/ or specs/ on supporting additional credential types
+
+---
+
+I want to move forward with adding password support. In my mind, it should be a separate text entity class with its own limitations (can we enforce characters via regex, max and min length, etc). In the card, I am thinking there should be a single input box and icons/tabs for pin, password, etc. to switch between them, but I am open to ideas
+
+---
+
+yes, one note though that there is a rule that disables a slot when the PIN is blank. The rule shifts to disabling the slot when there is no credential. If at least one credential (PIN, password, something else in the futre) exists, that's good enough
+
+---
+
+yes. One open note is how to handle the lock cards
+
+---
+
+Yes. Wondering if we should avoid the pattern on password too and just validate upstream
+
+---
+
+yes
+
+---
+
+can you give me a TLDR version of it?
+
+---
+
+why not support for matter?
+
+---
+
+if you find it in the Matter spec, confirm the other providers too against standards/code
+
+---
+
+<task-notification>
+<task-id>a8744737bffab6f70</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a8744737bffab6f70.output</output-file>
+<status>completed</status>
+<summary>Agent "Zigbee password credential support" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I ran this read-only and changed nothing. **Zigbee locks have no password credential distinct from a PIN, at any of the four layers.** The Door Lock cluster as implemented defines only two credential kinds: PIN and RFID.
+
+| Layer | Credential types available | Password? | Citation |
+|---|---|---|---|
+| (a) ZCL Door Lock 0x0101, as zigpy 2.2.0 models it | PIN and RFID. Commands are `set/get/clear/clear_all_pin_code(s)` and the matching `rfid_code` set. `OperationEventSource` is `Keypad=0, RF=1, Manual=2, RFID=3, Indeterminate=0xFF`. `ProgrammingEvent` has only PIN and RFID added/deleted. Attributes `num_of_pin_users_supported` and `num_of_rfid_users_supported` | No | `.venv/lib/python3.14/site-packages/zigpy/zcl/clusters/closures.py:196-201, 223-230, 319-337, 429-446, 517-534` |
+| (b) zha library 2.2.2 | PIN only. `async_set/enable/disable/clear_lock_user_code` call `set_pin_code` / `clear_pin_code`. There is no RFID write | No | `site-packages/zha/application/platforms/lock/__init__.py:156-182` |
+| (b) HA ZHA | PIN only, through 4 services: `set/enable/disable/clear_lock_user_code` | No | `site-packages/homeassistant/components/zha/lock.py:27-30` |
+| (c) LCM ZHA and Z2M providers (`origin/main`) | Writes go through `set_pin_code`. Unlock events can report PIN, RFID, or FINGERPRINT (source value 4, a vendor extension) | No | `providers/zha.py:169-178, 256-267`; `providers/zigbee2mqtt.py:61-70, 182-185` |
+| (d) zigbee-herdsman-converters (master) | Only `pin_code` is settable (`pincode_lock` sends `setPinCode` / `clearPinCode`). `lockSourceName` is `keypad, rf, manual, rfid, fingerprint`. GitHub code search for `setRfidCode` in the repo returns 0 hits | No | [exposes.ts:1387-1396](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/exposes.ts), [toZigbee.ts:439-462](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/converters/toZigbee.ts), [constants.ts:290-296](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/constants.ts) |
+
+**Caveats:**
+- I could not find the CSA ZCL specification text itself. Secondary sources describe the same PIN and RFID command set: [Silicon Labs SetRfid](https://docs.silabs.com/zigbee/7.0/zigbee-af-api/zcl-door-lock-cluster-set-rfid-command) and [Espressif ZCL door_lock](https://docs.espressif.com/projects/esp-zigbee-sdk/en/latest/esp32/api-reference/zcl/esp_zigbee_zcl_door_lock.html).
+- "password" does appear in Z2M vendor files: Aqara S2 in `lumi.ts:3132-3146`, as actions like `password_add`/`password_open`, and a Yale raw action in `yale.ts:513`. These are read-only event labels; the Aqara S2 has `toZigbee: []`, so nothing can be written. The source doesn't say whether "password" there means anything other than the keypad code.
+
+**Conclusion:** The PIN-only limit is not LCM's choice. The cluster has no password type, so there is nothing for zigpy, ZHA or Z2M to expose. RFID is the one other kind the standard defines. zigpy can send it, but neither HA ZHA nor zigbee-herdsman-converters offers a way to write it, so RFID writes would be the only possible extension. Password should stay unsupported for both Zigbee providers.</result>
+<usage><subagent_tokens>55966</subagent_tokens><tool_uses>14</tool_uses><duration_ms>66735</duration_ms></usage>
+</task-notification>
+
+---
+
+update the specs checkout
+
+---
+
+<task-notification>
+<task-id>ae3131f3ef16641c0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ae3131f3ef16641c0.output</output-file>
+<status>completed</status>
+<summary>Agent "Schlage and Akuvox password support" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Neither lock offers a password credential separate from the numeric PIN. The limit sits below Lock Code Manager: the Home Assistant integration and the Python library each enforce a 4-8 digit PIN, and neither has a password type.
+
+| Provider | Credential types available | Password? | Citation |
+|---|---|---|---|
+| Schlage | One kind only: an access code. `pyschlage` `AccessCode` has `name`, `code`, `schedule`, `notify_on_use`, `disabled`. The code is sent as `"accessCode": int(self.code)`, so it must be numeric. HA's `add_code` service checks `cv.matches_regex(r"^\d{4,8}$")`. HA's services are `add_code`, `delete_code` and `get_codes`. | No. Every "password" hit in `pyschlage` is the account login (`auth.py:72`). | `~/.cache/uv/archive-v0/hNEV6MGJw0CZeSWw/pyschlage/code.py:164-188, 253` (2026.9.0); `.venv/.../homeassistant/components/schlage/__init__.py:37`, `services.yaml` |
+| Akuvox (`local_akuvox`, tykeal; library `pylocal-akuvox` 1.6.0) | The `User` record holds two credentials: `private_pin` and `card_code` (an RF card). Its other fields are scheduling, relay, floor and source data. The PIN is checked with `_PIN_PATTERN = re.compile(r"^[0-9]{4,8}$")` in the library, and again by the integration ("PIN must be 4-8 digits"). | No. `open_door_password` is a setting for a capability-report test (`report_service.py:33`), not a user credential. | `pylocal_akuvox/models/users.py:19-31`, `users.py:25,38-47` (wheel unpacked to `/tmp/akuvox-dl.pGVs`); `/Users/raman/projects/homeassistant-local-akuvox/custom_components/local_akuvox/validation.py:53-65`, `services.yaml` `add_user` |
+
+**What LCM reports today:** neither `schlage.py` nor `akuvox.py` overrides `async_get_capabilities` or `supports_native_users`. For such providers the base class always builds credentials as `CredentialType.PIN` (`_base.py:1302-1304`, `1349`). The Akuvox provider writes only `private_pin` (`akuvox.py:140,162`) and ignores `card_code`.
+
+**Conclusion:** For both locks, password support is blocked by the API, not by LCM. Each offers one value-type credential, and it is digits-only, 4-8 long. I could only check what the libraries and integrations expose. For Schlage's cloud API and Akuvox's device firmware I found nothing showing a password type, and I'm not claiming more than that. The one extra credential either side exposes is Akuvox's RF `card_code`. It has no format check in the integration's service schema (`cv.string`), and it's a card, not a password.</result>
+<usage><subagent_tokens>67250</subagent_tokens><tool_uses>24</tool_uses><duration_ms>262634</duration_ms></usage>
+</task-notification>
+
+---
+
+as a PR to zwave-js/specs
+
+---
+
+after that lets submit a fix to zwave-js?
+
+---
+
+whyd we delete the xlsx registries in the specs PR?
+
+---
+
+yes move them to a legacy folder, then push the zwave-js fix and create the RP
+
+---
+
+ok great, now lets get back to the main thing we were working on
+
+---
+
+lets just raise the minimum, kerep things simple
+
+---
+
+yes
