@@ -8,9 +8,8 @@ answered, whether a read of it has ever described a slot (#1581; absent in a
 record saved before, and then not known to), and per slot what was last
 written for each credential type -- a keyed fingerprint or ``cleared``, never
 the value -- and a release clear still owed, with the entry that gave the slot
-up. What a slot holds is
-read again; counts, fights and holds start over (a hold's repair outlives a
-restart on its own).
+up. What a slot holds is read again; counts, fights and holds start over (a
+hold's repair outlives a restart on its own).
 
 Written a second after a change, and at Home Assistant's final write. Never
 dropped on an unload (#1243): only when a release is done, a slot is let go

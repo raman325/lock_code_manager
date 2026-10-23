@@ -1,5 +1,6 @@
 """What a lock's worker remembers across a restart: the core's store."""
 
+from copy import deepcopy
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -756,23 +757,21 @@ async def test_a_version_1_store_moves_what_was_written_under_pin(
 ) -> None:
     """Version 1 kept one fingerprint per slot: it was a PIN's, and stays one."""
     key = er.async_get(hass).async_get(LOCK_1_ENTITY_ID).id
+    version_1_record = {
+        "entity_id": LOCK_1_ENTITY_ID,
+        "answered": True,
+        "reports": True,
+        "slots": {
+            "1": {"wrote": "abc"},
+            "2": {"wrote": CLEARED, "release": "entry"},
+            "3": {"release": "entry"},
+        },
+    }
     hass_storage[SAVED_KEY] = {
         "version": 1,
         "minor_version": 1,
         "key": SAVED_KEY,
-        "data": {
-            "locks": {
-                key: {
-                    "entity_id": LOCK_1_ENTITY_ID,
-                    "answered": True,
-                    "slots": {
-                        "1": {"wrote": "abc"},
-                        "2": {"wrote": CLEARED, "release": "entry"},
-                        "3": {"release": "entry"},
-                    },
-                }
-            }
-        },
+        "data": {"locks": {key: version_1_record}},
     }
     store = LockStore(hass)
     await store.async_load()
@@ -785,13 +784,49 @@ async def test_a_version_1_store_moves_what_was_written_under_pin(
         (LOCK_1_ENTITY_ID, 2, "entry"),
         (LOCK_1_ENTITY_ID, 3, "entry"),
     ]
+    assert store.reports(key)
     saved = hass_storage[SAVED_KEY]
     assert saved["version"] == STORE_VERSION == 2
-    assert saved["data"]["locks"][key]["slots"] == {
-        "1": {"wrote": {"pin": "abc"}},
-        "2": {"wrote": {"pin": CLEARED}, "release": "entry"},
-        "3": {"release": "entry"},
+    assert saved["data"]["locks"][key] == {
+        **version_1_record,
+        "slots": {
+            "1": {"wrote": {"pin": "abc"}},
+            "2": {"wrote": {"pin": CLEARED}, "release": "entry"},
+            "3": {"release": "entry"},
+        },
     }
+
+
+async def test_a_version_2_store_is_not_nested_again_by_a_minor_bump(
+    hass: HomeAssistant, mock_lock_config_entry, hass_storage
+) -> None:
+    """A newer minor version of version 2 already has its types: it loads as it is."""
+    key = er.async_get(hass).async_get(LOCK_1_ENTITY_ID).id
+    data = {
+        "locks": {
+            key: {
+                "entity_id": LOCK_1_ENTITY_ID,
+                "answered": True,
+                "reports": True,
+                "slots": {
+                    "1": {"wrote": {"pin": "abc"}},
+                    "2": {"wrote": {"pin": CLEARED}, "release": "entry"},
+                },
+            }
+        }
+    }
+    hass_storage[SAVED_KEY] = {
+        "version": STORE_VERSION,
+        "minor_version": 2,
+        "key": SAVED_KEY,
+        "data": deepcopy(data),
+    }
+    store = LockStore(hass)
+    await store.async_load()
+
+    assert store.wrote(key, pin_address(1)) == "abc"
+    assert store.wrote(key, pin_address(2)) == CLEARED
+    assert hass_storage[SAVED_KEY]["data"] == data
 
 
 async def test_remembering_one_type_keeps_the_others_in_the_slot(
