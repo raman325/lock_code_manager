@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.10.2",
+  "checkpoint_id": "5747d5729e13",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-address-core",
+  "checkpoints_count": 20,
+  "files_touched": [
+    "custom_components/lock_code_manager/sync/worker.py",
+    "tests/sync/test_worker.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/57/47d5729e13/0/metadata.json",
+      "transcript": "/57/47d5729e13/0/full.jsonl",
+      "compact_transcript": "/57/47d5729e13/0/transcript.jsonl",
+      "content_hash": "/57/47d5729e13/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 8442,
+    "cache_read_tokens": 715812,
+    "output_tokens": 3318,
+    "api_call_count": 3
+  }
+}
