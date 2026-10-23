@@ -6,16 +6,17 @@ rules are the credential-model decisions as the first-principles design
 states them (docs: 2026-10-13-core-first-principles.md).
 """
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from enum import Enum, StrEnum
 import hashlib
-from typing import override
+from typing import Any, Protocol, override
 
 # What the lock said about a slot.
 
 
 class Seen(Enum):
-    """What the lock said about a slot, apart from which PIN it holds."""
+    """What the lock said about a slot, apart from which value it holds."""
 
     EMPTY = "empty"
     # Holds a code it will not show.
@@ -28,20 +29,33 @@ class Seen(Enum):
 
 @dataclass(frozen=True, slots=True)
 class Holds:
-    """The slot holds this PIN, and the lock said so."""
+    """The slot holds this value, and the lock said so."""
 
-    pin: str = field(repr=False)
+    value: str = field(repr=False)
 
     @override
     def __repr__(self) -> str:
-        """Keep the PIN out of logs (#917)."""
+        """Keep the value out of logs (#917)."""
         return "Holds(****)"
 
 
 Reading = Seen | Holds
 
-# A wanted PIN, or None for an empty slot.
+# A wanted value, or None for an empty slot.
 Want = str | None
+
+
+class Key(Hashable, Protocol):
+    """
+    What the worker keeps one value under: the integration chooses it.
+
+    The worker never looks inside a key. It only needs to tell keys apart
+    and to put them in order, so its probes go round them in turn.
+    """
+
+    def __lt__(self, other: Any, /) -> bool:
+        """Return whether this key sorts before ``other``."""
+        ...
 
 
 class Repair(StrEnum):
@@ -70,9 +84,9 @@ LIMIT = 3
 RELEASE_LIMIT = 2
 
 
-def fingerprint(pin: str, salt: bytes) -> str:
-    """Return a salted fingerprint of ``pin``: kept and persisted instead of it."""
-    return hashlib.blake2b(pin.encode(), key=salt, digest_size=16).hexdigest()
+def fingerprint(value: str, salt: bytes) -> str:
+    """Return a salted fingerprint of ``value``: kept and persisted instead of it."""
+    return hashlib.blake2b(value.encode(), key=salt, digest_size=16).hexdigest()
 
 
 @dataclass
@@ -145,7 +159,7 @@ class Slot:
             return seen in (Seen.MASKED, Seen.SILENT) and self.wrote == CLEARED
         written = self.wrote == fingerprint(self.want, salt)
         if isinstance(seen, Holds):
-            return seen.pin == self.want
+            return seen.value == self.want
         # A lock that will not show the code, or says nothing: trust the write.
         # A limit, not a bug: a write the lock dropped on a slot it never reads
         # back looks the same from here as one it took. The views label such a

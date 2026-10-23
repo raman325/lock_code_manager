@@ -979,7 +979,7 @@ def _begin_release(hass: HomeAssistant, port: ProviderPort, slot: int) -> None:
 def _label(reading: Reading) -> str | SlotCode:
     """Return a reading as the views are told it: its PIN, or what the lock said."""
     if isinstance(reading, Holds):
-        return reading.pin
+        return reading.value
     return {
         Seen.EMPTY: SlotCode.EMPTY,
         Seen.MASKED: SlotCode.UNREADABLE_CODE,
