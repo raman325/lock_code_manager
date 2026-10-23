@@ -764,7 +764,10 @@ async def test_unclaiming_a_slot_forgets_every_kind_in_it(keyed) -> None:
     assert registry.owner("front", 3) is None
 
 
-async def test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up(keyed) -> None:
+@pytest.mark.parametrize("how", ["unclaim", "release"])
+async def test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up(
+    keyed, how: str
+) -> None:
     """A key still being cleared outlives the new owner letting go of its slot."""
     lock = FakeLock()
     registry, _ = keyed(front=lock)
@@ -774,10 +777,13 @@ async def test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up(keyed) -> N
     await registry.hold("front", "b")
     await _settle(worker)
 
-    # Nothing yields between these: the clears have not run when b lets go.
+    # Nothing yields before b lets go: the clears have not run.
     registry.give_up("front", "a", 3)
     registry.want("front", "b", (3, "pin"), "5678")
-    registry.unclaim("front", "b", 3)
+    if how == "unclaim":
+        registry.unclaim("front", "b", 3)
+    else:
+        await registry.release("front", "b")
     assert (3, "pin") not in worker.slots
     await _settle(worker)
 
