@@ -1,0 +1,81 @@
+<task-notification>
+<task-id>a3a7275c91e767df1</task-id>
+<tool-use-id>toolu_019R1qzdoR4yR4eLaDYWiGv7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a3a7275c91e767df1.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: generic registry" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**Fix**
+- `unclaim` and `release` now call a new `_forget(entry, slot)` helper in `sync/registry.py`. It forgets every key in the slot except those whose `release` flag is set, because a clear another entry gave up goes on without an owner. A one-line comment says so.
+- `give_up` is unchanged.
+
+**Tests added** to `tests/sync/test_registry.py`:
+1. `test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up`:
+   - `a` holds PIN and password for slot 3. `a` gives up slot 3, `b` claims `(3,"pin")` with `want`, then `b` calls `unclaim(3)`, with nothing yielding in between.
+   - It asserts `(3,"pin")` is forgotten, and that after settling the password is gone from `lock.codes` and only the PIN remains.
+2. `test_releasing_the_lock_forgets_every_kind_in_an_owned_slot`: `release("front","a")` leaves `worker.slots == {}` and `lock.codes` unchanged. `b` still holds the lock, so the worker stays alive.
+3. `test_hold_refuses_another_kind_in_an_owned_slot`
+4. `test_write_once_refuses_another_kind_in_an_owned_slot`
+
+**Mutants.** Each failed exactly one test, and I restored `registry.py` from a saved copy after each.
+- I removed the release filter in `_forget`, and `test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up` failed.
+- I made `release` forget only the first key, and `test_releasing_the_lock_forgets_every_kind_in_an_owned_slot` failed.
+- I made `_hold` check `set(wants)` (the raw keys), and `test_hold_refuses_another_kind_in_an_owned_slot` failed.
+- I made `write_once` check `(key,)`, and `test_write_once_refuses_another_kind_in_an_owned_slot` failed.
+
+**Results**
+- `tests/sync` plus `tests/test_architecture.py`: 223 passed.
+- `prek run mypy --all-files`: 0 errors in `sync/`. The remaining 13 errors are the same ones as before, in `const.py`, `ha/adapter.py`, `ha/runtime.py` and `entity.py`.
+- Every other prek hook on the changed files passed.
+- The commit is `64769275`, a new commit on top of `55a23c21` and made with `--no-verify`. `git status` is clean.</result>
+<usage><subagent_tokens>70876</subagent_tokens><tool_uses>4</tool_uses><duration_ms>50368</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3e8cd9ee8abe7ff9</task-id>
+<tool-use-id>toolu_01KAMhu9j5ZwMuCBeGx96VQ6</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a3e8cd9ee8abe7ff9.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 3 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Stage 2 (re-review of `64769275`): APPROVED.** The fix closes the defect I reproduced, through both `unclaim` and `release`. Integer keys behave as before, and every mutant the tests target is killed. One gap remains: no test covers the `release` path of the fix. It's minor.
+
+**1. The defect is closed.** I re-ran my scenario: `a` holds `(3,"pin")` and `(3,"password")` and gives up slot 3. `b` then claims `(3,"pin")` and lets go before the clears run.
+- **Through `unclaim`:** the lock ends with `{(3,'pin'): '1234'}`, `worker.slots == {}`, and slot 3 has no owner. The password was cleared.
+- **Through `release`:** the result is identical.
+- The PIN keeping `1234` is expected. `b`'s claim replaced that clear, the same as with integer keys before.
+
+**2. Integer keys are unchanged.** `_forget` only skips keys with `release` set, and a slot an entry owns never has `release` set:
+- Claiming a slot (through `hold` or `want`) sets `release=False`.
+- `give_up` drops the owner before it marks anything for release.
+- `write_once` can't run on an owned slot.
+
+So with integer keys the filter never skips a key, and `_forget` does exactly what the old forget loop did. All 219 earlier tests pass, and the run is 223 with the four new ones. Ruff and flake8 pass. mypy fails only in the same four files as before (`const.py`, `entity.py`, `ha/adapter.py`, `ha/runtime.py`), which a later task fixes.
+
+**3. Mutation results.** I ran each mutant against all of `tests/sync`, restoring `registry.py` in a `finally`; `git diff` on it was empty afterwards.
+
+| Mutant | Result |
+|---|---|
+| `_forget` without the `release` filter (the pre-fix code) | killed by `test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up` |
+| pre-fix loop back in `unclaim` only | killed by the same test |
+| `release` forgets only the first key | killed by `test_releasing_the_lock_forgets_every_kind_in_an_owned_slot` |
+| `_hold` checks the raw key, not its slot | killed by `test_hold_refuses_another_kind_in_an_owned_slot` |
+| `write_once` checks the raw key, not its slot | killed by `test_write_once_refuses_another_kind_in_an_owned_slot` |
+| **pre-fix loop back in `release` only** | **survived** |
+
+**Issues**
+- **Critical:** none.
+- **Important:** none.
+- **Minor:**
+  - **`tests/sync/test_registry.py:767`:** the defect test only goes through `unclaim`. If someone inlined the old loop back into `release` (`registry.py:198-200`), the defect would return in `release` and no test would fail. Fix: parametrize the test over `unclaim` and `release("front", "b")`. The final assertions hold for both, as my re-run shows.
+  - **`.entire/.gitignore` has an uncommitted edit in the worktree** (it adds `redactors/local/`). It isn't in `64769275` and I didn't make it; it looks like tooling wrote it. It just shouldn't be swept into a task commit.
+
+The fix itself is fine as written: `_forget` keeps the slot's keys together in one place, and its comment says why it skips keys still being cleared.
+
+No files were changed. My scratch scripts were in `/tmp/lcm-rereview-t3` and are deleted.</result>
+<usage><subagent_tokens>88054</subagent_tokens><tool_uses>4</tool_uses><duration_ms>87717</duration_ms></usage>
+</task-notification>
