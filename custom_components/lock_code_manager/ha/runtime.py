@@ -33,7 +33,7 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.helpers.start import async_at_started
 
 from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
-from ..model.credentials import SlotCode
+from ..model.credentials import SlotCode, pin_address
 from ..model.exceptions import LockCodeManagerProviderError
 from ..model.locks import lock_display_name, per_lock_issue_id
 from ..model.queries import (
@@ -287,7 +287,7 @@ def async_setup_lock_registry(hass: HomeAssistant) -> LockRegistry[ProviderPort]
             on_change=_on_change,
             on_send=lambda: _remember(lock_entity_id, worker),
             on_disable=_on_disable,
-            recall=lambda slot: store.wrote(key, slot) if store else None,
+            recall=lambda slot: store.wrote(key, pin_address(slot)) if store else None,
             answered_before=store is not None and store.answered(key),
             name=lock_entity_id,
         )
