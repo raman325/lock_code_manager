@@ -762,3 +762,58 @@ async def test_unclaiming_a_slot_forgets_every_kind_in_it(keyed) -> None:
     assert worker.slots == {}
     assert lock.codes == {(3, "pin"): "1234", (3, "password"): "secret"}
     assert registry.owner("front", 3) is None
+
+
+async def test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up(keyed) -> None:
+    """A key still being cleared outlives the new owner letting go of its slot."""
+    lock = FakeLock()
+    registry, _ = keyed(front=lock)
+    worker = await registry.hold(
+        "front", "a", {(3, "pin"): "1234", (3, "password"): "secret"}
+    )
+    await registry.hold("front", "b")
+    await _settle(worker)
+
+    # Nothing yields between these: the clears have not run when b lets go.
+    registry.give_up("front", "a", 3)
+    registry.want("front", "b", (3, "pin"), "5678")
+    registry.unclaim("front", "b", 3)
+    assert (3, "pin") not in worker.slots
+    await _settle(worker)
+
+    assert (3, "password") not in lock.codes
+    assert lock.codes == {(3, "pin"): "1234"}
+
+
+async def test_releasing_the_lock_forgets_every_kind_in_an_owned_slot(keyed) -> None:
+    """Letting go of the lock stops tracking the whole slot and leaves the lock."""
+    lock = FakeLock()
+    registry, _ = keyed(front=lock)
+    worker = await registry.hold(
+        "front", "a", {(3, "pin"): "1234", (3, "password"): "secret"}
+    )
+    await registry.hold("front", "b")
+    await _settle(worker)
+
+    await registry.release("front", "a")
+
+    assert worker.slots == {}
+    assert lock.codes == {(3, "pin"): "1234", (3, "password"): "secret"}
+
+
+async def test_hold_refuses_another_kind_in_an_owned_slot(keyed) -> None:
+    """Claiming a different key in a slot another entry owns is refused."""
+    registry, _ = keyed(front=FakeLock())
+    await registry.hold("front", "a", {(3, "pin"): "1234"})
+
+    with pytest.raises(SlotTaken):
+        await registry.hold("front", "b", {(3, "password"): "x"})
+
+
+async def test_write_once_refuses_another_kind_in_an_owned_slot(keyed) -> None:
+    """A one-off write under a different key of an owned slot is refused."""
+    registry, _ = keyed(front=FakeLock())
+    await registry.hold("front", "a", {(3, "pin"): "1234"})
+
+    with pytest.raises(SlotTaken):
+        await registry.write_once("front", (3, "password"), "x")

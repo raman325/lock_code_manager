@@ -170,8 +170,7 @@ class LockRegistry[K: Key, P: LockPort[Any]]:
         entry = self._held(lock, owner)
         if entry.owners.get(slot) == owner:
             del entry.owners[slot]
-            for key in self._keys(entry, slot):
-                entry.worker.forget(key)
+            self._forget(entry, slot)
 
     def give_up(self, lock: str, owner: str, slot: int) -> None:
         """
@@ -198,8 +197,7 @@ class LockRegistry[K: Key, P: LockPort[Any]]:
         entry.holders.discard(owner)
         for slot in [s for s, o in entry.owners.items() if o == owner]:
             del entry.owners[slot]
-            for key in self._keys(entry, slot):
-                entry.worker.forget(key)
+            self._forget(entry, slot)
         self._maybe_stop(lock)
         if (stopping := self._stops.get(lock)) is not None:
             await asyncio.wait({stopping})
@@ -248,6 +246,13 @@ class LockRegistry[K: Key, P: LockPort[Any]]:
         for lock in list(self._locks):
             self._retire(lock)
         await asyncio.gather(*self._stops.values())
+
+    def _forget(self, entry: _Lock[K, P], slot: int) -> None:
+        """Stop tracking the keys in ``slot``, except those still being cleared."""
+        for key in self._keys(entry, slot):
+            # A clear another entry gave up goes on without an owner.
+            if not entry.worker.slots[key].release:
+                entry.worker.forget(key)
 
     def _keys(self, entry: _Lock[K, P], slot: int) -> list[K]:
         """Return every key the worker tracks in ``slot``."""
