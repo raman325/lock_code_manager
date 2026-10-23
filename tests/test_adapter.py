@@ -28,7 +28,12 @@ from custom_components.lock_code_manager.ha.adapter import (
     lock_error,
     reading,
 )
-from custom_components.lock_code_manager.model.credentials import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    CredentialAddress,
+    CredentialType,
+    SlotCredential,
+    pin_address,
+)
 from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -162,10 +167,10 @@ async def test_a_read_takes_what_the_provider_says_about_each_slot(ports) -> Non
     lock.codes = {1: "1234", 5: "5555"}
     lock.write_only = {3}
 
-    assert await port.read([1, 2, 3]) == {
-        1: Holds("1234"),
-        2: Seen.EMPTY,
-        3: Seen.MASKED,
+    assert await port.read([pin_address(1), pin_address(2), pin_address(3)]) == {
+        pin_address(1): Holds("1234"),
+        pin_address(2): Seen.EMPTY,
+        pin_address(3): Seen.MASKED,
     }
 
 
@@ -175,7 +180,7 @@ async def test_a_read_errors_as_the_worker_knows_them(ports) -> None:
     lock.fail("get", error=LockDisconnected)
 
     with pytest.raises(LockError) as caught:
-        await port.read([1])
+        await port.read([pin_address(1)])
     assert caught.value.kind is ErrorKind.NO_ANSWER
 
 
@@ -188,7 +193,7 @@ async def test_a_read_past_the_providers_budget_is_no_answer(ports) -> None:
     ) as budget:
         budget.return_value = 0.01
         with pytest.raises(LockError) as caught:
-            await port.read([1])
+            await port.read([pin_address(1)])
 
     assert caught.value.kind is ErrorKind.NO_ANSWER
 
@@ -204,7 +209,7 @@ async def test_a_provider_whose_plain_read_is_a_cache_is_read_by_hard_refresh(
 ) -> None:
     """A write is checked against what the lock says, never a cache."""
     port, _, lock = await ports(_FreshOnlyOnHardRefresh)
-    await port.read([1])
+    await port.read([pin_address(1)])
 
     assert lock.service_calls["hard_refresh_codes"] == [([1],)]
 
@@ -235,7 +240,9 @@ async def test_a_slot_the_lock_said_nothing_about_is_silent(ports) -> None:
     port, _, lock = await ports(_Silent)
     lock.silent = frozenset({2})
 
-    assert await port.read([1, 2]) == {1: Holds("1234")}
+    assert await port.read([pin_address(1), pin_address(2)]) == {
+        pin_address(1): Holds("1234")
+    }
 
 
 class _Foreign(MockLCMLock):
@@ -258,7 +265,10 @@ async def test_someone_else_s_code_at_a_slot_s_index_is_not_the_slot_s(
     port, _, lock = await ports(_Foreign)
     lock.foreign = frozenset({2})
 
-    assert await port.read([1, 2]) == {1: Holds("1234"), 2: Seen.EMPTY}
+    assert await port.read([pin_address(1), pin_address(2)]) == {
+        pin_address(1): Holds("1234"),
+        pin_address(2): Seen.EMPTY,
+    }
     assert port.others[2] == Holds("5678")
 
 
@@ -268,22 +278,22 @@ async def test_a_turned_off_slot_holding_someone_else_s_code_is_in_sync(
     """Nothing to clear: no write, no tries, no hold (#1695)."""
     _, worker, lock = await ports(_Foreign)
     lock.foreign = frozenset({2})
-    worker.want(2, None)
+    worker.want(pin_address(2), None)
     worker.start()
     await worker.settled()
 
-    assert worker.status(2) == (Status.IN_SYNC, None)
+    assert worker.status(pin_address(2)) == (Status.IN_SYNC, None)
     assert lock.codes[2] == "5678"
 
 
 async def test_a_read_the_lock_said_nothing_to_is_no_answer(ports) -> None:
     """Once it has answered reads: silence about everything is a lock gone quiet."""
     port, _, lock = await ports(_Silent)
-    await port.read([1])
+    await port.read([pin_address(1)])
     lock.silent = frozenset({1, 2})
 
     with pytest.raises(LockError) as caught:
-        await port.read([1, 2])
+        await port.read([pin_address(1), pin_address(2)])
     assert caught.value.kind is ErrorKind.NO_ANSWER
 
 
@@ -292,7 +302,7 @@ async def test_a_lock_that_never_answered_a_read_is_silent_not_gone(ports) -> No
     port, _, lock = await ports(_Silent)
     lock.silent = frozenset({1, 2})
 
-    assert await port.read([1, 2]) == {}
+    assert await port.read([pin_address(1), pin_address(2)]) == {}
 
 
 # Writing -------------------------------------------------------------------------
@@ -301,8 +311,8 @@ async def test_a_lock_that_never_answered_a_read_is_silent_not_gone(ports) -> No
 async def test_a_write_goes_on_with_the_slots_name(ports) -> None:
     """A set names the user it is for; a clear clears."""
     port, _, lock = await ports()
-    await port.write(3, "3333")
-    await port.write(1, None)
+    await port.write(pin_address(3), "3333")
+    await port.write(pin_address(1), None)
 
     assert lock.codes == {2: "5678", 3: "3333"}
     assert lock.service_calls["set_usercode"] == [(3, "3333", "User 3")]
@@ -318,7 +328,7 @@ async def test_a_refused_write(ports, pin, kind) -> None:
     lock.refuse("set" if pin else "clear", 1)
 
     with pytest.raises(LockError) as caught:
-        await port.write(1, pin)
+        await port.write(pin_address(1), pin)
     assert caught.value.kind is kind
 
 
@@ -328,7 +338,7 @@ async def test_a_providers_bug_on_a_write_reaches_the_worker_as_is(ports) -> Non
     lock.fail("set", error=RuntimeError("bug"))
 
     with pytest.raises(RuntimeError):
-        await port.write(1, "9999")
+        await port.write(pin_address(1), "9999")
 
 
 async def test_nothing_is_written_before_the_provider_is_set_up(ports) -> None:
@@ -336,7 +346,7 @@ async def test_nothing_is_written_before_the_provider_is_set_up(ports) -> None:
     port, _, lock = await ports(setup=False)
 
     with pytest.raises(LockError) as caught:
-        await port.write(3, "3333")
+        await port.write(pin_address(3), "3333")
     assert caught.value.kind is ErrorKind.NO_ANSWER
     assert not caught.value.sent
     assert 3 not in lock.codes
@@ -351,11 +361,37 @@ async def test_a_slot_past_the_locks_capacity_is_refused_unsent(ports) -> None:
         side_effect=LockOperationUnsupported("slot 40 is past 30"),
     ):
         with pytest.raises(LockError) as caught:
-            await port.write(40, "4040")
+            await port.write(pin_address(40), "4040")
 
     assert caught.value.kind is ErrorKind.SLOT_REFUSED
     assert not caught.value.sent
     assert 40 not in lock.codes
+
+
+async def test_a_credential_type_the_port_does_not_write_is_refused_unsent(
+    ports,
+) -> None:
+    """Only PINs reach the provider until it can write another type."""
+    port, _, lock = await ports()
+    password = CredentialAddress(1, CredentialType.PASSWORD)
+
+    with pytest.raises(LockError) as refused:
+        await port.write(password, "secret")
+    assert (refused.value.kind, refused.value.sent) == (ErrorKind.SLOT_REFUSED, False)
+
+    with pytest.raises(LockError) as refused:
+        await port.read([password])
+    assert (refused.value.kind, refused.value.sent) == (ErrorKind.SLOT_REFUSED, False)
+    # Nothing left for the lock.
+    assert [call for call in lock.call_order if call != "setup"] == []
+
+
+async def test_a_read_answers_by_pin_address(ports) -> None:
+    """The worker's keys come back as it asked for them."""
+    port, _, lock = await ports()
+    lock.codes = {1: "1234"}
+
+    assert await port.read([pin_address(1)]) == {pin_address(1): Holds("1234")}
 
 
 # Through the worker -----------------------------------------------------------------
@@ -364,28 +400,32 @@ async def test_a_slot_past_the_locks_capacity_is_refused_unsent(ports) -> None:
 async def test_a_worker_syncs_a_provider_through_the_port(ports) -> None:
     """Read first, write what differs, confirm, done."""
     _, worker, lock = await ports()
-    worker.want(1, "1234")
-    worker.want(3, "3333")
+    worker.want(pin_address(1), "1234")
+    worker.want(pin_address(3), "3333")
     worker.start()
     await worker.settled()
 
     assert lock.codes[3] == "3333"
-    assert worker.status(1) == worker.status(3) == (Status.IN_SYNC, None)
+    assert (
+        worker.status(pin_address(1))
+        == worker.status(pin_address(3))
+        == (Status.IN_SYNC, None)
+    )
     assert [call[0] for call in lock.service_calls["set_usercode"]] == [3]
 
 
 async def test_a_refused_pin_turns_the_slot_off(ports) -> None:
     """The lock's refusal reaches the integration as a disabled slot."""
     port, worker, lock = await ports()
-    disabled: list[int] = []
+    disabled: list[CredentialAddress] = []
     worker.on_disable = disabled.append
     lock.refuse("set", 3)
-    worker.want(3, "3333")
+    worker.want(pin_address(3), "3333")
     worker.start()
     await worker.settled()
 
-    assert worker.status(3) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
-    assert disabled == [3]
+    assert worker.status(pin_address(3)) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
+    assert disabled == [pin_address(3)]
 
 
 # Pushes and the stand-in coordinator ---------------------------------------------------
@@ -394,14 +434,14 @@ async def test_a_refused_pin_turns_the_slot_off(ports) -> None:
 async def test_a_providers_echo_of_its_own_write_is_not_a_push(ports) -> None:
     """Only the lock reports: an echo stands in for nothing it said."""
     port, worker, lock = await ports(MockLCMPushLock)
-    worker.want(2, None)
-    worker.want(3, "3333")
-    pushed: list[tuple[int, object]] = []
+    worker.want(pin_address(2), None)
+    worker.want(pin_address(3), "3333")
+    pushed: list[tuple[CredentialAddress, object]] = []
     worker.push = lambda slot, value: pushed.append((slot, value))  # type: ignore[method-assign]
-    await port.write(3, "3333")
+    await port.write(pin_address(3), "3333")
     lock._push_credential_update(2, SlotCredential.empty())
 
-    assert pushed == [(2, Seen.EMPTY)]
+    assert pushed == [(pin_address(2), Seen.EMPTY)]
 
 
 async def test_setup_subscribes_the_provider_to_its_pushes(ports) -> None:
@@ -416,8 +456,8 @@ async def test_setup_subscribes_the_provider_to_its_pushes(ports) -> None:
 async def test_the_provider_asks_whether_a_pin_is_wanted(ports) -> None:
     """Some locks call a slot available after a PIN lands; the provider asks."""
     _, worker, lock = await ports()
-    worker.want(3, "3333")
-    worker.want(4, None)
+    worker.want(pin_address(3), "3333")
+    worker.want(pin_address(4), None)
 
     assert lock._expects_pin(3)
     assert not lock._expects_pin(4)
@@ -427,7 +467,7 @@ async def test_the_provider_asks_whether_a_pin_is_wanted(ports) -> None:
 async def test_a_providers_refresh_request_is_a_read(ports) -> None:
     """After a reconnect or a lock's event: every tracked slot is read."""
     _, worker, lock = await ports()
-    worker.want(1, "1234")
+    worker.want(pin_address(1), "1234")
     worker.start()
     await worker.settled()
     reads = len(lock.service_calls["get_usercodes"])
@@ -514,10 +554,13 @@ async def test_silence_from_an_earlier_read_is_not_carried_over(ports) -> None:
     """A read that never reached the bridge's slot walk says nothing about silence."""
     port, _, lock = await ports(_Silent)
     lock.silent = frozenset({2})
-    await port.read([1, 2])
+    await port.read([pin_address(1), pin_address(2)])
     _Silent.async_get_usercodes = MockLCMLock.async_get_usercodes  # type: ignore[method-assign]
     try:
-        assert await port.read([1, 2]) == {1: Holds("1234"), 2: Holds("5678")}
+        assert await port.read([pin_address(1), pin_address(2)]) == {
+            pin_address(1): Holds("1234"),
+            pin_address(2): Holds("5678"),
+        }
     finally:
         del _Silent.async_get_usercodes
 
@@ -525,13 +568,13 @@ async def test_silence_from_an_earlier_read_is_not_carried_over(ports) -> None:
 async def test_a_push_after_the_write_is_back_is_the_lock(ports) -> None:
     """Only the echo during the write is dropped; the lock's later word counts."""
     port, worker, lock = await ports(MockLCMPushLock)
-    worker.want(3, "3333")
-    pushed: list[tuple[int, object]] = []
+    worker.want(pin_address(3), "3333")
+    pushed: list[tuple[CredentialAddress, object]] = []
     worker.push = lambda slot, value: pushed.append((slot, value))  # type: ignore[method-assign]
-    await port.write(3, "3333")
+    await port.write(pin_address(3), "3333")
     lock._confirm_slot(3, SlotCredential.empty())
 
-    assert pushed == [(3, Seen.EMPTY)]
+    assert pushed == [(pin_address(3), Seen.EMPTY)]
 
 
 @pytest.mark.parametrize(
@@ -559,7 +602,7 @@ async def test_disabled_polling_skips_the_scan_not_the_drift_check(
 ) -> None:
     """ "Disable polling" spares the drift check, which catches keypad changes."""
     port, worker, lock = await ports()
-    worker.want(1, "1234")
+    worker.want(pin_address(1), "1234")
     worker.start()
     await worker.settled()
     port.polling = lambda: False
@@ -613,11 +656,11 @@ async def test_an_outage_on_reads_and_writes_holds_no_slot(ports) -> None:
     _, worker, lock = await ports()
     lock.fail("get", error=LockOperationFailed)
     lock.fail("set", error=LockOperationFailed)
-    worker.want(3, "3333")
+    worker.want(pin_address(3), "3333")
     worker.start()
     await worker.settled()
 
-    assert worker.status(3)[1] is None
+    assert worker.status(pin_address(3))[1] is None
     assert not worker.reachable
 
 
@@ -625,14 +668,14 @@ async def test_writes_failing_while_reads_answer_hold_the_slot(ports) -> None:
     """The read-back answers in the same sync: the failed write is the slot's."""
     _, worker, lock = await ports()
     lock.fail("set", 3, error=LockOperationFailed)
-    worker.want(3, "3333")
+    worker.want(pin_address(3), "3333")
     worker.start()
     async with asyncio.timeout(5):
-        while worker.status(3)[0] is not Status.SUSPENDED:
+        while worker.status(pin_address(3))[0] is not Status.SUSPENDED:
             worker.request_sync()
             await worker.settled()
 
-    assert worker.status(3) == (Status.SUSPENDED, Repair.CANT_SET)
+    assert worker.status(pin_address(3)) == (Status.SUSPENDED, Repair.CANT_SET)
     assert worker.reachable
 
 
@@ -655,7 +698,7 @@ async def test_a_deferred_setup_is_retried_by_the_next_write(
     assert not lock.provider_setup_succeeded
 
     with contextlib.suppress(LockError):
-        await port.write(3, "3333")
+        await port.write(pin_address(3), "3333")
     await hass.async_block_till_done()
 
     assert lock.provider_setup_succeeded
@@ -664,7 +707,7 @@ async def test_a_deferred_setup_is_retried_by_the_next_write(
 async def test_the_poll_reads_the_lock(hass: HomeAssistant, ports) -> None:
     """On the event loop, at the provider's cadence."""
     _, worker, lock = await ports()
-    worker.want(1, "1234")
+    worker.want(pin_address(1), "1234")
     worker.start()
     await worker.settled()
     reads = len(lock.service_calls["get_usercodes"])
@@ -685,7 +728,7 @@ async def test_a_lock_that_turns_out_to_push_stops_polling(
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
     await port.async_setup(entry)
-    worker.want(1, "1234")
+    worker.want(pin_address(1), "1234")
     worker.start()
     await worker.settled()
 
@@ -724,7 +767,7 @@ async def test_a_setup_that_failed_on_a_blip_is_retried_by_the_next_write(
     assert not lock.provider_setup_succeeded
 
     with contextlib.suppress(LockError):
-        await port.write(3, "3333")
+        await port.write(pin_address(3), "3333")
     await hass.async_block_till_done()
 
     assert lock.provider_setup_succeeded
@@ -738,14 +781,14 @@ async def test_a_lock_whose_setup_failed_on_a_blip_gets_its_slots_written(
         lambda lock: lock.fail("setup", error=LockDisconnected, times=1)
     ):
         _, worker, lock = await ports(_NoConnectionCheck)
-    worker.want(3, "3333")
+    worker.want(pin_address(3), "3333")
     worker.start()
     await _sync_until_quiet(worker)
     await hass.async_block_till_done()
     await _sync_until_quiet(worker)
 
     assert lock.codes.get(3) == "3333"
-    assert worker.status(3) == (Status.IN_SYNC, None)
+    assert worker.status(pin_address(3)) == (Status.IN_SYNC, None)
 
 
 # F2 -------------------------------------------------------------------------------
@@ -760,11 +803,11 @@ async def test_a_lock_not_set_up_holds_no_slot(hass: HomeAssistant, ports) -> No
     with when_mock_lock_built(_no_pin):
         _, worker, lock = await ports()
     assert not lock.provider_setup_succeeded
-    worker.want(3, "3333")
+    worker.want(pin_address(3), "3333")
     worker.start()
     await _sync_until_quiet(worker)
 
-    assert worker.status(3)[1] is None
+    assert worker.status(pin_address(3))[1] is None
     assert lock.service_calls["set_usercode"] == []
 
 
@@ -799,7 +842,7 @@ async def test_a_provider_the_port_never_set_up_is_read(ports) -> None:
     """A one-off read's provider is never set up: reading it needs nothing more."""
     port, _, lock = await ports(setup=False)
 
-    assert await port.read([1]) == {1: Holds("1234")}
+    assert await port.read([pin_address(1)]) == {pin_address(1): Holds("1234")}
 
 
 # Codes nobody here manages ------------------------------------------------------------
@@ -812,7 +855,7 @@ async def test_a_read_keeps_what_the_lock_said_of_slots_nobody_here_manages(
     port, _, lock = await ports()
     lock.codes = {1: "1234", 7: "7777"}
 
-    assert await port.read([1]) == {1: Holds("1234")}
+    assert await port.read([pin_address(1)]) == {pin_address(1): Holds("1234")}
     assert port.others[7] == Holds("7777")
 
 
@@ -822,7 +865,7 @@ async def test_a_push_about_a_slot_nobody_here_manages_is_kept_aside(ports) -> N
     lock._push_credential_update(9, SlotCredential.known("9999"))
 
     assert port.others == {9: Holds("9999")}
-    assert 9 not in worker.slots
+    assert pin_address(9) not in worker.slots
 
 
 async def test_the_last_word_on_a_slot_stays_after_the_worker_lets_it_go(
@@ -831,9 +874,9 @@ async def test_the_last_word_on_a_slot_stays_after_the_worker_lets_it_go(
     """A one-off write's read-back is still on the card once the slot is dropped."""
     port, _, lock = await ports()
     lock.codes = {1: "1234", 7: "7777"}
-    await port.read([7])
+    await port.read([pin_address(7)])
     lock.codes[7] = "7070"
-    await port.read([7])
+    await port.read([pin_address(7)])
 
     assert port.others[7] == Holds("7070")
 
@@ -842,8 +885,8 @@ async def test_a_clear_that_found_nothing_says_so(ports) -> None:
     """Not proof of what the slot holds: the worker does not record it as cleared."""
     port, _, lock = await ports()
 
-    assert await port.write(9, None) is False
-    assert await port.write(1, None) is True
+    assert await port.write(pin_address(9), None) is False
+    assert await port.write(pin_address(1), None) is True
 
 
 async def test_an_unknown_capacity_does_not_stop_a_read(ports) -> None:
@@ -852,16 +895,16 @@ async def test_an_unknown_capacity_does_not_stop_a_read(ports) -> None:
     with patch.object(
         type(lock), "_assert_slot_within_capacity", side_effect=RuntimeError("bug")
     ):
-        assert await port.read([1]) == {1: Holds("1234")}
+        assert await port.read([pin_address(1)]) == {pin_address(1): Holds("1234")}
 
 
 async def test_a_code_gone_from_a_lock_read_whole_leaves_the_side_table(ports) -> None:
     """A read of the whole lock tells of every code: one it omits is gone."""
     port, _, lock = await ports()
     lock.codes = {1: "1234", 7: "7777"}
-    await port.read([1])
+    await port.read([pin_address(1)])
     del lock.codes[7]  # deleted at the keypad
-    await port.read([1])
+    await port.read([pin_address(1)])
 
     assert 7 not in port.others
 
@@ -870,10 +913,10 @@ async def test_a_lock_walked_slot_by_slot_keeps_what_it_was_not_asked(ports) -> 
     """A walk of the slots asked for says nothing about the others."""
     port, _, lock = await ports()
     lock.codes = {1: "1234", 7: "7777"}
-    await port.read([1])
+    await port.read([pin_address(1)])
     with patch.object(type(lock), "per_exchange_budget", 10.0):
         del lock.codes[7]
-        await port.read([1])
+        await port.read([pin_address(1)])
 
     assert port.others[7] == Holds("7777")
 
@@ -895,7 +938,7 @@ async def _push_lock(ports, drift: timedelta | None, *, push: bool = True):  # n
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(lock.hass)
     await port.async_setup(entry)
-    worker.want(1, "1234")
+    worker.want(pin_address(1), "1234")
     worker.start()
     await worker.settled()
     return port, worker, lock
@@ -959,9 +1002,9 @@ async def test_a_push_about_several_slots_reaches_each(
 ) -> None:
     """Every slot in one push reaches the worker; one nobody manages is kept aside."""
     port, worker, lock = await ports(MockLCMPushLock)
-    worker.want(1, "1234")
-    worker.want(3, None)
-    pushed: list[tuple[int, object]] = []
+    worker.want(pin_address(1), "1234")
+    worker.want(pin_address(3), None)
+    pushed: list[tuple[CredentialAddress, object]] = []
     worker.push = lambda slot, value: pushed.append((slot, value))  # type: ignore[method-assign]
     assert lock.coordinator is not None
 
@@ -973,7 +1016,7 @@ async def test_a_push_about_several_slots_reaches_each(
         }
     )
 
-    assert pushed == [(1, Holds("9999")), (3, Seen.EMPTY)]
+    assert pushed == [(pin_address(1), Holds("9999")), (pin_address(3), Seen.EMPTY)]
     assert port.others == {7: Holds("7777")}
 
 
@@ -982,15 +1025,15 @@ async def test_a_poll_the_lock_does_not_answer_raises_nothing_and_keeps_the_read
 ) -> None:
     """A failed poll is the worker's to count: the slot keeps what was last read."""
     port, worker, lock = await ports()
-    worker.want(1, "1234")
+    worker.want(pin_address(1), "1234")
     worker.start()
     await worker.settled()
-    seen = worker.slots[1].seen
+    seen = worker.slots[pin_address(1)].seen
     lock.fail("get", error=LockDisconnected)
 
     await port._read_tracked()
 
-    assert worker.slots[1].seen == seen == Holds("1234")
+    assert worker.slots[pin_address(1)].seen == seen == Holds("1234")
     assert worker.reachable
 
 
@@ -1077,23 +1120,23 @@ async def test_a_slot_past_capacity_is_no_answer_from_a_dead_lock(ports) -> None
             raise LockOperationUnsupported(f"slot {slot} is past 30")
 
     with patch.object(type(lock), "_assert_slot_within_capacity", capacity):
-        worker.want(1, "1111")
-        worker.want(40, "4040")
+        worker.want(pin_address(1), "1111")
+        worker.want(pin_address(40), "4040")
         worker.start()
         await worker.settled()
-        assert worker.status(1) == (Status.IN_SYNC, None)
-        assert worker.status(40) == (Status.SUSPENDED, Repair.CANT_SET)
+        assert worker.status(pin_address(1)) == (Status.IN_SYNC, None)
+        assert worker.status(pin_address(40)) == (Status.SUSPENDED, Repair.CANT_SET)
 
         # The lock goes dead, and the user changes slot 1's PIN.
         lock.fail("get", error=LockDisconnected)
         lock.fail("set", error=LockDisconnected)
-        worker.want(1, "2222")
+        worker.want(pin_address(1), "2222")
         async with asyncio.timeout(5):
-            while not worker.offline and worker.status(1)[1] is None:
+            while not worker.offline and worker.status(pin_address(1))[1] is None:
                 await asyncio.sleep(0)
 
         # An outage alone never holds a normal slot.
-        assert worker.status(1)[1] is None
+        assert worker.status(pin_address(1))[1] is None
         assert worker.offline
         await worker.stop(grace=0.1)
 
@@ -1110,10 +1153,10 @@ async def test_a_lock_with_only_slots_past_capacity_holds_them_at_once(
             raise LockOperationUnsupported(f"slot {slot} is past 30")
 
     with patch.object(type(lock), "_assert_slot_within_capacity", capacity):
-        worker.want(40, "4040")
+        worker.want(pin_address(40), "4040")
         worker.start()
         await worker.settled()
-        assert worker.status(40) == (Status.SUSPENDED, Repair.CANT_SET)
+        assert worker.status(pin_address(40)) == (Status.SUSPENDED, Repair.CANT_SET)
         assert worker.reachable
         assert 40 not in lock.codes
         await worker.stop(grace=0.1)

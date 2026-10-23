@@ -29,7 +29,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
-from ..model.credentials import CredentialAddress, SlotCredential
+from ..model.credentials import (
+    CredentialAddress,
+    CredentialType,
+    SlotCredential,
+    pin_address,
+)
 from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -108,7 +113,7 @@ class ProviderPort:
         self.name_for = name_for
         self.polling = polling
         # The worker that owns the lock: set once it is built.
-        self.worker: LockWorker[ProviderPort] | None = None
+        self.worker: LockWorker[CredentialAddress, ProviderPort] | None = None
         # The slot a write is in the provider for: its own echo is not the lock.
         self._writing: int | None = None
         # When each slot was last written, on the event loop's clock: a
@@ -175,17 +180,21 @@ class ProviderPort:
                 (time.monotonic() - start) * 1000,
             )
 
-    async def read(self, slots: Collection[int]) -> dict[int, Reading]:
+    async def read(
+        self, slots: Collection[CredentialAddress]
+    ) -> dict[CredentialAddress, Reading]:
         """Ask the lock about ``slots`` now (see ``_read``), timed for the logs."""
+        numbers = [self._pin_slot(address) for address in slots]
         op = (
             "read (hard refresh)"
             if self.provider.fresh_read_is_hard_refresh
             else "read (get usercodes)"
         )
-        where = tuple(slots)
-        return await self._timed(
-            op, where[0] if len(where) == 1 else where, lambda: self._read(slots)
+        where = tuple(numbers)
+        readings = await self._timed(
+            op, where[0] if len(where) == 1 else where, lambda: self._read(numbers)
         )
+        return {pin_address(slot): seen for slot, seen in readings.items()}
 
     async def _read(self, slots: Collection[int]) -> dict[int, Reading]:
         """
@@ -288,7 +297,15 @@ class ProviderPort:
         A tracked slot counts by what it wants (one on its way to another
         PIN, or out, does not); any other slot by what the lock said of it.
         """
-        tracked = {} if self.worker is None else self.worker.slots
+        tracked = (
+            {}
+            if self.worker is None
+            else {
+                address.user_ref: current
+                for address, current in self.worker.slots.items()
+                if address.credential_type is CredentialType.PIN
+            }
+        )
         for other, held in self.others.items():
             if other != slot and other not in tracked and held == Holds(pin):
                 return other
@@ -314,10 +331,28 @@ class ProviderPort:
         else:
             self._written.discard(slot)
 
-    async def write(self, slot: int, pin: str | None) -> bool | None:
-        """Put ``pin`` in ``slot``, or clear it (see ``_write``), timed for the logs."""
-        op = "clear" if pin is None else "set"
-        return await self._timed(op, slot, lambda: self._write(slot, pin))
+    async def write(self, slot: CredentialAddress, value: str | None) -> bool | None:
+        """Put ``value`` at ``slot``, or clear it (see ``_write``), timed for the logs."""
+        number = self._pin_slot(slot)
+        op = "clear" if value is None else "set"
+        return await self._timed(op, number, lambda: self._write(number, value))
+
+    def _pin_slot(self, address: CredentialAddress) -> int:
+        """
+        Return ``address``'s slot; refuse, unsent, any type but a PIN.
+
+        The providers write PINs only: another type never reaches them.
+        """
+        if address.credential_type is not CredentialType.PIN:
+            raise LockError(
+                ErrorKind.SLOT_REFUSED,
+                sent=False,
+                message=(
+                    f"{self.provider.lock.entity_id} is not written "
+                    f"{address.credential_type} credentials"
+                ),
+            )
+        return address.user_ref
 
     async def _write(self, slot: int, pin: str | None) -> bool | None:
         """
@@ -503,10 +538,10 @@ class ProviderPort:
             # A provider echoing the write it is making is not the lock.
             return
         self.not_reported.discard(slot)
-        if slot not in self.worker.slots:
+        if (address := pin_address(slot)) not in self.worker.slots:
             self.others[slot] = reading(credential)
             return
-        self.worker.push(slot, reading(credential))
+        self.worker.push(address, reading(credential))
 
     def poll(self) -> None:
         """Read every slot the worker tracks, unless a poll is still out."""
@@ -519,7 +554,9 @@ class ProviderPort:
 
     def wants_pin(self, slot: int) -> bool:
         """Return whether ``slot`` should hold a PIN."""
-        current = None if self.worker is None else self.worker.slots.get(slot)
+        current = (
+            None if self.worker is None else self.worker.slots.get(pin_address(slot))
+        )
         return current is not None and current.want is not None
 
     async def _read_tracked(self) -> None:
@@ -660,3 +697,6 @@ class _Coordinator:
         """
         if self._port.provider.supports_push:
             self._port._arm_poll()
+
+
+type PortWorker = LockWorker[CredentialAddress, ProviderPort]
