@@ -11,7 +11,7 @@ the value -- and a release clear still owed, with the entry that gave the slot
 up. What a slot holds is read again; counts, fights and holds start over (a
 hold's repair outlives a restart on its own).
 
-What was written is kept under ``wrote_by_type``, and the PIN's again under
+What was written is kept under ``fingerprints``, and the PIN's again under
 ``wrote``: a release from before credential types reads only ``wrote``, so a
 downgrade keeps working, and a record it saves reads back as the PIN's alone.
 
@@ -41,10 +41,10 @@ SAVE_DELAY = 1.0
 Record = dict[str, Any]
 
 
-def _wrote_by_type(saved: dict[str, Any]) -> dict[str, str]:
+def _fingerprints(saved: dict[str, Any]) -> dict[str, str]:
     """Return what was last written to a slot, per credential type."""
-    if "wrote_by_type" in saved:
-        return saved["wrote_by_type"]
+    if "fingerprints" in saved:
+        return saved["fingerprints"]
     if "wrote" in saved:
         return {CredentialType.PIN.value: saved["wrote"]}
     return {}
@@ -76,7 +76,7 @@ class LockStore:
         if record is None:
             return None
         saved = record["slots"].get(str(address.user_ref), {})
-        return _wrote_by_type(saved).get(address.credential_type.value)
+        return _fingerprints(saved).get(address.credential_type.value)
 
     def wrote_pin(self, key: str, slot: int) -> bool:
         """
@@ -131,13 +131,13 @@ class LockStore:
         for address, slot in worker.slots.items():
             tracked[address.user_ref].append((address, slot))
         for number, held in tracked.items():
-            wrote = dict(_wrote_by_type(slots.get(str(number), {})))
+            wrote = dict(_fingerprints(slots.get(str(number), {})))
             for address, slot in held:
                 if slot.wrote is None:
                     wrote.pop(address.credential_type.value, None)
                 else:
                     wrote[address.credential_type.value] = slot.wrote
-            saved: dict[str, Any] = {"wrote_by_type": wrote} if wrote else {}
+            saved: dict[str, Any] = {"fingerprints": wrote} if wrote else {}
             if (pin := wrote.get(CredentialType.PIN.value)) is not None:
                 saved["wrote"] = pin
             if any(slot.release and slot.hold is None for _, slot in held) and (

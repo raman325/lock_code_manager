@@ -250,7 +250,7 @@ async def test_the_store_never_holds_a_pin(
     salt = hass.data[DOMAIN]["instance_id"].encode()
     [record] = saved["locks"].values()
     pin = fingerprint("4321", salt)
-    assert record["slots"]["1"] == {"wrote": pin, "wrote_by_type": {"pin": pin}}
+    assert record["slots"]["1"] == {"wrote": pin, "fingerprints": {"pin": pin}}
     assert record["slots"].get("2", {}).get("wrote") in (None, CLEARED)
     assert not {"1234", "4321", "5678"} & set(leaves(saved))
 
@@ -807,7 +807,7 @@ async def test_remembering_one_type_keeps_the_others_in_the_slot(
                     "slots": {
                         "1": {
                             "wrote": "old",
-                            "wrote_by_type": {"pin": "old", "password": "pw"},
+                            "fingerprints": {"pin": "old", "password": "pw"},
                         }
                     },
                 }
@@ -842,5 +842,5 @@ async def test_a_slot_with_no_pin_written_keeps_no_wrote(
 
     store.remember(key, LOCK_1_ENTITY_ID, worker, lambda slot: None)
 
-    assert store._locks[key]["slots"]["2"] == {"wrote_by_type": {"password": "pw"}}
+    assert store._locks[key]["slots"]["2"] == {"fingerprints": {"password": "pw"}}
     assert not store.wrote_pin(key, 2)
