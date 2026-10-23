@@ -1,0 +1,38 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "fd0a643f4368",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-address-core",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "custom_components/lock_code_manager/ha/adapter.py",
+    "custom_components/lock_code_manager/ha/runtime.py",
+    "custom_components/lock_code_manager/model/credentials.py",
+    "custom_components/lock_code_manager/sync/registry.py",
+    "custom_components/lock_code_manager/sync/worker.py",
+    "tests/test_lock_store.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/fd/0a643f4368/0/metadata.json",
+      "transcript": "/fd/0a643f4368/0/full.jsonl",
+      "compact_transcript": "/fd/0a643f4368/0/transcript.jsonl",
+      "content_hash": "/fd/0a643f4368/0/content_hash.txt",
+      "prompt": "/fd/0a643f4368/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 40171,
+    "cache_read_tokens": 6488409,
+    "output_tokens": 17408,
+    "api_call_count": 21,
+    "subagent_tokens": {
+      "input_tokens": 334,
+      "cache_creation_tokens": 499924,
+      "cache_read_tokens": 14785684,
+      "output_tokens": 87668,
+      "api_call_count": 167
+    }
+  }
+}

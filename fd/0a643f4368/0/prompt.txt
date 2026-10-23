@@ -1,0 +1,357 @@
+check if we have any existing documentation in docs/ or specs/ on supporting additional credential types
+
+---
+
+I want to move forward with adding password support. In my mind, it should be a separate text entity class with its own limitations (can we enforce characters via regex, max and min length, etc). In the card, I am thinking there should be a single input box and icons/tabs for pin, password, etc. to switch between them, but I am open to ideas
+
+---
+
+yes, one note though that there is a rule that disables a slot when the PIN is blank. The rule shifts to disabling the slot when there is no credential. If at least one credential (PIN, password, something else in the futre) exists, that's good enough
+
+---
+
+yes. One open note is how to handle the lock cards
+
+---
+
+Yes. Wondering if we should avoid the pattern on password too and just validate upstream
+
+---
+
+yes
+
+---
+
+can you give me a TLDR version of it?
+
+---
+
+why not support for matter?
+
+---
+
+if you find it in the Matter spec, confirm the other providers too against standards/code
+
+---
+
+<task-notification>
+<task-id>a8744737bffab6f70</task-id>
+<tool-use-id>toolu_01YNJxqSf6C1Vvk5E1Dtyfb3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a8744737bffab6f70.output</output-file>
+<status>completed</status>
+<summary>Agent "Zigbee password credential support" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I ran this read-only and changed nothing. **Zigbee locks have no password credential distinct from a PIN, at any of the four layers.** The Door Lock cluster as implemented defines only two credential kinds: PIN and RFID.
+
+| Layer | Credential types available | Password? | Citation |
+|---|---|---|---|
+| (a) ZCL Door Lock 0x0101, as zigpy 2.2.0 models it | PIN and RFID. Commands are `set/get/clear/clear_all_pin_code(s)` and the matching `rfid_code` set. `OperationEventSource` is `Keypad=0, RF=1, Manual=2, RFID=3, Indeterminate=0xFF`. `ProgrammingEvent` has only PIN and RFID added/deleted. Attributes `num_of_pin_users_supported` and `num_of_rfid_users_supported` | No | `.venv/lib/python3.14/site-packages/zigpy/zcl/clusters/closures.py:196-201, 223-230, 319-337, 429-446, 517-534` |
+| (b) zha library 2.2.2 | PIN only. `async_set/enable/disable/clear_lock_user_code` call `set_pin_code` / `clear_pin_code`. There is no RFID write | No | `site-packages/zha/application/platforms/lock/__init__.py:156-182` |
+| (b) HA ZHA | PIN only, through 4 services: `set/enable/disable/clear_lock_user_code` | No | `site-packages/homeassistant/components/zha/lock.py:27-30` |
+| (c) LCM ZHA and Z2M providers (`origin/main`) | Writes go through `set_pin_code`. Unlock events can report PIN, RFID, or FINGERPRINT (source value 4, a vendor extension) | No | `providers/zha.py:169-178, 256-267`; `providers/zigbee2mqtt.py:61-70, 182-185` |
+| (d) zigbee-herdsman-converters (master) | Only `pin_code` is settable (`pincode_lock` sends `setPinCode` / `clearPinCode`). `lockSourceName` is `keypad, rf, manual, rfid, fingerprint`. GitHub code search for `setRfidCode` in the repo returns 0 hits | No | [exposes.ts:1387-1396](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/exposes.ts), [toZigbee.ts:439-462](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/converters/toZigbee.ts), [constants.ts:290-296](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/constants.ts) |
+
+**Caveats:**
+- I could not find the CSA ZCL specification text itself. Secondary sources describe the same PIN and RFID command set: [Silicon Labs SetRfid](https://docs.silabs.com/zigbee/7.0/zigbee-af-api/zcl-door-lock-cluster-set-rfid-command) and [Espressif ZCL door_lock](https://docs.espressif.com/projects/esp-zigbee-sdk/en/latest/esp32/api-reference/zcl/esp_zigbee_zcl_door_lock.html).
+- "password" does appear in Z2M vendor files: Aqara S2 in `lumi.ts:3132-3146`, as actions like `password_add`/`password_open`, and a Yale raw action in `yale.ts:513`. These are read-only event labels; the Aqara S2 has `toZigbee: []`, so nothing can be written. The source doesn't say whether "password" there means anything other than the keypad code.
+
+**Conclusion:** The PIN-only limit is not LCM's choice. The cluster has no password type, so there is nothing for zigpy, ZHA or Z2M to expose. RFID is the one other kind the standard defines. zigpy can send it, but neither HA ZHA nor zigbee-herdsman-converters offers a way to write it, so RFID writes would be the only possible extension. Password should stay unsupported for both Zigbee providers.</result>
+<usage><subagent_tokens>55966</subagent_tokens><tool_uses>14</tool_uses><duration_ms>66735</duration_ms></usage>
+</task-notification>
+
+---
+
+update the specs checkout
+
+---
+
+<task-notification>
+<task-id>ae3131f3ef16641c0</task-id>
+<tool-use-id>toolu_01V2Ce46kvvrsjNRmHFWLVTR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ae3131f3ef16641c0.output</output-file>
+<status>completed</status>
+<summary>Agent "Schlage and Akuvox password support" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Neither lock offers a password credential separate from the numeric PIN. The limit sits below Lock Code Manager: the Home Assistant integration and the Python library each enforce a 4-8 digit PIN, and neither has a password type.
+
+| Provider | Credential types available | Password? | Citation |
+|---|---|---|---|
+| Schlage | One kind only: an access code. `pyschlage` `AccessCode` has `name`, `code`, `schedule`, `notify_on_use`, `disabled`. The code is sent as `"accessCode": int(self.code)`, so it must be numeric. HA's `add_code` service checks `cv.matches_regex(r"^\d{4,8}$")`. HA's services are `add_code`, `delete_code` and `get_codes`. | No. Every "password" hit in `pyschlage` is the account login (`auth.py:72`). | `~/.cache/uv/archive-v0/hNEV6MGJw0CZeSWw/pyschlage/code.py:164-188, 253` (2026.9.0); `.venv/.../homeassistant/components/schlage/__init__.py:37`, `services.yaml` |
+| Akuvox (`local_akuvox`, tykeal; library `pylocal-akuvox` 1.6.0) | The `User` record holds two credentials: `private_pin` and `card_code` (an RF card). Its other fields are scheduling, relay, floor and source data. The PIN is checked with `_PIN_PATTERN = re.compile(r"^[0-9]{4,8}$")` in the library, and again by the integration ("PIN must be 4-8 digits"). | No. `open_door_password` is a setting for a capability-report test (`report_service.py:33`), not a user credential. | `pylocal_akuvox/models/users.py:19-31`, `users.py:25,38-47` (wheel unpacked to `/tmp/akuvox-dl.pGVs`); `/Users/raman/projects/homeassistant-local-akuvox/custom_components/local_akuvox/validation.py:53-65`, `services.yaml` `add_user` |
+
+**What LCM reports today:** neither `schlage.py` nor `akuvox.py` overrides `async_get_capabilities` or `supports_native_users`. For such providers the base class always builds credentials as `CredentialType.PIN` (`_base.py:1302-1304`, `1349`). The Akuvox provider writes only `private_pin` (`akuvox.py:140,162`) and ignores `card_code`.
+
+**Conclusion:** For both locks, password support is blocked by the API, not by LCM. Each offers one value-type credential, and it is digits-only, 4-8 long. I could only check what the libraries and integrations expose. For Schlage's cloud API and Akuvox's device firmware I found nothing showing a password type, and I'm not claiming more than that. The one extra credential either side exposes is Akuvox's RF `card_code`. It has no format check in the integration's service schema (`cv.string`), and it's a card, not a password.</result>
+<usage><subagent_tokens>67250</subagent_tokens><tool_uses>24</tool_uses><duration_ms>262634</duration_ms></usage>
+</task-notification>
+
+---
+
+as a PR to zwave-js/specs
+
+---
+
+after that lets submit a fix to zwave-js?
+
+---
+
+whyd we delete the xlsx registries in the specs PR?
+
+---
+
+yes move them to a legacy folder, then push the zwave-js fix and create the RP
+
+---
+
+ok great, now lets get back to the main thing we were working on
+
+---
+
+lets just raise the minimum, kerep things simple
+
+---
+
+yes
+
+---
+
+should the type just be part of the salt when its not PIN?
+
+---
+
+no its fine keep it the same for every type. Lets make it subagent driven
+
+---
+
+<task-notification>
+<task-id>a3a7275c91e767df1</task-id>
+<tool-use-id>toolu_012DZqLBPFR2boGe2mcQ7ELP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a3a7275c91e767df1.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: generic registry" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+- **Commit:** `ad1a9b62`, made with `--no-verify`. It contains only `tests/sync/test_registry.py` (9 insertions, 3 deletions). `.entire/.gitignore` is still modified and uncommitted.
+- **Test change:** `test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up` is now parametrized over `how` (`"unclaim"` or `"release"`). `unclaim` calls `registry.unclaim("front", "b", 3)` and `release` calls `await registry.release("front", "b")`. The assertions are the same for both.
+- **Mutant:** I put the pre-fix loop (`for key in self._keys(...): entry.worker.forget(key)`) back in `release` only. The `[release]` case failed and `[unclaim]` passed, giving 1 failed and 39 passed. I restored `registry.py` from a saved copy.
+- **Results after restoring:**
+  - `tests/sync` plus `tests/test_architecture.py`: 224 passed.
+  - ruff check, ruff format and flake8 pass on the test file.</result>
+<usage><subagent_tokens>73101</subagent_tokens><tool_uses>2</tool_uses><duration_ms>23943</duration_ms></usage>
+</task-notification>
+
+---
+
+as an aside, check the review comment on the zwave-js/zwave-js PR we submitted earlier
+
+---
+
+<task-notification>
+<task-id>ad16d7a25286eebc5</task-id>
+<tool-use-id>toolu_0141SsszgJMREGVbG28pQPbS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ad16d7a25286eebc5.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 8 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```
+Stage 1: ✅ compliant
+Stage 2:
+  Strengths: …
+  Issues: Minor ×2 (none Critical or Important)
+  Assessment: APPROVED
+```
+
+**Stage 1: compliant.** I read every changed line in `git diff d0ec990b f4cb7599 -- tests`. Each change is one of two kinds: a key now spelled with `pin_address(n)`, or a type annotation that changed from `int` to `CredentialAddress`. The task allows a store shape and a diagnostics shape to change, but neither changed here, and no expected value changed meaning.
+
+Slot-level calls correctly keep the bare int, for example `port.others.get(slot)` in the z2m `_record_pushes` helper and `async_give_up(..., 2)`.
+
+Three changed files weren't on the task's list: `tests/conftest.py`, `tests/providers/matter/test_e2e.py` and `tests/providers/test_seam.py`. All three fall under the task's rule. The `test_seam` edits were needed anyway, because `ProviderPort.write` given an int raises `AttributeError`.
+
+Two listed files were left unchanged: `test_migration_history.py` and `test_repairs_references.py`. That's correct. The task's grep only matched `entity_registry` in them, and neither touches a worker, registry or store key.
+
+**Stage 2**
+
+Strengths:
+- The implementer was right that the flipped `not in` assertions were passing without checking anything at the base commit, since the worker was already keyed by address there. Spelling the key as an address makes them check something again.
+- The project gate (`prek run mypy --all-files`) passes, and `prek` on the 14 changed files passes.
+
+**1. Hunt for remaining silent no-ops: none found.**
+- **Runtime check.** I loaded a pytest plugin from outside the repo; no repo files were touched. It recorded every bare int handed to `LockWorker.want`, `forget`, `resume`, `status`, `syncing`, `push`, `request_sync` and `read`. It did the same for `LockRegistry.want`, `read_once` and `write_once`, and for every lookup on `worker.slots` (`[]`, `in`, `.get`, `.pop`, assignment). I ran it over the whole suite except `tests/sync`, with `-n auto`.
+  - Every hit came from one test: `tests/test_adapter.py::test_a_silent_lock_backs_off_doubling_to_the_cap_then_starts_over`, at lines 1071, 1075 and 1094.
+  - That test uses `rig_factory` and `FakeLock` imported from `tests/sync/test_worker.py`, which are int-keyed by design. So these are correct, and they also show the plugin does catch int keys.
+  - No int key reached the engine from any other test, or from `custom_components/` on any path the suite exercises.
+- **Static check.**
+  - The tests' own push recorders (`pushed`/`pushes` lists and dicts in matter, zha, z2m and `test_adapter`) all use addresses. So do the `observe_push` mock assertions in `zwave_js_ui/test_push.py`.
+  - `test_push.py:289` (`confirm.assert_called_once_with(4, ...)`) is aimed at the provider's `_confirm_slot`, which takes a slot number, so the int is correct there.
+  - No test reaches into the worker's private `_queued`, `_syncing`, `_written` and similar.
+  - In the source, every use of `worker.slots`, `status`, `syncing`, `forget`, `resume`, `read_once` and `write_once` builds an address, or converts back to slot numbers via `_slots_of` or `.user_ref`. `store.wrote` given an int would raise `AttributeError` rather than pass silently.
+  - Running the venv's mypy over `tests/` found no int-versus-address errors.
+
+**2. Changed assertions:** all of them are key re-spellings, as covered in Stage 1.
+
+**3. The `conftest` helper (Minor).** The fix is real, but no test depends on it:
+- A probe confirmed that each of the helper's 21 calls now queues exactly one sync job, for a key the worker tracks, on a started worker. At the base commit it queued a job for int `1`, and the worker's `_sync` then found no such slot and returned.
+- I made the helper a no-op (`pass`) at `tests/conftest.py:416` and ran every file that uses it, without xdist: matter e2e, zwave_js e2e, `test_binary_sensor`, `test_init` and `test_websocket`. All 540 passed, so the mutation survived.
+- An earlier run of the same mutation with `-n auto` showed 2 failures. They were `TestPacing::test_writes_at_startup_are_spaced` and the binary-sensor paced flake. Neither test calls the helper, so those were load flakes.
+- The helper probably makes no difference because the worker already syncs on `want`. The fix is correct, but nothing asserts it, which is consistent with the suite passing while the helper did nothing.
+- Possible follow-up, outside this no-behavior-change task: either remove the helper's `request_sync`, or make one test depend on it.
+- I restored `conftest.py` with a shell trap. `git status` afterwards showed only `.entire/.gitignore`.
+
+**4. The flakes, run alone:** each passed 5 out of 5 times.
+- `test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced`: 0/5 failed.
+- `test_a_paced_test_keeps_the_real_delay_between_operations`: 0/5 failed. It failed once in my own `-n auto` run (3153 passed, 1 failed), which fits the claim that it's a load flake.
+- `zwave_js` `TestPacing::test_writes_at_startup_are_spaced` also failed once under `-n auto`, so it's another paced test that's sensitive to load.
+
+**Minor:** the implementer's 2271 passed doesn't match my rerun of the task's Step 3 file list: 2201 passed, 2 skipped, 9 xfailed, 0 failed. The likeliest reason is that their run included the extra files. I didn't count it.
+
+**Clean-up:** `git status` shows only `.entire/.gitignore`. The scratch directory `/tmp/lcm-t8-tripwire` (plugins and the `conftest.py` backup) has been deleted, and nothing was committed or stashed.</result>
+<usage><subagent_tokens>114249</subagent_tokens><tool_uses>36</tool_uses><duration_ms>659475</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5eda57da869f2782</task-id>
+<tool-use-id>toolu_01GbzdUwVazQYEUaTREuqpHV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a5eda57da869f2782.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 9: whole-suite verification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** Task 9 is verified apart from one thing. `prek run --all-files` failed on the `yarn-lint` hook at first, and that was an environment problem, not a code problem. Nothing was fixed or committed. HEAD is still `f4cb7599`, and the only dirty file is the pre-existing `.entire/.gitignore`.
+
+**1. Full suite with coverage (no xdist)**
+- **Result:** 3373 passed, 3 skipped, 14 xfailed in 299 s. The total is 99.38%, not 100%.
+- **Base comparison:** I ran the same command at `ce1e1088`. It gives 3358 passed, 3 skipped, 14 xfailed, and 99.37% coverage. Both runs miss the same 53 statements, so the 100% in the plan doesn't hold in this venv even at base.
+- **Newly uncovered lines:** none. I mapped each uncovered line at HEAD to its source text and compared it with base. Every line matches except one: in `ha/runtime.py`, the uncovered `del wants[err.slot]` became `addresses = {a: v for a, v in addresses.items() if a.user_ref != err.slot}`. It sits in the already-uncovered "managed by another entry" block, at runtime.py:636-644 at HEAD and 619-627 at base.
+- **Uncovered lines at HEAD:**
+
+| File | Lines |
+|---|---|
+| `diagnostics.py` | 29 |
+| `entity.py` | 428 |
+| `ha/adapter.py` | 243, 416, 466-467, 588 |
+| `ha/runtime.py` | 636-644, 716, 731-739, 766, 798-799, 827-828, 1080-1083 |
+| `ha/services.py` | 111-112 |
+| `ha/slot_coordinator.py` | 140 |
+| `providers/_base.py` | 811-816, 821, 1093, 1186, 1346 |
+| `providers/matter.py` | 379, 2253-2260, 2319 |
+| `providers/zha.py` | 618 |
+| `providers/zigbee2mqtt.py` | 759-773 |
+| `repairs.py` | 30-31, 76, 128-130, 133 |
+| `sensor.py` | 82 |
+| `sync/registry.py` | 296-297 |
+| `sync/slot.py` | 39 |
+| `sync/worker.py` | 457-459 |
+
+- The scratch worktree `/tmp/lcm-base` has been removed.
+
+**2. Timing flakes**
+- All three tests passed inside the full run, so I didn't re-run them separately.
+
+**3. Property tests at the CI profile**
+- 74 passed in 25 s.
+
+**4. `prek run --all-files`**
+- Every hook passed, mypy included, except `yarn-lint`, which failed with `eslint: command not found` (exit 127). This branch changes no `.ts` or other non-Python files.
+- With the main checkout's `node_modules/.bin` on `PATH`, `prek run yarn-lint --all-files` passed. So `eslint` is only missing from the worktree's `.bin`.
+- I did not run this hook at base.
+
+**5. Oracle checks**
+- **`tests/sync` stat:** only `test_registry.py` (+136) and `test_worker.py` (+22) changed, 158 insertions and 0 deletions.
+- **`git diff origin/main -- tests/sync | grep '^-[^-]'`:** it printed nothing, as required.
+- **Filtered assert diff over `tests`:** it printed 63 removed assert lines. I checked each one against the added lines, after normalising `pin_address(x)` to `x`. All 63 fall into three kinds, and none is a behavior change:
+  - **Key re-spelling:** integer keys became `pin_address(n)` in `worker.slots[...]`, `worker.status(...)`, `port.read([...])`, `port.write(...)`, `store.wrote(id, n)` and `pushed`/`disabled` comparisons. In the same shape: `in worker.slots`, `not in worker.slots`, `pushed_to_worker[3]` and `worker.read(...)` results.
+  - **Reflowed multi-line asserts:** some lines were re-wrapped by ruff format.
+  - **Store and diagnostics shape:**
+    - Diagnostics nested by type: `worker_diag["slots"]["1"]` became `["1"]["pin"]`.
+    - The store's `wrote` record nested by type, `{"pin": ...}`.
+    - Direct reads of that record updated the same way, for example `.get("wrote", {}).get("pin")`.
+
+No other assertion changed.</result>
+<usage><subagent_tokens>64641</subagent_tokens><tool_uses>20</tool_uses><duration_ms>694083</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0d0c484fb61cb150</task-id>
+<tool-use-id>toolu_01Vx7kMLx4RQQcT8dniT2MJx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a0d0c484fb61cb150.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review PR 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no critical issues, and nothing in the design will force a second re-key when PASSWORD addresses arrive. There are a few small fixes worth making before you open it, plus a list of things PR 2 has to deal with.
+
+I checked the branch at f4cb7599: `prek run mypy --all-files` passes, and the targeted tests pass (`tests/sync`, store, adapter, diagnostics, credentials, runtime, architecture: 464 passed). `tests/sync` only gains lines (+136 and +22, nothing removed). All paths below are under `/Users/raman/projects/lock_code_manager/.worktrees/credential-address-core/custom_components/lock_code_manager/`.
+
+## Critical
+None.
+
+## Important
+1. **The `CredentialAddress` docstring is now wrong.** `model/credentials.py:244-248` says `user_ref` will become the user's name and that this would be "a one-place type change rather than a second re-key". This PR makes `user_ref` = slot number load-bearing:
+   - the registry's `slot_of` (`ha/runtime.py:175`);
+   - the store's `str(address.user_ref)` key (`ha/lock_store.py:93,148`);
+   - `releasing`, `GIVEN_UP_KEY` and the issue ids.
+
+   Users are already named and the slot stayed the identifier. **Fix:** reword it to say `user_ref` is the managed slot number, that entries own slots, and that the registry and store key by it.
+
+## Minor
+1. **Two small silent changes in the code that follows a slot's addresses:**
+   - **`hold` checks slots in set order.** `sync/registry.py:123` builds `{self._slot_of(key) for key in wants}`, a set. Base checked `wants` in insertion order. When two or more slots are taken, the "managed by another entry" warnings can now come in a different order. **Fix:** `dict.fromkeys(self._slot_of(k) for k in wants)`.
+   - **Re-pair rebuild forgets more than it did.** `ha/runtime.py:486` forgets every address in a moot slot, but `moot` is computed from release addresses only. Base forgot exactly those. **Fix:** `for address in [a for a, s in worker.slots.items() if s.release]: worker.forget(address)`.
+2. **The `slot_of` default is a type hole** (`sync/registry.py:31,67`). `_itself` is `Any -&gt; Any`. A `LockRegistry[CredentialAddress, …]` built without `slot_of` would key `owners` by address, so `owner`, `unclaim` and `give_up` would silently never match, and mypy can't catch it. Production passes it, and the default only exists so `tests/sync` stays unedited. **Fix:** either `@overload` `__init__` so `slot_of` may be omitted only when `K` is `int`, or a one-line comment naming the trap.
+3. **Naming that breaks the worker's slot/key vocabulary:**
+   - `LockWorker.want(self, slot, pin, …)` (`sync/worker.py:217`): rename `pin` → `value` to match `LockPort.write(slot, value)`.
+   - `ProviderPort.read(self, slots: Collection[CredentialAddress])` and `write(self, slot: CredentialAddress, …)` (`ha/adapter.py:183,334`): everywhere else in the adapter `slot` means an `int`. Rename to `addresses` / `address`.
+4. **`_slots_of(worker.slots)` is rebuilt for every `given_up` item** (`ha/runtime.py:852`). Compute a set once before the loop.
+5. **`lock_codes` loop is hard to read** (`ha/runtime.py:1039`). The generator inside the `for` header is awkward. A plain loop over `worker.slots.items()` with `if address.credential_type is not CredentialType.PIN: continue` reads better.
+6. **One test builds its own input** (`tests/test_lock_store.py:832`). It feeds `remember` a `SimpleNamespace` worker, which is the pattern your test-input rule warns against. Use a real `LockWorker` with a stub port.
+
+## Silent behavior changes
+Beyond the diagnostics nesting and the worker log labels, these are the user-visible changes:
+- **Downgrade breaks setup entirely.** On an older release, `Store(version=1)` raises `UnsupportedStorageVersionError` on a version 2 file. That happens inside `async_setup` (`__init__.py:612` → `ha/runtime.py:154`), so the whole integration fails to load, every entry included. Recovery:
+  - Restore a Home Assistant backup.
+  - Or delete `.storage/lock_code_manager.core`. That costs one rewrite of each PIN on locks that hide their codes, and it forgets any release clears still owed, so those codes stay on the lock.
+- **Batched worker logs** read `(1 pin, 2 pin)` instead of `(1, 2)`. Adapter timing logs still say `slot 3`.
+
+Nothing else changed:
+- Probe order is the same: addresses sort as `(slot, type)`.
+- `worker.slots` iteration order is the same.
+- The migration is exact: release fields stay at slot level, records with no `wrote` pass through, `reports` and `entity_id` are kept.
+- With PIN-only data, `remember` produces the same record as base.
+- The new `_forget` release guard can't fire with one key per slot, because an owned key is never a release key.
+
+## Simplicity
+Proportionate for the job. The generic key, `slot_of`, the `_Store` subclass and the diagnostics helper are each small. The only piece built ahead of need is `remember`'s per-type merge, and the version 2 shape requires it. Nothing reads as overcomplicated.
+
+## PR 2 must handle
+1. **One release per slot.** `give_up` creates a release clear for every tracked key in the slot. `port.releasing` and `_written` are per slot, so the first clear deletes the user and every later key sends a second release. Make that later release idempotent: return `False` and let the read-back find the slot empty. Don't make the worker look inside keys.
+2. **`release(written=…)` reads only the PIN.** `wrote_pin` (`ha/lock_store.py:98`) feeds it and checks PIN only. A password-only slot needs "Lock Code Manager wrote any type here".
+3. **Repair issue ids are per slot** (`ha/runtime.py:865-932`). With two addresses in a slot, one that is in sync deletes `slot_suspended_*` / `slot_disabled_*` that a held one just raised, depending on dict order. Aggregate per slot before raising or deleting.
+4. **`_on_disable(address)` turns the whole slot off.** Decide what a refused password does when the PIN is fine (spec decision 4).
+5. **The in-sync entities read only the PIN.** `LockWorkerView._pin` (`entity.py:405`) drives both the aggregate `in_sync` and `pin_in_sync`. The binary sensor already stores `self._addresses` (dead since before this PR). Aggregate over those.
+6. **The adapter routes by PIN only.**
+   - `_pin_slot` refuses a whole read batch if any address isn't a PIN.
+   - `pushed`, `others`, `_writing`, `_written_at` and `wants_pin` are int-slot and PIN-only.
+   - `_Coordinator.observe_push` and `desired_credential` drop the type, round-tripping through `pin_address`.
+   - Echo suppression is per slot, so a password write would swallow a PIN push for the same slot.
+7. **The HA-layer entry points are PIN-only.** `async_hold_lock(wants: Mapping[int, Want])`, `async_want`, `async_write_once` and `async_resume_slot` (which calls `write_once(pin_address(slot))`) need the per-lock managed address set.
+8. **Occupancy reads only PINs.** `_async_occupied` (`ha/allocation.py:537`) needs every managed type the lock takes, since a slot holding only a password is occupied.
+9. **Fingerprints for types no longer tracked are kept.** `remember` keeps the last fingerprint of a type the worker stops tracking, for example after a lock loses password support. If that type comes back, recall trusts the stale write. Confirm that's wanted.
+10. **Already right for PR 2:** `_duplicate_of` filtering to PIN (duplicates are per type) and `lock_codes` showing only PINs.
+
+## PR body summary
+- The sync engine (worker, port, registry) now works with any key the integration chooses, instead of a bare slot number. The integration keys it by `CredentialAddress(slot, credential type)`. Today every address is a PIN, so behavior is unchanged.
+- An entry still owns a whole slot: the registry is told which slot a key belongs to. Claiming, releasing and clearing a slot act on every credential type in it.
+- The provider adapter turns an address back into today's slot-based provider calls, and refuses any other credential type before anything is sent.
+- The lock store moves to version 2 and keeps what was last written per credential type: `{"wrote": {"pin": …}}`. Version 1 records are migrated on load.
+- **Downgrade limit:** after this upgrade, an earlier release can't read the store and Lock Code Manager won't set up. Restore a backup, or delete `.storage/lock_code_manager.core`. That costs one rewrite of each PIN on locks that hide their codes, and forgets clears still owed.
+- Diagnostics now nest each lock's worker slots by credential type: `slots["3"]["pin"]`.
+- Worker debug logs name a credential type with its slot ("slot 3 pin").
+- Every existing test passes unchanged apart from how keys and the store/diagnostics shapes are spelled. The `tests/sync` suite only gained tests, for keys that hold a slot and a type.
+
+## Assessment
+**Ready to open** once the `CredentialAddress` docstring is fixed. The Minor items are cheap and worth folding in, but none blocks.</result>
+<usage><subagent_tokens>162644</subagent_tokens><tool_uses>43</tool_uses><duration_ms>377259</duration_ms></usage>
+</task-notification>
