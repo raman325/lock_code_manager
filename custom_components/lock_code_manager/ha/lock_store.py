@@ -11,6 +11,10 @@ the value -- and a release clear still owed, with the entry that gave the slot
 up. What a slot holds is read again; counts, fights and holds start over (a
 hold's repair outlives a restart on its own).
 
+What was written is kept under ``wrote_by_type``, and the PIN's again under
+``wrote``: a release from before credential types reads only ``wrote``, so a
+downgrade keeps working, and a record it saves reads back as the PIN's alone.
+
 Written a second after a change, and at Home Assistant's final write. Never
 dropped on an unload (#1243): only when a release is done, a slot is let go
 of for good, a lock leaves Lock Code Manager or an entry is deleted. A
@@ -19,7 +23,7 @@ record whose registry id is gone goes at the next start.
 
 from collections import defaultdict
 from collections.abc import Callable, Collection
-from typing import Any, override
+from typing import Any
 
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -31,40 +35,19 @@ from ..sync.slot import CLEARED, Slot
 from ..sync.worker import LockWorker
 
 STORE_KEY = f"{DOMAIN}.core"
-STORE_VERSION = 2
+STORE_VERSION = 1
 SAVE_DELAY = 1.0
 
 Record = dict[str, Any]
 
 
-class _Store(Store[dict[str, Any]]):
-    """The core's store, moving older records to the current shape as it loads."""
-
-    @override
-    async def _async_migrate_func(
-        self, old_major_version: int, old_minor_version: int, old_data: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Version 1 kept one fingerprint per slot: a PIN's."""
-        locks = old_data.get("locks", {})
-        if old_major_version < 2:
-            locks = {
-                key: {
-                    **record,
-                    "slots": {
-                        number: _per_type(saved)
-                        for number, saved in record["slots"].items()
-                    },
-                }
-                for key, record in locks.items()
-            }
-        return {**old_data, "locks": locks}
-
-
-def _per_type(saved: dict[str, Any]) -> dict[str, Any]:
-    """Return a version 1 slot record with what was written kept under PIN."""
-    if "wrote" not in saved:
-        return saved
-    return {**saved, "wrote": {CredentialType.PIN.value: saved["wrote"]}}
+def _wrote_by_type(saved: dict[str, Any]) -> dict[str, str]:
+    """Return what was last written to a slot, per credential type."""
+    if "wrote_by_type" in saved:
+        return saved["wrote_by_type"]
+    if "wrote" in saved:
+        return {CredentialType.PIN.value: saved["wrote"]}
+    return {}
 
 
 class LockStore:
@@ -73,7 +56,7 @@ class LockStore:
     def __init__(self, hass: HomeAssistant) -> None:
         """Start empty; ``async_load`` reads what was saved."""
         self._hass = hass
-        self._store: Store[dict[str, Any]] = _Store(hass, STORE_VERSION, STORE_KEY)
+        self._store: Store[dict[str, Any]] = Store(hass, STORE_VERSION, STORE_KEY)
         self._locks: dict[str, Record] = {}
 
     async def async_load(self) -> None:
@@ -93,7 +76,7 @@ class LockStore:
         if record is None:
             return None
         saved = record["slots"].get(str(address.user_ref), {})
-        return saved.get("wrote", {}).get(address.credential_type.value)
+        return _wrote_by_type(saved).get(address.credential_type.value)
 
     def wrote_pin(self, key: str, slot: int) -> bool:
         """
@@ -148,13 +131,15 @@ class LockStore:
         for address, slot in worker.slots.items():
             tracked[address.user_ref].append((address, slot))
         for number, held in tracked.items():
-            wrote = dict(slots.get(str(number), {}).get("wrote", {}))
+            wrote = dict(_wrote_by_type(slots.get(str(number), {})))
             for address, slot in held:
                 if slot.wrote is None:
                     wrote.pop(address.credential_type.value, None)
                 else:
                     wrote[address.credential_type.value] = slot.wrote
-            saved: dict[str, Any] = {"wrote": wrote} if wrote else {}
+            saved: dict[str, Any] = {"wrote_by_type": wrote} if wrote else {}
+            if (pin := wrote.get(CredentialType.PIN.value)) is not None:
+                saved["wrote"] = pin
             if any(slot.release and slot.hold is None for _, slot in held) and (
                 by := given_up_by(number)
             ):

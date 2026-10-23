@@ -107,9 +107,9 @@ async def test_a_pin_changed_before_a_restart_is_written_once(
         await async_restart_lcm(hass, entry)
 
     assert _writes(mock_lock(entry)) == []
-    assert _record(hass)["slots"]["1"]["wrote"] == {
-        "pin": fingerprint("4321", hass.data[DOMAIN]["instance_id"].encode())
-    }
+    assert _record(hass)["slots"]["1"]["wrote"] == fingerprint(
+        "4321", hass.data[DOMAIN]["instance_id"].encode()
+    )
 
 
 async def test_a_write_cut_off_by_a_restart_is_not_trusted_after_it(
@@ -249,8 +249,9 @@ async def test_the_store_never_holds_a_pin(
     saved = hass_storage[SAVED_KEY]["data"]
     salt = hass.data[DOMAIN]["instance_id"].encode()
     [record] = saved["locks"].values()
-    assert record["slots"]["1"] == {"wrote": {"pin": fingerprint("4321", salt)}}
-    assert record["slots"].get("2", {}).get("wrote", {}).get("pin") in (None, CLEARED)
+    pin = fingerprint("4321", salt)
+    assert record["slots"]["1"] == {"wrote": pin, "wrote_by_type": {"pin": pin}}
+    assert record["slots"].get("2", {}).get("wrote") in (None, CLEARED)
     assert not {"1234", "4321", "5678"} & set(leaves(saved))
 
 
@@ -408,7 +409,7 @@ async def test_a_lock_no_entry_lists_is_forgotten_at_the_next_start(
     hass_storage[SAVED_KEY]["data"]["locks"]["gone"] = {
         "entity_id": "lock.gone",
         "answered": True,
-        "slots": {"4": {"wrote": {"pin": CLEARED}}},
+        "slots": {"4": {"wrote": CLEARED}},
     }
     offline = per_lock_issue_id("lock_offline", "lock.gone")
     ir.async_create_issue(
@@ -743,35 +744,37 @@ async def test_a_release_is_told_whether_lcm_wrote_a_pin_there(
 async def test_a_slot_never_written_is_no_pin_lcm_wrote(hass: HomeAssistant) -> None:
     """Nothing kept for the lock, or for the slot: no PIN of Lock Code Manager's."""
     store = LockStore(hass)
-    store._locks = {
-        "key": {"answered": True, "slots": {"2": {"wrote": {"pin": CLEARED}}}}
-    }
+    store._locks = {"key": {"answered": True, "slots": {"2": {"wrote": CLEARED}}}}
 
     assert not store.wrote_pin("other", 1)
     assert not store.wrote_pin("key", 1)
     assert not store.wrote_pin("key", 2)
 
 
-async def test_a_version_1_store_moves_what_was_written_under_pin(
+async def test_a_record_without_types_is_read_as_the_pins(
     hass: HomeAssistant, mock_lock_config_entry, hass_storage
 ) -> None:
-    """Version 1 kept one fingerprint per slot: it was a PIN's, and stays one."""
+    """A record saved before credential types, or by a release from before them."""
     key = er.async_get(hass).async_get(LOCK_1_ENTITY_ID).id
-    version_1_record = {
-        "entity_id": LOCK_1_ENTITY_ID,
-        "answered": True,
-        "reports": True,
-        "slots": {
-            "1": {"wrote": "abc"},
-            "2": {"wrote": CLEARED, "release": "entry"},
-            "3": {"release": "entry"},
-        },
+    data = {
+        "locks": {
+            key: {
+                "entity_id": LOCK_1_ENTITY_ID,
+                "answered": True,
+                "reports": True,
+                "slots": {
+                    "1": {"wrote": "abc"},
+                    "2": {"wrote": CLEARED, "release": "entry"},
+                    "3": {"release": "entry"},
+                },
+            }
+        }
     }
     hass_storage[SAVED_KEY] = {
-        "version": 1,
+        "version": STORE_VERSION,
         "minor_version": 1,
         "key": SAVED_KEY,
-        "data": {"locks": {key: version_1_record}},
+        "data": deepcopy(data),
     }
     store = LockStore(hass)
     await store.async_load()
@@ -784,48 +787,6 @@ async def test_a_version_1_store_moves_what_was_written_under_pin(
         (LOCK_1_ENTITY_ID, 2, "entry"),
         (LOCK_1_ENTITY_ID, 3, "entry"),
     ]
-    assert store.reports(key)
-    saved = hass_storage[SAVED_KEY]
-    assert saved["version"] == STORE_VERSION == 2
-    assert saved["data"]["locks"][key] == {
-        **version_1_record,
-        "slots": {
-            "1": {"wrote": {"pin": "abc"}},
-            "2": {"wrote": {"pin": CLEARED}, "release": "entry"},
-            "3": {"release": "entry"},
-        },
-    }
-
-
-async def test_a_version_2_store_is_not_nested_again_by_a_minor_bump(
-    hass: HomeAssistant, mock_lock_config_entry, hass_storage
-) -> None:
-    """A newer minor version of version 2 already has its types: it loads as it is."""
-    key = er.async_get(hass).async_get(LOCK_1_ENTITY_ID).id
-    data = {
-        "locks": {
-            key: {
-                "entity_id": LOCK_1_ENTITY_ID,
-                "answered": True,
-                "reports": True,
-                "slots": {
-                    "1": {"wrote": {"pin": "abc"}},
-                    "2": {"wrote": {"pin": CLEARED}, "release": "entry"},
-                },
-            }
-        }
-    }
-    hass_storage[SAVED_KEY] = {
-        "version": STORE_VERSION,
-        "minor_version": 2,
-        "key": SAVED_KEY,
-        "data": deepcopy(data),
-    }
-    store = LockStore(hass)
-    await store.async_load()
-
-    assert store.wrote(key, pin_address(1)) == "abc"
-    assert store.wrote(key, pin_address(2)) == CLEARED
     assert hass_storage[SAVED_KEY]["data"] == data
 
 
@@ -843,7 +804,12 @@ async def test_remembering_one_type_keeps_the_others_in_the_slot(
                 key: {
                     "entity_id": LOCK_1_ENTITY_ID,
                     "answered": True,
-                    "slots": {"1": {"wrote": {"pin": "old", "password": "pw"}}},
+                    "slots": {
+                        "1": {
+                            "wrote": "old",
+                            "wrote_by_type": {"pin": "old", "password": "pw"},
+                        }
+                    },
                 }
             }
         },
@@ -858,3 +824,23 @@ async def test_remembering_one_type_keeps_the_others_in_the_slot(
 
     assert store.wrote(key, pin_address(1)) == "new"
     assert store.wrote(key, CredentialAddress(1, CredentialType.PASSWORD)) == "pw"
+    # A release from before credential types reads the PIN's from ``wrote``.
+    assert store._locks[key]["slots"]["1"]["wrote"] == "new"
+
+
+async def test_a_slot_with_no_pin_written_keeps_no_wrote(
+    hass: HomeAssistant, mock_lock_config_entry, hass_storage
+) -> None:
+    """``wrote`` is only ever the PIN's: another type is never read as one."""
+    key = er.async_get(hass).async_get(LOCK_1_ENTITY_ID).id
+    store = LockStore(hass)
+    await store.async_load()
+    password = CredentialAddress(2, CredentialType.PASSWORD)
+    # Never started, so the port is never asked anything.
+    worker = LockWorker(object(), b"salt")
+    worker.slots[password] = Slot("secret", wrote="pw")
+
+    store.remember(key, LOCK_1_ENTITY_ID, worker, lambda slot: None)
+
+    assert store._locks[key]["slots"]["2"] == {"wrote_by_type": {"password": "pw"}}
+    assert not store.wrote_pin(key, 2)
