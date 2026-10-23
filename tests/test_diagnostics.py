@@ -53,7 +53,7 @@ async def test_config_entry_diagnostics(
     assert worker_diag["reachable"] is True
     assert worker_diag["offline"] is False
     assert "data" in worker_diag
-    assert worker_diag["slots"]["1"] == {
+    assert worker_diag["slots"]["1"]["pin"] == {
         "status": "in_sync",
         "hold": None,
         "tries": 0,

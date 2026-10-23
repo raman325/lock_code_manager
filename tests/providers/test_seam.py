@@ -915,7 +915,7 @@ async def test_internal_set_usercode_drives_orchestration(
 ) -> None:
     """A write through the provider port routes through the orchestration to primitives."""
     lock = _make_lock(hass, _NativeStubLock, "seam_internal_set")
-    await _port(lock, {4: "carol"}).write(4, "4321")
+    await _port(lock, {4: "carol"}).write(pin_address(4), "4321")
     assert ("set_user", 4, "lcm:4:carol") in lock.calls
     assert ("set_credential", 4, 4) in lock.calls
 
@@ -924,11 +924,17 @@ async def test_internal_roundtrip_set_get_clear(hass: HomeAssistant) -> None:
     """Set then read then clear round-trips through the provider port end to end."""
     lock = _make_lock(hass, _NativeStubLock, "seam_internal_roundtrip")
     port = _port(lock, {1: "a", 2: "b"})
-    await port.write(1, "1111")
-    await port.write(2, "2222")
-    assert await port.read([1, 2]) == {1: Holds("1111"), 2: Holds("2222")}
-    await port.write(1, None)
-    assert await port.read([1, 2]) == {1: Seen.EMPTY, 2: Holds("2222")}
+    await port.write(pin_address(1), "1111")
+    await port.write(pin_address(2), "2222")
+    assert await port.read([pin_address(1), pin_address(2)]) == {
+        pin_address(1): Holds("1111"),
+        pin_address(2): Holds("2222"),
+    }
+    await port.write(pin_address(1), None)
+    assert await port.read([pin_address(1), pin_address(2)]) == {
+        pin_address(1): Seen.EMPTY,
+        pin_address(2): Holds("2222"),
+    }
 
 
 async def test_set_usercode_threads_name_and_source(hass: HomeAssistant) -> None:
@@ -1114,7 +1120,7 @@ async def test_set_usercode_rejects_slot_beyond_capacity(hass: HomeAssistant) ->
     """
     lock = _make_lock(hass, _NativeStubLock, "seam_capacity_reject")
     with pytest.raises(LockError, match="30 PIN code slots") as err:
-        await _port(lock, {50: "guest"}).write(50, "4321")
+        await _port(lock, {50: "guest"}).write(pin_address(50), "4321")
     # Refused, unsent: the slot is held without charging the lock.
     assert err.value.kind is ErrorKind.SLOT_REFUSED
     assert err.value.sent is False
@@ -1126,7 +1132,7 @@ async def test_set_usercode_accepts_slot_at_capacity_boundary(
 ) -> None:
     """The highest advertised slot is usable; the bound is inclusive."""
     lock = _make_lock(hass, _NativeStubLock, "seam_capacity_boundary")
-    await _port(lock, {30: "guest"}).write(30, "4321")
+    await _port(lock, {30: "guest"}).write(pin_address(30), "4321")
     assert ("set_credential", 30, 30) in lock.calls
 
 
@@ -1135,7 +1141,7 @@ async def test_set_usercode_skips_capacity_check_when_lock_allocates_index(
 ) -> None:
     """A high slot number is legal when the lock picks its own credential index."""
     lock = _make_lock(hass, _AutoIndexStubLock, "seam_capacity_auto_index")
-    await _port(lock, {50: "guest"}).write(50, "4321")
+    await _port(lock, {50: "guest"}).write(pin_address(50), "4321")
     assert ("set_credential", 50, 50) in lock.calls
 
 
@@ -1144,7 +1150,7 @@ async def test_set_usercode_skips_capacity_check_when_capacity_unknown(
 ) -> None:
     """``num_slots`` of 0 means unknown capacity, so it must not block the write."""
     lock = _make_lock(hass, _UnknownCapacityStubLock, "seam_capacity_unknown")
-    await _port(lock, {50: "guest"}).write(50, "4321")
+    await _port(lock, {50: "guest"}).write(pin_address(50), "4321")
     assert ("set_credential", 50, 50) in lock.calls
 
 
@@ -1153,7 +1159,7 @@ async def test_set_usercode_skips_capacity_check_when_capabilities_unavailable(
 ) -> None:
     """A provider with no capabilities read keeps writing as it did before."""
     lock = _make_lock(hass, _DegenerateStubLock, "seam_capacity_no_caps")
-    await _port(lock, {50: "guest"}).write(50, "4321")
+    await _port(lock, {50: "guest"}).write(pin_address(50), "4321")
     assert ("set_credential", 50, 50) in lock.calls
 
 

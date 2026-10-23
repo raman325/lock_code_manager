@@ -62,8 +62,10 @@ from custom_components.lock_code_manager.ha.runtime import (
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialAddress,
     SlotCode,
     SlotCredential,
+    pin_address,
     user_from_slot,
 )
 from custom_components.lock_code_manager.model.events import CredentialOperation
@@ -139,11 +141,11 @@ def _record_pushes(
     assert worker is not None
     port = worker.port
     port.others.clear()
-    pushed: dict[int, Reading] = {}
+    pushed: dict[CredentialAddress, Reading] = {}
     worker.push = pushed.__setitem__  # type: ignore[method-assign]
 
     def _seen(slot: int) -> Reading | None:
-        return pushed.get(slot, port.others.get(slot))
+        return pushed.get(pin_address(slot), port.others.get(slot))
 
     return _seen
 
@@ -598,7 +600,7 @@ class TestBridge:
 
             assert [len(bridge.sets_for(slot)) for slot in pins] == [1, 1]
             worker = lock_registry(hass).worker(lock_id)
-            assert all(worker.slots[slot].tries == 0 for slot in pins)
+            assert all(worker.slots[pin_address(slot)].tries == 0 for slot in pins)
             _assert_trouble_free(hass, lock_id)
 
     async def test_reads_answered_through_users_settle_with_one_write_each(
@@ -1277,7 +1279,10 @@ class TestWriteOnlyLock:
         # the old device, every slot would be taken, and allocation would
         # walk the lock's 250 slots for nothing.)
         await _on_the_clock(
-            hass, freezer, lock_registry(hass).read_once(lock_id, [1]), "a read"
+            hass,
+            freezer,
+            lock_registry(hass).read_once(lock_id, [pin_address(1)]),
+            "a read",
         )
         assert locks_that_cannot_report(hass, [lock_id]) == [lock_id]
 
@@ -1674,8 +1679,8 @@ async def _owe_a_clear_through_an_unseen_re_pair(
     bridge.silent = True
     hass.config_entries.async_remove_subentry(entry, subentry_id_for_slot(entry, 2))
     await async_run_until_quiet()
-    assert old.slots[2].release
-    assert old.slots[2].hold is None
+    assert old.slots[pin_address(2)].release
+    assert old.slots[pin_address(2)].hold is None
 
     re_paired = asyncio.Event()
     unload_platforms = hass.config_entries.async_unload_platforms
@@ -1826,8 +1831,8 @@ class TestRePairedLock:
             )
             # Not settled: the old worker is waiting on the clock for the lock.
             await async_run_until_quiet()
-            assert old.slots[2].release
-            assert old.slots[2].hold is None
+            assert old.slots[pin_address(2)].release
+            assert old.slots[pin_address(2)].hold is None
 
             # The new device answers, and has a code of its own in slot 2.
             bridge.silent = False
@@ -1848,7 +1853,7 @@ class TestRePairedLock:
             assert (
                 worker.port.provider.lock.id == er.async_get(hass).async_get(lock_id).id
             )
-            assert 2 not in worker.slots
+            assert pin_address(2) not in worker.slots
             assert bridge.sets_for(2) == []
             assert bridge.users[2] == (ENABLED, "0000")
             assert (
@@ -1898,7 +1903,7 @@ class TestRePairedLock:
                     entry, subentry_id_for_slot(entry, slot)
                 )
                 await async_run_until_quiet()
-                assert old.slots[slot].release
+                assert old.slots[pin_address(slot)].release
                 bridge.silent = False
                 async_fire_mqtt_message(
                     hass, f"homeassistant/lock/{gone}/lock/config", ""
@@ -1975,8 +1980,8 @@ class TestRePairedLock:
                 assert new_lock.id != old.port.provider.lock.id
                 old_id = old.port.provider.lock.id
                 old.on_change()  # still holding its slots: under its own id
-                assert store.wrote(old_id, 1) is not None
-                assert store.wrote(new_lock.id, 1) is None
+                assert store.wrote(old_id, pin_address(1)) is not None
+                assert store.wrote(new_lock.id, pin_address(1)) is None
                 re_paired.set()
                 assert await unload
             await hass.async_block_till_done()
@@ -2129,9 +2134,12 @@ class TestRePairedLock:
                     # Its slots remembered after the re-pair, before the check:
                     # under the old device's registry id, not the new one's.
                     worker.on_change()
-                    assert store.wrote(worker.port.provider.lock.id, 1) is not None
+                    assert (
+                        store.wrote(worker.port.provider.lock.id, pin_address(1))
+                        is not None
+                    )
                     new_id = er.async_get(hass).async_get(lock_id).id
-                    assert store.wrote(new_id, 1) is None
+                    assert store.wrote(new_id, pin_address(1)) is None
                 return provider
 
             with (
@@ -2178,7 +2186,9 @@ class TestRePairedLock:
             await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
             old = lock_registry(hass).worker(lock_id)
             bridge.silent = True
-            read = hass.async_create_task(lock_registry(hass).read_once(lock_id, [1]))
+            read = hass.async_create_task(
+                lock_registry(hass).read_once(lock_id, [pin_address(1)])
+            )
             await async_run_until_quiet()
             bridge.users.clear()
             with _spy_on_unloads(hass) as unload:

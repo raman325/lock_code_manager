@@ -27,16 +27,16 @@ from .ha.entry import LockCodeManagerConfigEntry
 from .ha.runtime import lock_registry, signal_lock_changed
 from .ha.slot_coordinator import SlotEntityCoordinator
 from .model.config import build_slot_device_identifier, build_slot_unique_id
+from .model.credentials import CredentialAddress, pin_address
 from .model.names import fallback_name
 from .model.queries import get_entry_config
 from .providers import BaseLock
 from .sync.slot import Slot, Status
-from .sync.worker import LockWorker
 
 if TYPE_CHECKING:
     from homeassistant.helpers.event import _TrackStateChangeFiltered
 
-    from .ha.adapter import ProviderPort
+    from .ha.adapter import PortWorker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -401,7 +401,12 @@ class LockWorkerView:
 
     config_entry: ConfigEntry
 
-    def _core_worker(self) -> LockWorker[ProviderPort] | None:
+    @property
+    def _pin(self) -> CredentialAddress:
+        """Return the address of this slot's PIN on the lock."""
+        return pin_address(int(self.slot_num))
+
+    def _core_worker(self) -> PortWorker | None:
         """
         Return the lock's worker if it syncs this slot for this entry.
 
@@ -421,14 +426,14 @@ class LockWorkerView:
         """Return the worker's view of this slot, if the lock's worker has it."""
         if (worker := self._core_worker()) is None:
             return None
-        return worker.slots.get(int(self.slot_num))
+        return worker.slots.get(self._pin)
 
     def _core_status(self) -> Status | None:
         """Return the slot's sync status, or None if the worker does not have it."""
         worker = self._core_worker()
-        if worker is None or int(self.slot_num) not in worker.slots:
+        if worker is None or self._pin not in worker.slots:
             return None
-        return worker.status(int(self.slot_num))[0]
+        return worker.status(self._pin)[0]
 
     @property
     def available(self) -> bool:
@@ -445,14 +450,14 @@ class LockWorkerView:
         return (
             self._is_available()
             and worker is not None
-            and (slot := worker.slots.get(int(self.slot_num))) is not None
+            and (slot := worker.slots.get(self._pin)) is not None
             and (slot.seen is not None or worker.answered)
         )
 
     def _core_syncing(self) -> bool:
         """Return whether a sync of this slot is queued or running."""
         worker = self._core_worker()
-        return worker is not None and worker.syncing(int(self.slot_num))
+        return worker is not None and worker.syncing(self._pin)
 
     @callback
     def _watch_lock(self) -> None:

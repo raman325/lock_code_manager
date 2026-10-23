@@ -7,6 +7,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import DATA, DOMAIN, SENSITIVE_ENTITY_KEYS, LockCodeManagerData
+from .ha.adapter import PortWorker
 from .ha.runtime import lock_codes, lock_registry
 from .model.config import build_slot_device_identifier, slot_unique_id_key
 from .model.credentials import SlotCode
@@ -81,6 +82,19 @@ def _entity_states_for_device(
     return entities
 
 
+def _worker_slots(worker: PortWorker) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return each slot the worker tracks, by slot and then credential type."""
+    slots: dict[str, dict[str, dict[str, Any]]] = {}
+    for address, slot in worker.slots.items():
+        slots.setdefault(str(address.user_ref), {})[address.credential_type.value] = {
+            "status": worker.status(address)[0].value,
+            "hold": slot.hold.value if slot.hold else None,
+            "tries": slot.tries,
+            "release": slot.release,
+        }
+    return slots
+
+
 def _lock_diagnostic(
     hass: HomeAssistant,
     lock: BaseLock,
@@ -104,15 +118,7 @@ def _lock_diagnostic(
                 str(slot): _mask_code(code, slot, instance_id)
                 for slot, code in lock_codes(hass, lock_entity_id).items()
             },
-            "slots": {
-                str(slot_num): {
-                    "status": worker.status(slot_num)[0].value,
-                    "hold": slot.hold.value if slot.hold else None,
-                    "tries": slot.tries,
-                    "release": slot.release,
-                }
-                for slot_num, slot in worker.slots.items()
-            },
+            "slots": _worker_slots(worker),
         },
     }
 

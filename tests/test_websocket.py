@@ -97,6 +97,7 @@ from custom_components.lock_code_manager.model.config import build_slot_unique_i
 from custom_components.lock_code_manager.model.credentials import (
     SlotCode,
     SlotCredential,
+    pin_address,
 )
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.model.queries import get_entry_config
@@ -396,7 +397,7 @@ async def test_subscribe_lock_codes_shows_a_slot_being_checked(
     """
     await hass.async_block_till_done()
     worker = _lock_1_worker(hass)
-    worker.slots[1].seen = None
+    worker.slots[pin_address(1)].seen = None
     worker.on_change()
     await hass.async_block_till_done()
 
@@ -426,7 +427,7 @@ async def test_lock_codes_leaves_out_a_slot_never_read_before_the_lock_answers(
 ) -> None:
     """A slot with no reading on a lock that has not answered has nothing to show."""
     await hass.async_block_till_done()
-    _lock_1_worker(hass).slots[1].seen = None
+    _lock_1_worker(hass).slots[pin_address(1)].seen = None
     with patch.object(
         LockWorker, "answered", new_callable=PropertyMock, return_value=False
     ):
@@ -759,7 +760,7 @@ async def test_subscribe_code_slot_shows_a_slot_being_checked_as_pending(
     await hass.async_block_till_done()
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
     assert worker is not None
-    worker.slots[1].seen = None
+    worker.slots[pin_address(1)].seen = None
     worker.on_change()
     await hass.async_block_till_done()
 

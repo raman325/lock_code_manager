@@ -6,10 +6,14 @@ keeps it (#1442) and a device re-paired under the same entity id never finds
 the old one's, with its entity id beside it: whether the lock has ever
 answered, whether a read of it has ever described a slot (#1581; absent in a
 record saved before, and then not known to), and per slot what was last
-written -- a keyed fingerprint or ``cleared``, never a PIN -- and a release
-clear still owed, with the entry that gave the slot up. What a slot holds is
-read again; counts, fights and holds start over (a hold's repair outlives a
-restart on its own).
+written for each credential type -- a keyed fingerprint or ``cleared``, never
+the value -- and a release clear still owed, with the entry that gave the slot
+up. What a slot holds is read again; counts, fights and holds start over (a
+hold's repair outlives a restart on its own).
+
+What was written is kept under ``fingerprints``, and the PIN's again under
+``wrote``: a release from before credential types reads only ``wrote``, so a
+downgrade keeps working, and a record it saves reads back as the PIN's alone.
 
 Written a second after a change, and at Home Assistant's final write. Never
 dropped on an unload (#1243): only when a release is done, a slot is let go
@@ -17,6 +21,7 @@ of for good, a lock leaves Lock Code Manager or an entry is deleted. A
 record whose registry id is gone goes at the next start.
 """
 
+from collections import defaultdict
 from collections.abc import Callable, Collection
 from typing import Any
 
@@ -25,7 +30,8 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..sync.slot import CLEARED
+from ..model.credentials import CredentialAddress, CredentialType, pin_address
+from ..sync.slot import CLEARED, Slot
 from ..sync.worker import LockWorker
 
 STORE_KEY = f"{DOMAIN}.core"
@@ -33,6 +39,15 @@ STORE_VERSION = 1
 SAVE_DELAY = 1.0
 
 Record = dict[str, Any]
+
+
+def _fingerprints(saved: dict[str, Any]) -> dict[str, str]:
+    """Return what was last written to a slot, per credential type."""
+    if "fingerprints" in saved:
+        return saved["fingerprints"]
+    if "wrote" in saved:
+        return {CredentialType.PIN.value: saved["wrote"]}
+    return {}
 
 
 class LockStore:
@@ -55,12 +70,13 @@ class LockStore:
 
     # What a lock's worker starts from ------------------------------------------
 
-    def wrote(self, key: str, slot: int) -> str | None:
-        """Return what was last written to ``slot`` on the lock, if anything."""
+    def wrote(self, key: str, address: CredentialAddress) -> str | None:
+        """Return what was last written at ``address`` on the lock, if anything."""
         record = self._locks.get(key)
-        return (
-            None if record is None else record["slots"].get(str(slot), {}).get("wrote")
-        )
+        if record is None:
+            return None
+        saved = record["slots"].get(str(address.user_ref), {})
+        return _fingerprints(saved).get(address.credential_type.value)
 
     def wrote_pin(self, key: str, slot: int) -> bool:
         """
@@ -68,7 +84,7 @@ class LockStore:
 
         A slot only ever cleared never held Lock Code Manager's code.
         """
-        return self.wrote(key, slot) not in (None, CLEARED)
+        return self.wrote(key, pin_address(slot)) not in (None, CLEARED)
 
     def answered(self, key: str) -> bool:
         """Return whether the lock has ever answered."""
@@ -96,22 +112,37 @@ class LockStore:
         self,
         key: str,
         lock: str,
-        worker: LockWorker,
+        worker: LockWorker[CredentialAddress, Any],
         given_up_by: Callable[[int], str | None],
     ) -> None:
         """
-        Take what ``worker`` knows of ``lock`` now; slots it no longer tracks keep theirs.
+        Take what ``worker`` knows of ``lock`` now; what it no longer tracks keeps its own.
 
-        A release is kept while it is still going, not once held: its repair
-        brings it back. ``given_up_by`` names the entry that gave a slot up.
+        Per slot, each credential type the worker tracks is written over; a
+        type it does not track keeps what was last written for it. A release
+        is kept while it is still going, not once held: its repair brings it
+        back. ``given_up_by`` names the entry that gave a slot up.
         """
         record = self._locks.get(key, {"answered": False, "slots": {}})
         slots = dict(record["slots"])
-        for number, slot in worker.slots.items():
-            saved: dict[str, str] = {}
-            if slot.wrote is not None:
-                saved["wrote"] = slot.wrote
-            if slot.release and slot.hold is None and (by := given_up_by(number)):
+        tracked: defaultdict[int, list[tuple[CredentialAddress, Slot]]] = defaultdict(
+            list
+        )
+        for address, slot in worker.slots.items():
+            tracked[address.user_ref].append((address, slot))
+        for number, held in tracked.items():
+            wrote = dict(_fingerprints(slots.get(str(number), {})))
+            for address, slot in held:
+                if slot.wrote is None:
+                    wrote.pop(address.credential_type.value, None)
+                else:
+                    wrote[address.credential_type.value] = slot.wrote
+            saved: dict[str, Any] = {"fingerprints": wrote} if wrote else {}
+            if (pin := wrote.get(CredentialType.PIN.value)) is not None:
+                saved["wrote"] = pin
+            if any(slot.release and slot.hold is None for _, slot in held) and (
+                by := given_up_by(number)
+            ):
                 saved["release"] = by
             if saved:
                 slots[str(number)] = saved

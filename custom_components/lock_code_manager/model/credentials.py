@@ -18,7 +18,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final, NamedTuple
+from typing import Final, NamedTuple, override
 
 
 class SlotCode(StrEnum):
@@ -241,15 +241,18 @@ class CredentialAddress(NamedTuple):
     is the integration-side handle the coordinator and the sync engine key
     on: which managed user, and which kind of credential.
 
-    ``user_ref`` is deliberately loose. Today it is the managed slot number,
-    because the slot number is still the only user handle the configuration
-    has. Once the configuration migrates to named users it becomes the
-    user's name. Keeping both stages behind this one alias is what makes
-    that a one-place type change rather than a second re-key.
+    ``user_ref`` is the managed slot number. An entry owns a slot and every
+    credential type in it, so the sync registry (``slot_of``) and the lock
+    store key by it.
     """
 
     user_ref: int
     credential_type: CredentialType
+
+    @override
+    def __str__(self) -> str:
+        """Name the address in logs: its slot and credential type."""
+        return f"{self.user_ref} {self.credential_type}"
 
 
 def managed_addresses(user_ref: int) -> tuple[CredentialAddress, ...]:

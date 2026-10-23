@@ -44,10 +44,12 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialAddress,
     CredentialRef,
     CredentialType,
     SlotCredential,
     WriteResult,
+    pin_address,
 )
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.providers._util import parse_tag
@@ -157,7 +159,7 @@ class TestSetAndClearUsercodes:
         worker = lock_registry(hass).worker(e2e_matter_lock.lock.entity_id)
         assert worker is not None
         matter_mock_helpers["get_lock_users"].return_value = _TAGGED_USERS
-        pushed: list[tuple[int, object]] = []
+        pushed: list[tuple[CredentialAddress, object]] = []
         with (
             patch.object(
                 worker, "push", lambda slot, value: pushed.append((slot, value))
@@ -177,7 +179,7 @@ class TestSetAndClearUsercodes:
         ):
             await e2e_matter_lock.async_clear_usercode(2)
 
-        assert (2, Seen.EMPTY) in pushed
+        assert (pin_address(2), Seen.EMPTY) in pushed
 
 
 class TestGetUsercodes:

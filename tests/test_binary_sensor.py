@@ -68,7 +68,10 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
-from custom_components.lock_code_manager.model.credentials import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    pin_address,
+)
 from custom_components.lock_code_manager.model.exceptions import (
     DuplicateCodeError,
     LockDisconnected,
@@ -494,7 +497,7 @@ async def test_per_lock_entities_stay_available_for_every_status(
     """
     await hass.async_block_till_done()
     worker = _worker(hass)
-    slot = worker.slots[1]
+    slot = worker.slots[pin_address(1)]
     assert worker.answered
     if status is Status.UNKNOWN:
         slot.seen = None
@@ -502,7 +505,7 @@ async def test_per_lock_entities_stay_available_for_every_status(
         slot.seen = Holds("9999")
     if status is Status.SUSPENDED:
         slot.hold = Repair.CANT_SET
-    assert worker.status(1)[0] is status
+    assert worker.status(pin_address(1))[0] is status
     worker.on_change()
     await hass.async_block_till_done()
 
@@ -520,7 +523,7 @@ async def test_per_lock_entities_are_unavailable_before_the_lock_answers(
     """A slot never read, on a lock that has not answered yet, has nothing to show."""
     await hass.async_block_till_done()
     worker = _worker(hass)
-    worker.slots[1].seen = None
+    worker.slots[pin_address(1)].seen = None
     with patch.object(
         LockWorker, "answered", new_callable=PropertyMock, return_value=False
     ):
@@ -1781,7 +1784,7 @@ async def test_slot_disabled_during_sync_resolves_correctly(
     assert lock_provider.service_calls["clear_usercode"] == [(1,)]
     assert 1 not in lock_provider.codes
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
-    assert _worker(hass).slots[1].tries == 0
+    assert _worker(hass).slots[pin_address(1)].tries == 0
 
 
 async def test_rapid_coordinator_updates_coalesce(
@@ -2199,7 +2202,7 @@ async def test_the_next_confirmation_read_settles_a_pending_write_without_a_seco
     assert lock_provider.codes[1] == "9999"
     assert lock_provider.service_calls["set_usercode"] == [(1, "9999", "test1")]
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
-    assert _worker(hass).slots[1].hold is None
+    assert _worker(hass).slots[pin_address(1)].hold is None
 
 
 async def test_disabling_the_in_sync_sensor_does_not_stop_the_sync(

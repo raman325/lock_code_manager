@@ -81,7 +81,7 @@ class LockCodeManagerCodeSlotSensorEntity(
         if (slot := self._core_slot()) is None:
             return None
         if isinstance(slot.seen, Holds):
-            return slot.seen.pin
+            return slot.seen.value
         if slot.seen is Seen.EMPTY:
             return ""
         if self._core_status() is Status.IN_SYNC:

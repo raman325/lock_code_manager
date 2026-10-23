@@ -26,11 +26,13 @@ from custom_components.lock_code_manager.ha.adapter import (
     reading,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialAddress,
     CredentialRef,
     CredentialType,
     SlotCredential,
     WriteResult,
     credential_from_slot,
+    pin_address,
 )
 from custom_components.lock_code_manager.model.exceptions import (
     CodeRejectedError,
@@ -252,17 +254,17 @@ _STANDING = {
 
 
 @pytest.fixture
-def pushed_to_worker(zha_lock: ZHALock) -> dict[int, Reading]:
+def pushed_to_worker(zha_lock: ZHALock) -> dict[CredentialAddress, Reading]:
     """
     Give the lock the core's stand-in coordinator; return what reaches the worker.
 
     Slot 3 is tracked by the lock's worker, so what the provider pushes about
-    it is handed to ``worker.push``, recorded here by slot.
+    it is handed to ``worker.push``, recorded here by address.
     """
     port = ProviderPort(zha_lock)
     worker = port.worker = LockWorker(port, b"salt", gap=0.0)
-    worker.slots[3] = Slot(None)
-    pushes: dict[int, Reading] = {}
+    worker.slots[pin_address(3)] = Slot(None)
+    pushes: dict[CredentialAddress, Reading] = {}
     worker.push = pushes.__setitem__  # type: ignore[method-assign]
     zha_lock.coordinator = _Coordinator(port)
     return pushes
@@ -368,7 +370,7 @@ _CLUSTERS = pytest.mark.parametrize(
 @pytest.mark.parametrize("reply", _OWN_SUCCESSES)
 async def test_a_write_its_own_reply_does_not_refuse_stands(
     zha_lock: ZHALock,
-    pushed_to_worker: dict[int, Reading],
+    pushed_to_worker: dict[CredentialAddress, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -394,7 +396,7 @@ async def test_a_write_its_own_reply_does_not_refuse_stands(
         )
     else:
         cluster.clear_pin_code.assert_called_once_with(3)
-    assert pushed_to_worker[3] == reading(pushed)
+    assert pushed_to_worker[pin_address(3)] == reading(pushed)
 
 
 @_CLUSTERS
@@ -402,7 +404,7 @@ async def test_a_write_its_own_reply_does_not_refuse_stands(
 @pytest.mark.parametrize("reply", _FOREIGN_REPLIES)
 async def test_a_write_answered_by_another_frame_fails_for_a_retry(
     zha_lock: ZHALock,
-    pushed_to_worker: dict[int, Reading],
+    pushed_to_worker: dict[CredentialAddress, Reading],
     command: str,
     request_id: int,
     response: str,
@@ -424,7 +426,7 @@ async def test_a_write_answered_by_another_frame_fails_for_a_retry(
 
     with pytest.raises(LockOperationFailed, match="answered by a reply to something"):
         await _write(zha_lock, command)
-    assert 3 not in pushed_to_worker
+    assert pin_address(3) not in pushed_to_worker
 
 
 # A quirk redefining a write's own response so its status is unusable: the
@@ -469,7 +471,7 @@ _UNUSABLE_STATUS = [
 )
 async def test_an_own_response_with_an_unusable_status(
     zha_lock: ZHALock,
-    pushed_to_worker: dict[int, Reading],
+    pushed_to_worker: dict[CredentialAddress, Reading],
     command: str,
     response: str,
     fields: dict[str, Any],
@@ -493,11 +495,11 @@ async def test_an_own_response_with_an_unusable_status(
     if rejected:
         with pytest.raises(CodeRejectedError, match=f"{command} rejected: status"):
             await _write(zha_lock, command)
-        assert 3 not in pushed_to_worker
+        assert pin_address(3) not in pushed_to_worker
         return
     returned, pushed = _STANDING[command]
     assert await _write(zha_lock, command) is returned
-    assert pushed_to_worker[3] == reading(pushed)
+    assert pushed_to_worker[pin_address(3)] == reading(pushed)
 
 
 # ---------------------------------------------------------------------------
