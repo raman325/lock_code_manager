@@ -241,11 +241,9 @@ class CredentialAddress(NamedTuple):
     is the integration-side handle the coordinator and the sync engine key
     on: which managed user, and which kind of credential.
 
-    ``user_ref`` is deliberately loose. Today it is the managed slot number,
-    because the slot number is still the only user handle the configuration
-    has. Once the configuration migrates to named users it becomes the
-    user's name. Keeping both stages behind this one alias is what makes
-    that a one-place type change rather than a second re-key.
+    ``user_ref`` is the managed slot number. An entry owns a slot and every
+    credential type in it, so the sync registry (``slot_of``) and the lock
+    store key by it.
     """
 
     user_ref: int

@@ -64,6 +64,8 @@ class LockRegistry[K: Key, P: LockPort[Any]]:
         *,
         prepare: Hook[K, P] = _nothing,
         cleanup: Hook[K, P] = _nothing,
+        # A registry whose keys are not slot numbers must pass ``slot_of``,
+        # or ``owner``, ``unclaim`` and ``give_up`` never match.
         slot_of: Callable[[K], int] = _itself,
     ) -> None:
         """
@@ -120,7 +122,9 @@ class LockRegistry[K: Key, P: LockPort[Any]]:
 
             worker.on_change = _on_change
         else:
-            _check_free(entry, owner, {self._slot_of(key) for key in wants})
+            _check_free(
+                entry, owner, dict.fromkeys(self._slot_of(key) for key in wants)
+            )
         entry.holders.add(owner)
         for key, value in wants.items():
             entry.owners[self._slot_of(key)] = owner

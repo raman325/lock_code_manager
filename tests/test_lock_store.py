@@ -1,7 +1,6 @@
 """What a lock's worker remembers across a restart: the core's store."""
 
 from copy import deepcopy
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -34,6 +33,7 @@ from custom_components.lock_code_manager.model.exceptions import LockDisconnecte
 from custom_components.lock_code_manager.model.locks import per_lock_issue_id
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
 from custom_components.lock_code_manager.sync.slot import CLEARED, Slot, fingerprint
+from custom_components.lock_code_manager.sync.worker import LockWorker
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -850,9 +850,9 @@ async def test_remembering_one_type_keeps_the_others_in_the_slot(
     }
     store = LockStore(hass)
     await store.async_load()
-    worker = SimpleNamespace(
-        slots={pin_address(1): Slot("1234", wrote="new")}, answered_ever=True
-    )
+    # Never started, so the port is never asked anything.
+    worker = LockWorker(object(), b"salt")
+    worker.slots[pin_address(1)] = Slot("1234", wrote="new")
 
     store.remember(key, LOCK_1_ENTITY_ID, worker, lambda slot: None)
 

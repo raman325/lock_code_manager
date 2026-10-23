@@ -214,12 +214,12 @@ class LockWorker[K: Key, P: LockPort[Any]]:
 
     # The integration's side -------------------------------------------------
 
-    def want(self, slot: K, pin: Want, *, release: bool = False) -> None:
-        """Say what ``slot`` should hold; a release clear when ``release``."""
+    def want(self, slot: K, value: Want, *, release: bool = False) -> None:
+        """Say ``slot`` should hold ``value``; a release clear when ``release``."""
         if (current := self.slots.get(slot)) is None:
-            self.slots[slot] = Slot(pin, wrote=self.recall(slot), release=release)
+            self.slots[slot] = Slot(value, wrote=self.recall(slot), release=release)
         else:
-            current.aim(pin, release=release)
+            current.aim(value, release=release)
             if self._unsure_of(slot, current):
                 current.doubt(self.salt)
         self.request_sync((slot,), why="want change")

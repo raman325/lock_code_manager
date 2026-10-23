@@ -181,10 +181,10 @@ class ProviderPort:
             )
 
     async def read(
-        self, slots: Collection[CredentialAddress]
+        self, addresses: Collection[CredentialAddress]
     ) -> dict[CredentialAddress, Reading]:
-        """Ask the lock about ``slots`` now (see ``_read``), timed for the logs."""
-        numbers = [self._pin_slot(address) for address in slots]
+        """Ask the lock about ``addresses`` now (see ``_read``), timed for the logs."""
+        numbers = [self._pin_slot(address) for address in addresses]
         op = (
             "read (hard refresh)"
             if self.provider.fresh_read_is_hard_refresh
@@ -331,9 +331,9 @@ class ProviderPort:
         else:
             self._written.discard(slot)
 
-    async def write(self, slot: CredentialAddress, value: str | None) -> bool | None:
-        """Put ``value`` at ``slot``, or clear it (see ``_write``), timed for the logs."""
-        number = self._pin_slot(slot)
+    async def write(self, address: CredentialAddress, value: str | None) -> bool | None:
+        """Put ``value`` at ``address`` or clear it (see ``_write``), timed for logs."""
+        number = self._pin_slot(address)
         op = "clear" if value is None else "set"
         return await self._timed(op, number, lambda: self._write(number, value))
 

@@ -483,7 +483,7 @@ async def _async_rebuild_if_re_paired(hass: HomeAssistant, lock: str) -> None:
     _LOGGER.info("%s is a different device now (re-paired): starting it over", lock)
     moot = sorted(_slots_of(a for a, slot in worker.slots.items() if slot.release))
     _async_report_dropped_work(hass, lock, moot)
-    for address in [a for a in worker.slots if a.user_ref in moot]:
+    for address in [a for a, s in worker.slots.items() if s.release]:
         worker.forget(address)
     for slot in moot:
         data[GIVEN_UP_KEY].pop((lock, slot), None)
@@ -845,12 +845,9 @@ def async_reconcile_issues(
     """
     data = hass.data[DATA]
     given_up = data[GIVEN_UP_KEY]
+    tracked = set(_slots_of(worker.slots))
     for key, (_, clearing) in list(given_up.items()):
-        if (
-            key[0] == lock_entity_id
-            and clearing is worker
-            and key[1] not in _slots_of(worker.slots)
-        ):
+        if key[0] == lock_entity_id and clearing is worker and key[1] not in tracked:
             del given_up[key]  # cleared and dropped: nothing left to resume
             if (store := data.get(STORE_KEY)) is not None:
                 store.forget_slot(worker.port.provider.lock.id, key[1])
@@ -1036,11 +1033,12 @@ def lock_codes(hass: HomeAssistant, lock_entity_id: str) -> dict[int, str | Slot
         slot: _label_of(slot, reading) for slot, reading in worker.port.others.items()
     }
     # The card's PIN view: other credential types are not codes it shows.
-    for slot_num, slot in (
+    pins = (
         (address.user_ref, slot)
         for address, slot in worker.slots.items()
         if address.credential_type is CredentialType.PIN
-    ):
+    )
+    for slot_num, slot in pins:
         if slot.seen is not None:
             codes[slot_num] = _label_of(slot_num, slot.seen)
         elif not slot.release:
