@@ -80,6 +80,7 @@ from custom_components.lock_code_manager.model.credentials import (
     SlotCode,
     SlotCredential,
     WriteResult,
+    pin_address,
 )
 from custom_components.lock_code_manager.model.events import (
     CredentialOperation,
@@ -593,7 +594,7 @@ async def _assert_a_refresh_reads_the_lock(
     _lock_holds_on_slot_3(access_control, "7777")
     worker = lock_registry(hass).worker(lock.lock.entity_id)
     assert worker is not None
-    assert (await worker.read([3]))[3] == Holds("7777")
+    assert (await worker.read([pin_address(3)]))[pin_address(3)] == Holds("7777")
 
 
 class TestSharedCoordinatorLifetime:
@@ -3220,7 +3221,7 @@ class TestReleaseKeepsWhatLCMDidNotWrite:
         # Done: nothing left owed or held for the slot.
         assert lcm_issue_ids(hass) == []
         worker = lock_registry(hass).worker(lock_entity.entity_id)
-        assert worker is None or 2 not in worker.slots
+        assert worker is None or pin_address(2) not in worker.slots
 
 
 class TestReleaseOfARenamedUser:

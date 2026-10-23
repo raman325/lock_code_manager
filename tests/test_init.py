@@ -94,7 +94,10 @@ from custom_components.lock_code_manager.model.config import (
     build_slot_device_identifier,
     build_slot_unique_id,
 )
-from custom_components.lock_code_manager.model.credentials import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    pin_address,
+)
 from custom_components.lock_code_manager.model.exceptions import (
     LockBusy,
     LockDisconnected,
@@ -2052,7 +2055,7 @@ async def test_reload_resets_sync_state_cleanly(
     assert new_worker is not old_worker
     # The fresh worker read the lock and brought the slot in line.
     await async_initial_tick(hass, SLOT_1_IN_SYNC_ENTITY)
-    assert new_worker.slots[1].tries == 0
+    assert new_worker.slots[pin_address(1)].tries == 0
     assert hass.states.get(SLOT_1_IN_SYNC_ENTITY).state == STATE_ON
 
 
@@ -2139,7 +2142,11 @@ async def test_two_entries_same_lock_share_suspension_and_recovery(
     lock = entry_a.runtime_data.locks[LOCK_1_ENTITY_ID]
     assert entry_b.runtime_data.locks[LOCK_1_ENTITY_ID] is lock
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
-    assert worker is not None and 3 in worker.slots and 1 in worker.slots
+    assert (
+        worker is not None
+        and pin_address(3) in worker.slots
+        and pin_address(1) in worker.slots
+    )
 
     entry_b_in_sync_entity = in_sync_entity_id(hass, entry_b, 3)
     await async_initial_tick(hass, entry_b_in_sync_entity)
@@ -2893,7 +2900,7 @@ async def test_an_entry_setting_up_while_another_unloads_joins_the_lock_it_holds
     # Still the second entry's: its slot is on the lock, and a read sees it.
     assert old_lock.codes[3] == "2468"
     old_lock.codes[9] = "1357"
-    await worker.read((9,))
+    await worker.read((pin_address(9),))
     assert lock_runtime.lock_codes(hass, LOCK_1_ENTITY_ID)[9] == "1357"
 
     assert await hass.config_entries.async_unload(second_entry.entry_id)
@@ -3572,7 +3579,7 @@ async def test_pairs_removed_skips_untracked_lock_and_survives_release_failure(
         assert 2 in entry.runtime_data.slot_coordinators
         # The clear is still owed: the worker keeps the slot to retry it.
         worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
-        assert worker is not None and worker.slots[1].release
+        assert worker is not None and worker.slots[pin_address(1)].release
 
         assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -5503,7 +5510,9 @@ async def test_removing_a_slot_stops_its_coordinator_and_lets_the_locks_go(
         lock_registry(hass).worker(lock_entity_id)
         for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID)
     ]
-    assert all(worker is not None and 2 in worker.slots for worker in workers)
+    assert all(
+        worker is not None and pin_address(2) in worker.slots for worker in workers
+    )
 
     new_config = copy.deepcopy(BASE_CONFIG)
     del new_config[CONF_SLOTS][2]
@@ -5514,7 +5523,7 @@ async def test_removing_a_slot_stops_its_coordinator_and_lets_the_locks_go(
     assert 1 in entry.runtime_data.slot_coordinators
     assert not coordinator._started
     # The slot's release clear is done, and the workers have let it go.
-    assert not any(2 in worker.slots for worker in workers)
+    assert not any(pin_address(2) in worker.slots for worker in workers)
 
 
 async def test_a_blip_during_the_deferred_setup_retry_is_retried_again(

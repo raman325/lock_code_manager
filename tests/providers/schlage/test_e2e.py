@@ -35,6 +35,7 @@ from custom_components.lock_code_manager.model.credentials import (
     SlotCredential,
     WriteResult,
     credential_from_slot,
+    pin_address,
 )
 from custom_components.lock_code_manager.providers._util import (
     make_tagged_name,
@@ -189,9 +190,12 @@ class TestSetAndClearCredentials:
         )
 
         worker = lock_registry(hass).worker(entity_id)
-        assert await worker.read([1, 2]) == {1: Seen.MASKED, 2: Seen.EMPTY}
-        assert worker.slots[1].seen is Seen.MASKED
-        assert worker.slots[2].seen is Seen.EMPTY
+        assert await worker.read([pin_address(1), pin_address(2)]) == {
+            pin_address(1): Seen.MASKED,
+            pin_address(2): Seen.EMPTY,
+        }
+        assert worker.slots[pin_address(1)].seen is Seen.MASKED
+        assert worker.slots[pin_address(2)].seen is Seen.EMPTY
 
     async def test_coordinator_reflects_clear_credential(
         self,
@@ -211,9 +215,12 @@ class TestSetAndClearCredentials:
         )
 
         worker = lock_registry(hass).worker(entity_id)
-        assert await worker.read([1, 2]) == {1: Seen.EMPTY, 2: Seen.EMPTY}
-        assert worker.slots[1].seen is Seen.EMPTY
-        assert worker.slots[2].seen is Seen.EMPTY
+        assert await worker.read([pin_address(1), pin_address(2)]) == {
+            pin_address(1): Seen.EMPTY,
+            pin_address(2): Seen.EMPTY,
+        }
+        assert worker.slots[pin_address(1)].seen is Seen.EMPTY
+        assert worker.slots[pin_address(2)].seen is Seen.EMPTY
 
 
 class TestGetUsers:

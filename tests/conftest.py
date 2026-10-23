@@ -30,6 +30,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.ha.runtime import lock_registry
+from custom_components.lock_code_manager.model.credentials import pin_address
 from custom_components.lock_code_manager.providers import INTEGRATIONS_CLASS_MAP
 from custom_components.lock_code_manager.providers._base import BaseLock
 
@@ -412,7 +413,7 @@ async def async_trigger_sync_tick(
     entity = get_in_sync_entity_obj(hass, entity_id)
     worker = lock_registry(hass).worker(entity.lock.lock.entity_id)
     if worker is not None:
-        worker.request_sync((int(entity.slot_num),))
+        worker.request_sync((pin_address(int(entity.slot_num)),))
     await hass.async_block_till_done()
 
 

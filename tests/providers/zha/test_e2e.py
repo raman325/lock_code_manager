@@ -55,7 +55,10 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_reachable,
     lock_registry,
 )
-from custom_components.lock_code_manager.model.credentials import SlotCredential
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCredential,
+    pin_address,
+)
 from custom_components.lock_code_manager.providers.zha import ZHALock
 from custom_components.lock_code_manager.repairs import async_create_fix_flow
 from custom_components.lock_code_manager.sync.slot import LIMIT, Holds, Seen
@@ -121,7 +124,7 @@ def _worker(hass: HomeAssistant, lcm_config_entry: MockConfigEntry) -> LockWorke
 
 def _seen(hass: HomeAssistant, lcm_config_entry: MockConfigEntry, slot: int) -> Any:
     """Return what the lock last said about ``slot``, as its worker holds it."""
-    return _worker(hass, lcm_config_entry).slots[slot].seen
+    return _worker(hass, lcm_config_entry).slots[pin_address(slot)].seen
 
 
 async def _run_ticks(hass: HomeAssistant) -> None:

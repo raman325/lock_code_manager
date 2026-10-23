@@ -26,6 +26,7 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.ha.unmanaged import unmanaged_issue_id
+from custom_components.lock_code_manager.model.credentials import pin_address
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.providers import BaseLock
@@ -362,7 +363,7 @@ async def test_an_unmanaged_clear_after_a_release_is_a_plain_clear(
     async_give_up(hass, entry, LOCK_1_ENTITY_ID, 2)
     await hass.async_block_till_done()
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
-    assert worker is not None and 2 not in worker.slots
+    assert worker is not None and pin_address(2) not in worker.slots
     assert 2 not in lock.codes
 
     # Someone programs a code at the keypad; the user clears it from the card.

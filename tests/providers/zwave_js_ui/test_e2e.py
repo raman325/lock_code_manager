@@ -49,7 +49,11 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_codes,
     lock_registry,
 )
-from custom_components.lock_code_manager.model.credentials import SlotCode, WriteResult
+from custom_components.lock_code_manager.model.credentials import (
+    SlotCode,
+    WriteResult,
+    pin_address,
+)
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
 from custom_components.lock_code_manager.providers.zwave_js_ui import (
@@ -162,7 +166,7 @@ def charged(hass: HomeAssistant, lock_entity_id: str, slot_num: int) -> bool:
     """Return whether a failed sync of the slot was charged to it."""
     worker = lock_registry(hass).worker(lock_entity_id)
     assert worker is not None
-    slot = worker.slots[slot_num]
+    slot = worker.slots[pin_address(slot_num)]
     return slot.tries > 0 or slot.hold is not None
 
 

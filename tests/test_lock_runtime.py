@@ -49,6 +49,7 @@ from custom_components.lock_code_manager.ha.runtime import (
 from custom_components.lock_code_manager.model.credentials import (
     SlotCode,
     SlotCredential,
+    pin_address,
 )
 from custom_components.lock_code_manager.model.exceptions import (
     LockCodeManagerProviderError,
@@ -110,7 +111,7 @@ async def test_a_one_off_read_does_not_unload_the_provider_it_borrowed(
 ) -> None:
     """Unloading would write a virtual lock's store back, erasing its codes."""
     with when_mock_lock_built(lambda lock: lock) as built:
-        await lock_registry(hass).read_once(LOCK_2_ENTITY_ID, [1])
+        await lock_registry(hass).read_once(LOCK_2_ENTITY_ID, [pin_address(1)])
         await hass.async_block_till_done()
 
     assert built
@@ -513,7 +514,7 @@ async def test_a_held_clear_is_tried_again_after_its_entry_has_gone(
     await hass.async_block_till_done()
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
     assert worker is not None
-    assert worker.status(1) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+    assert worker.status(pin_address(1)) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is None
@@ -888,11 +889,11 @@ async def test_a_duplicate_refused_unsent_is_not_the_lock_answering(
 
     lock.fail(None, error=LockDisconnected)
     # Slot 1's sync gets no answer (owed); slot 2 asks for that code's PIN.
-    worker.want(1, "1111")
-    worker.want(2, "9999")
+    worker.want(pin_address(1), "1111")
+    worker.want(pin_address(2), "9999")
     await hass.async_block_till_done()
 
-    assert worker.slots[1].tries == 0
+    assert worker.slots[pin_address(1)].tries == 0
     assert worker._answers == answers
 
 
@@ -1269,14 +1270,14 @@ async def test_a_held_release_lifts_and_is_done_once_a_read_finds_it_empty(
     store = hass.data[DOMAIN][STORE_KEY]
     worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
     assert worker is not None
-    assert worker.status(1) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
+    assert worker.status(pin_address(1)) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
     del lock.codes[1]
     clears = len(lock.service_calls["clear_usercode"])
 
     await _hard_refresh(hass)
 
     assert issue_id not in lcm_issue_ids(hass, "slot_suspended")
-    assert 1 not in worker.slots
+    assert pin_address(1) not in worker.slots
     assert (LOCK_1_ENTITY_ID, 1) not in hass.data[DOMAIN][GIVEN_UP_KEY]
     assert store.releases() == []
     assert len(lock.service_calls["clear_usercode"]) == clears
@@ -1367,7 +1368,7 @@ async def test_an_entry_setting_up_during_a_one_off_read_is_synced_at_once(
 
     with when_mock_lock_built(_act) as built:
         read = hass.async_create_task(
-            lock_registry(hass).read_once(LOCK_1_ENTITY_ID, [5])
+            lock_registry(hass).read_once(LOCK_1_ENTITY_ID, [pin_address(5)])
         )
         await faults[0].async_wait_held()
         setup = hass.async_create_task(hass.config_entries.async_setup(entry.entry_id))
