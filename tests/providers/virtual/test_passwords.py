@@ -12,6 +12,7 @@ import itertools
 from unittest.mock import patch
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import HomeAssistant
 
@@ -48,23 +49,24 @@ def _held(lock: VirtualLock, field: str) -> str | None:
 
 
 async def _start_from(
-    hass: HomeAssistant, lock: VirtualLock, pin: str | None, password: str | None
+    hass: HomeAssistant,
+    entry: MockConfigEntry,
+    lock: VirtualLock,
+    pin: str | None,
+    password: str | None,
 ) -> None:
-    """Put the slot's starting values on the lock, and have the worker read them."""
-    record = {"name": "slot1"}
-    if pin is not None:
-        record["code"] = pin
-    if password is not None:
-        record["password"] = password
-    # A slot holding nothing has no record, as Virtual keeps it.
-    if len(record) > 1:
-        lock._data["1"] = record
-    else:
-        lock._data.pop("1", None)
+    """Put the slot's starting values on the lock through the runtime."""
     worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
     assert worker is not None
-    await worker.read()
+    async_want(
+        hass,
+        entry,
+        VIRTUAL_LOCK_ENTITY_ID,
+        1,
+        {CredentialType.PIN: pin, CredentialType.PASSWORD: password},
+    )
     await worker.settled()
+    assert (_held(lock, "code"), _held(lock, "password")) == (pin, password)
 
 
 @pytest.mark.parametrize(("pin_before", "pw_before", "pin_want", "pw_want"), CASES)
@@ -78,7 +80,7 @@ async def test_each_type_converges_on_its_own(
 ) -> None:
     """What each type wants is what the lock holds, whatever the other does."""
     lock = get_virtual_lock(hass, lcm_config_entry)
-    await _start_from(hass, lock, pin_before, pw_before)
+    await _start_from(hass, lcm_config_entry, lock, pin_before, pw_before)
     worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
     assert worker is not None
 
@@ -107,7 +109,7 @@ async def test_a_release_leaves_nothing_and_is_sent_once(
 ) -> None:
     """Giving the slot up clears every type Lock Code Manager keeps there."""
     lock = get_virtual_lock(hass, lcm_config_entry)
-    await _start_from(hass, lock, pin_before, pw_before)
+    await _start_from(hass, lcm_config_entry, lock, pin_before, pw_before)
     worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
     assert worker is not None
     async_want(

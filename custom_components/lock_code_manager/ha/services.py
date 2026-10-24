@@ -174,7 +174,7 @@ def _slot_coordinator_for(
 
 def _managed_credential_type(credential_type: str) -> CredentialType:
     """
-    Return the credential type, refusing kinds this integration cannot write.
+    Return the credential type, refusing kinds this integration cannot store.
 
     Every member of ``CredentialType`` is accepted by the schema so the
     vocabulary is the providers' rather than this action's, and the ones Lock

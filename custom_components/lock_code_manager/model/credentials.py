@@ -123,10 +123,10 @@ class CredentialType(StrEnum):
     (``MANAGED_CREDENTIAL_TYPES``), but a use is reported as whichever kind
     the lock says was presented: ``PIN``, ``RFID`` or ``FINGERPRINT``
     (Matter, ZHA, Zigbee2MQTT) or ``FACE`` (Matter). ``NFC`` is reserved so a
-    future expansion to more kinds is additive. The members map cleanly to both the Z-Wave User
-    Credential Command Class and the Matter DoorLock cluster credential-type
-    vocabularies. ``PIN`` deliberately serializes to the lowercase wire value
-    the providers already send.
+    future expansion to more kinds is additive. The members map cleanly to
+    both the Z-Wave User Credential Command Class and the Matter DoorLock
+    cluster credential-type vocabularies. ``PIN`` deliberately serializes to
+    the lowercase wire value the providers already send.
     """
 
     PIN = "pin"

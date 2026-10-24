@@ -203,8 +203,8 @@ async def test_event_types_unions_what_the_entrys_locks_advertise(
     What Lock Code Manager can write and what a lock can report are
     different sets. A lock with its own card reader reports RFID uses that
     nothing here ever wrote, and refusing to name them would make them
-    unrecordable -- so the managed set is a floor under the union, not a
-    cap on it.
+    unrecordable -- so a PIN and the types each lock takes are a floor
+    under the union, not a cap on it.
     """
     with patch(
         "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",

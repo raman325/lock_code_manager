@@ -56,6 +56,7 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
 from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
 from custom_components.lock_code_manager.ha.runtime import (
+    async_give_up,
     async_reconcile_issues,
     async_want,
     lock_registry,
@@ -63,7 +64,6 @@ from custom_components.lock_code_manager.ha.runtime import (
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
-    MANAGED_CREDENTIAL_TYPES,
     CredentialAddress,
     CredentialRef,
     CredentialType,
@@ -366,10 +366,11 @@ class TestCredentialUseRecording:
         assert state.state != STATE_UNAVAILABLE
         lock = get_virtual_lock(hass, lcm_config_entry)
         # The first sync's write probed the capabilities: the virtual lock
-        # advertises every credential type, on top of the managed floor.
+        # advertises every credential type, on top of the types it takes.
         assert lock.cached_capabilities is not None
         assert state.attributes[ATTR_EVENT_TYPES] == sorted(
-            set(MANAGED_CREDENTIAL_TYPES)
+            {CredentialType.PIN}
+            | lock.managed_credential_types
             | set(lock.cached_capabilities.credential_types)
         )
         assert lock.supports_code_slot_events is False
@@ -420,7 +421,8 @@ class TestCredentialUseRecording:
             build_slot_unique_id(entry.entry_id, 1, EVENT_CREDENTIAL_USED),
         )
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == sorted(
-            set(MANAGED_CREDENTIAL_TYPES)
+            {CredentialType.PIN}
+            | lock.managed_credential_types
             | set(lock.cached_capabilities.credential_types)
         )
         assert await hass.config_entries.async_unload(entry.entry_id)
@@ -872,6 +874,34 @@ class TestPasswordsKeptPerLock:
             )
 
         assert password not in worker.slots
+
+    async def test_a_release_in_flight_is_kept_when_the_lock_stops_taking_its_type(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A type the lock no longer takes is not let go of while its clear is owed."""
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        password = CredentialAddress(1, CredentialType.PASSWORD)
+
+        # Given up and wanted again with nothing awaited in between, so the
+        # release clear has not run when the want arrives.
+        async_give_up(hass, lcm_config_entry, VIRTUAL_LOCK_ENTITY_ID, 1)
+        assert worker.slots[password].release
+        with patch.object(
+            VirtualLock,
+            "writable_credential_types",
+            new_callable=PropertyMock,
+            return_value=frozenset({CredentialType.PIN}),
+        ):
+            async_want(
+                hass,
+                lcm_config_entry,
+                VIRTUAL_LOCK_ENTITY_ID,
+                1,
+                {CredentialType.PIN: "1234"},
+            )
+
+        assert worker.slots[password].release
 
     async def test_password_in_sync_is_registered_but_disabled_by_default(
         self, hass: HomeAssistant, lcm_config_entry
