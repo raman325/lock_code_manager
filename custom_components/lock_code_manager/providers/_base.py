@@ -1280,11 +1280,24 @@ class BaseLock:
         A PIN goes through ``async_set_usercode``, which a provider may
         override; every other type through the same orchestration, typed.
         """
+        self._require_writable_type(credential_type)
         if credential_type is CredentialType.PIN:
             return await self.async_set_usercode(code_slot, value, name, source)
         return await self._set_slot_credential(
             code_slot, credential_type, value, name=name, source=source
         )
+
+    def _require_writable_type(self, credential_type: CredentialType) -> None:
+        """
+        Raise ``LockOperationUnsupported`` for a type this provider cannot write.
+
+        Slot-only providers ignore the type they are handed, so a stray
+        write or clear of one they do not store would land on the PIN.
+        """
+        if credential_type not in self.writable_credential_types:
+            raise LockOperationUnsupported(
+                f"Lock {self.lock.entity_id} cannot write {credential_type} credentials"
+            )
 
     @final
     async def _set_slot_credential(
@@ -1339,6 +1352,7 @@ class BaseLock:
         A PIN goes through ``async_clear_usercode``, which a provider may
         override; every other type through the same path, typed.
         """
+        self._require_writable_type(credential_type)
         if credential_type is CredentialType.PIN:
             return await self.async_clear_usercode(code_slot)
         return await self._clear_slot_credential(code_slot, credential_type)

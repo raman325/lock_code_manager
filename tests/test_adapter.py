@@ -1167,3 +1167,39 @@ async def test_a_provider_writes_pins_unless_it_says_otherwise(
 ) -> None:
     """The base provider's writable types: PIN alone."""
     assert _build(hass).writable_credential_types == {CredentialType.PIN}
+
+
+async def test_a_type_the_provider_cannot_write_is_refused_untouched(
+    hass: HomeAssistant,
+) -> None:
+    """Slot-only providers ignore the type, so a stray set would write the PIN."""
+    lock = _build(hass)
+    codes = dict(lock.codes)
+
+    with pytest.raises(LockOperationUnsupported):
+        await lock.async_set_slot_credential(1, CredentialType.PASSWORD, "x")
+    with pytest.raises(LockOperationUnsupported):
+        await lock.async_clear_slot_credential(1, CredentialType.PASSWORD)
+
+    assert lock.codes == codes
+    assert not lock.service_calls
+
+
+async def test_the_typed_hooks_route_a_pin_through_the_pin_hooks(
+    hass: HomeAssistant,
+) -> None:
+    """A provider overrides the PIN hooks, so the typed ones must reach them."""
+    lock = _build(hass)
+
+    await lock.async_set_slot_credential(5, CredentialType.PIN, "5555")
+    assert lock.codes[5] == "5555"
+    read = await lock.async_get_slot_credentials(CredentialType.PIN, [5])
+    assert read[5] == SlotCredential.known("5555")
+    assert await lock.async_clear_slot_credential(5, CredentialType.PIN)
+    assert 5 not in lock.codes
+
+    assert list(lock.service_calls) == [
+        "set_usercode",
+        "get_usercodes",
+        "clear_usercode",
+    ]
