@@ -457,6 +457,22 @@ class TestCredentialUseRecording:
         assert state
         assert state.state == pin
 
+    async def test_a_password_is_a_kind_of_use_before_capabilities_are_read(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A type the lock takes is one a use can be reported as, probed or not."""
+        lock = get_virtual_lock(hass, lcm_config_entry)
+
+        # Unprobed, so only the types the lock takes can name a password;
+        # shown at once by the change signal the worker sends after a job.
+        lock._capabilities_cache = None
+        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
+
+        assert hass.states.get(SLOT_1_EVENT_ENTITY).attributes[ATTR_EVENT_TYPES] == [
+            CredentialType.PASSWORD,
+            CredentialType.PIN,
+        ]
+
 
 class TestReauthLockSwap:
     """A lock swapped out during reauth must lose its credential store."""

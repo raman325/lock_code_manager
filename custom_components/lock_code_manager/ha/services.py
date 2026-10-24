@@ -18,7 +18,7 @@ from ..const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from ..model.config import EntryConfig, async_write_entry_config
-from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
+from ..model.credentials import CredentialType
 from ..model.events import (
     CredentialOperation,
     async_fire_credential_used,
@@ -183,18 +183,11 @@ def _managed_credential_type(credential_type: str) -> CredentialType:
     that the word is invalid.
     """
     kind = CredentialType(credential_type)
-    if kind not in MANAGED_CREDENTIAL_TYPES:
-        supported = ", ".join(sorted(MANAGED_CREDENTIAL_TYPES))
-        raise ServiceValidationError(
-            f"Lock Code Manager cannot store a {kind} credential. "
-            f"Supported: {supported}"
-        )
+    # Only a PIN is held in the configuration so far: any other kind written
+    # here would land in the PIN.
     if kind is not CredentialType.PIN:
-        # Kept in sync on the locks that take it, but not held in the
-        # configuration yet: written here it would land in the PIN.
         raise ServiceValidationError(
-            f"Lock Code Manager cannot store a {kind} credential in its "
-            "configuration yet"
+            f"Lock Code Manager cannot store a {kind} credential yet. Supported: pin"
         )
     return kind
 
