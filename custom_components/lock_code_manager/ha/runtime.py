@@ -11,7 +11,6 @@ signal per lock; entities and the websocket listen to it.
 import asyncio
 from collections.abc import Iterable, Mapping
 import logging
-from operator import itemgetter
 from typing import Final
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -881,17 +880,19 @@ def async_reconcile_issues(
                 DOMAIN,
                 f"slot_suspended_{owner.entry_id}_{lock_entity_id}_{slot_num}",
             )
-        # The slot's repair, from the first of its credentials held for one.
-        slot = next(
-            (
-                held
-                for _, held in sorted(credentials, key=itemgetter(0))
-                if held.hold in _HOLD_ISSUES
-            ),
-            None,
-        )
-        if slot is None:
+        held = [
+            (address, credential)
+            for address, credential in credentials
+            if credential.hold in _HOLD_ISSUES
+        ]
+        if not held:
             continue
+        # The slot raises one repair: the warning that matters most, a code
+        # that may still open the door, then the first in address order.
+        _, slot = min(
+            held,
+            key=lambda pair: (pair[1].hold is not Repair.CODE_MAY_REMAIN, pair[0]),
+        )
         issue = _HOLD_ISSUES[slot.hold]  # type: ignore[index]
         entry_id = (
             owner.entry_id

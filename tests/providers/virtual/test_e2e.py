@@ -631,7 +631,9 @@ class TestSlotRepairs:
         )
         worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
         assert worker is not None
-        # The PIN was resumed and is not on the lock yet; the password is.
+        # Set by hand and reconciled at once: nothing awaits in between, so the
+        # worker cannot sync them first. The PIN was resumed and is not on the
+        # lock yet; the password is.
         worker.slots[pin_address(1)] = Slot("1234", seen=Holds("0000"))
         worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
             None, seen=Seen.EMPTY
@@ -640,6 +642,58 @@ class TestSlotRepairs:
         async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
 
         assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+    async def test_a_refusals_repair_is_answered_beside_a_password_that_wants_nothing(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """Re-enabled and on the lock: the PIN wanting a value answers the refusal."""
+        issue_id = f"slot_disabled_{lcm_config_entry.entry_id}_1"
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="slot_disabled",
+            translation_placeholders={"slot_num": "1", "reason": "x"},
+        )
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        # Set by hand and reconciled at once: nothing awaits in between, so the
+        # worker cannot sync them first.
+        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("1234"))
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            None, seen=Seen.EMPTY
+        )
+
+        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
+
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+    async def test_a_clear_that_would_not_take_is_the_slots_repair(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A code that may still open the door outranks one that could not be set."""
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        # Set by hand and reconciled at once: nothing awaits in between, so the
+        # worker cannot sync them first.
+        worker.slots[pin_address(1)] = Slot(
+            None, seen=Holds("0000"), hold=Repair.CODE_MAY_REMAIN
+        )
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            "secret", seen=Seen.EMPTY, hold=Repair.CANT_SET
+        )
+
+        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
+
+        issue = ir.async_get(hass).async_get_issue(
+            DOMAIN,
+            f"slot_suspended_{lcm_config_entry.entry_id}_{VIRTUAL_LOCK_ENTITY_ID}_1",
+        )
+        assert issue is not None
+        assert issue.translation_key == "slot_clear_failed"
 
 
 class TestOpenBugs:
