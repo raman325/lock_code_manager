@@ -66,10 +66,10 @@ async def test_clearing_the_password_leaves_the_pin(
     }
 
 
-async def test_a_release_reaches_the_provider_once_per_slot(
+async def test_a_release_goes_with_the_pin_clear(
     port: ProviderPort, virtual_lock: VirtualLock
 ) -> None:
-    """The first type's clear releases the slot; the next one's has nothing to do."""
+    """The password's clear is its own; the PIN's sends the slot's release."""
     await port.write(PIN_1, "1234")
     await port.write(PASSWORD_1, "pw")
     port.release(1, written=True)
@@ -80,28 +80,17 @@ async def test_a_release_reaches_the_provider_once_per_slot(
         autospec=True,
         side_effect=VirtualLock.async_release_managed_slot,
     ) as released:
+        await port.write(PASSWORD_1, None)
+        assert released.call_count == 0
+        assert await port.read([PIN_1, PASSWORD_1]) == {
+            PIN_1: Holds("1234"),
+            PASSWORD_1: Seen.EMPTY,
+        }
+
         await port.write(PIN_1, None)
-        assert await port.write(PASSWORD_1, None) is False
 
     assert released.call_count == 1
-
-
-async def test_a_slot_released_again_is_sent_again(
-    port: ProviderPort, virtual_lock: VirtualLock
-) -> None:
-    """Each release is its own: one begun later goes to the provider too."""
-    with patch.object(
-        VirtualLock,
-        "async_release_managed_slot",
-        autospec=True,
-        side_effect=VirtualLock.async_release_managed_slot,
-    ) as released:
-        port.release(1, written=True)
-        await port.write(PIN_1, None)
-        port.release(1, written=True)
-        await port.write(PASSWORD_1, None)
-
-    assert released.call_count == 2
+    assert "1" not in virtual_lock._data
 
 
 async def test_a_password_write_does_not_hide_a_pin_push(
@@ -164,6 +153,40 @@ async def test_one_type_failing_to_read_leaves_the_others(
     assert failed.value.kind is ErrorKind.NO_ANSWER
 
 
+async def test_a_type_that_answered_nothing_is_no_failure(
+    port: ProviderPort, virtual_lock: VirtualLock
+) -> None:
+    """One type answers with nothing to say yet, the other fails: still an answer."""
+    real_get = VirtualLock.async_get_slot_credentials
+
+    async def _pin_fails(self, credential_type, slots=None):
+        if credential_type is CredentialType.PIN:
+            raise LockOperationFailed("pin read failed")
+        return await real_get(self, credential_type, slots)
+
+    with (
+        patch.object(VirtualLock, "read_lag", 60.0),
+        patch.object(VirtualLock, "async_get_slot_credentials", _pin_fails),
+    ):
+        await port.write(PASSWORD_1, "pw")
+        assert await port.read([PIN_1, PASSWORD_1]) == {}
+
+
+async def test_only_a_pin_read_says_the_lock_reports_its_codes(
+    port: ProviderPort, virtual_lock: VirtualLock
+) -> None:
+    """The slots a lock cannot tell of are PIN slots: a password read says nothing of them."""
+    await port.write(PASSWORD_1, "pw")
+    lock = virtual_lock.lock.id
+
+    assert await port.read([PASSWORD_1]) == {PASSWORD_1: Holds("pw")}
+    assert not port.reports.get(lock)
+
+    await port.write(PIN_1, "1234")
+    await port.read([PIN_1])
+    assert port.reports[lock] is True
+
+
 async def test_a_type_virtual_does_not_store_is_refused_unsent(
     port: ProviderPort,
 ) -> None:
@@ -205,10 +228,12 @@ async def test_a_lagging_read_leaves_out_only_the_type_written(
 async def test_a_release_lags_every_type_it_removed(
     port: ProviderPort, virtual_lock: VirtualLock
 ) -> None:
-    """A release sent with the password's clear removes the PIN too, just as lately."""
-    await virtual_lock.async_set_usercode(1, "1234")
+    """A release sent with the PIN's clear removes the password too, just as lately."""
+    await virtual_lock.async_set_slot_credential(
+        1, CredentialType.PASSWORD, "pw", name=None, source="sync"
+    )
     port.release(1, written=True)
 
     with patch.object(VirtualLock, "read_lag", 60.0):
-        await port.write(PASSWORD_1, None)
-        assert await port.read([PIN_1]) == {}
+        await port.write(PIN_1, None)
+        assert await port.read([PASSWORD_1]) == {}

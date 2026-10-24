@@ -892,6 +892,22 @@ async def test_a_clear_that_found_nothing_says_so(ports) -> None:
     assert await port.write(pin_address(1), None) is True
 
 
+async def test_a_retried_release_goes_to_the_provider_again(ports) -> None:
+    """Each try of a slot's release is sent: one the lock did not take is retried."""
+    port, _, lock = await ports()
+    with patch.object(
+        type(lock),
+        "async_release_managed_slot",
+        autospec=True,
+        side_effect=type(lock).async_release_managed_slot,
+    ) as released:
+        port.release(1, written=True)
+        await port.write(pin_address(1), None)
+        await port.write(pin_address(1), None)
+
+    assert released.call_count == 2
+
+
 async def test_an_unknown_capacity_does_not_stop_a_read(ports) -> None:
     """A capability probe that breaks limits nothing: the slot is still read."""
     port, _, lock = await ports()

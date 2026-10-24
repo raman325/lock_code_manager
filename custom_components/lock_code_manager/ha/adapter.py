@@ -122,9 +122,6 @@ class ProviderPort:
         # Of those, the ones the store showed a credential Lock Code Manager
         # wrote when the release began: the release's own send forgets it.
         self._written: set[int] = set()
-        # Of those, the ones whose release the provider has taken: it removes
-        # every type, so the slot's other clears have nothing left to send.
-        self._released: set[int] = set()
         # What the lock last said of any slot, by read or by push: codes
         # nobody here manages, and the last word on a slot the worker has let
         # go. The worker's own view of a slot it tracks comes first.
@@ -217,7 +214,7 @@ class ProviderPort:
                     for slot, seen in read.items()
                 }
             )
-        if failed and not readings:
+        if len(failed) == len(by_type):
             raise failed[0]
         return readings
 
@@ -285,9 +282,9 @@ class ProviderPort:
         # Any slot asked about and not silent was described, named in the
         # answer or not: a provider projecting only the slots an entry manages
         # (Z-Wave JS's hard refresh) leaves an empty one it was asked about
-        # out, and that is no lock that cannot report.
-        # About the lock, whichever credential type's read answered.
-        if not self.reports.get(lock) and set(slots) - silent:
+        # out, and that is no lock that cannot report. Said of PINs alone:
+        # the slots a lock cannot tell of are PIN slots.
+        if pin and not self.reports.get(lock) and set(slots) - silent:
             self.reports[lock] = True
             self.on_reports()
         if self.reports.setdefault(lock, False):
@@ -370,24 +367,14 @@ class ProviderPort:
 
         ``written``: the store shows a credential Lock Code Manager wrote
         there. Taken now: the worker forgets what it wrote as it sends the
-        clear. The release goes to the provider once, with whichever type's
-        clear comes first: it removes every type.
+        clear. The PIN's clear sends the release, which removes every type;
+        another type's is a clear of that type.
         """
         self.releasing.add(slot)
-        self._released.discard(slot)
         if written:
             self._written.add(slot)
         else:
             self._written.discard(slot)
-
-    def release_again(self, slot: int) -> None:
-        """
-        Send ``slot``'s release to the provider again, with its next clear.
-
-        A release held after its tries left something on the lock: the user
-        acknowledging its repair asks for it to be sent once more.
-        """
-        self._released.discard(slot)
 
     async def write(self, address: CredentialAddress, value: str | None) -> bool | None:
         """Put ``value`` at ``address`` or clear it (see ``_write``), timed for logs."""
@@ -415,10 +402,8 @@ class ProviderPort:
         Put ``value`` at ``address``, or clear it for None.
 
         Nothing is sent before the provider is set up, or for a PIN in a
-        slot past the lock's capacity (#1398). A release goes to the
-        provider once for the slot (``release``): another type's clear in
-        the same release answers that there was nothing to change, and its
-        read-back says what the slot holds.
+        slot past the lock's capacity (#1398). A slot's release goes with
+        its PIN's clear (``release``), every PIN slot being kept.
         """
         provider = self.provider
         slot, credential_type = address
@@ -456,13 +441,10 @@ class ProviderPort:
                 "sync",
             )
         try:
-            if value is None and slot in self.releasing:
-                if slot in self._released:
-                    return False
+            if value is None and pin and slot in self.releasing:
                 await provider.async_release_managed_slot(
                     slot, written=slot in self._written
                 )
-                self._released.add(slot)
                 # It removes every type at once: each is as lately written.
                 now = provider.hass.loop.time()
                 self._written_at.update(

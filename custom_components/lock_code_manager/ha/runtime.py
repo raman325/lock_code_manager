@@ -1014,16 +1014,13 @@ async def async_resume_slot(
     """
     Try a held slot again: the user acknowledged its repair.
 
-    A release still under way goes to the provider again: the hold says it
-    left something on the lock. A clear given up on a lock no entry holds
-    any more has no worker left; it is started over as a one-off clear -- a
-    release still. ``entry_id`` and ``release`` come from the repair, which
-    outlives a restart where what was remembered of the slot does not.
+    A clear given up on a lock no entry holds any more has no worker left;
+    it is started over as a one-off clear -- a release still. ``entry_id``
+    and ``release`` come from the repair, which outlives a restart where
+    what was remembered of the slot does not.
     """
     worker = lock_registry(hass).worker(lock_entity_id)
     if worker is not None and (held := [a for a in worker.slots if a.user_ref == slot]):
-        if slot in worker.port.releasing:
-            worker.port.release_again(slot)
         for address in held:
             worker.resume(address)
         return
