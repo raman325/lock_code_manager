@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "f493c41bbbae",
+  "strategy": "manual-commit",
+  "branch": "feat/password-model",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/const.py",
+    "custom_components/lock_code_manager/ha/allocation.py",
+    "custom_components/lock_code_manager/ha/runtime.py",
+    "custom_components/lock_code_manager/ha/services.py",
+    "custom_components/lock_code_manager/ha/slot_coordinator.py",
+    "custom_components/lock_code_manager/icons.json",
+    "custom_components/lock_code_manager/model/credentials.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js",
+    "tests/providers/virtual/test_e2e.py",
+    "tests/providers/virtual/test_passwords.py",
+    "tests/test_binary_sensor.py",
+    "tests/test_lock_runtime.py",
+    "tests/test_lock_store.py",
+    "tests/test_services.py",
+    "ts/const.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f4/93c41bbbae/0/metadata.json",
+      "transcript": "/f4/93c41bbbae/0/full.jsonl",
+      "compact_transcript": "/f4/93c41bbbae/0/transcript.jsonl",
+      "content_hash": "/f4/93c41bbbae/0/content_hash.txt",
+      "prompt": "/f4/93c41bbbae/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 13234,
+    "cache_read_tokens": 2864670,
+    "output_tokens": 3881,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 132,
+      "cache_creation_tokens": 178301,
+      "cache_read_tokens": 4598385,
+      "output_tokens": 42497,
+      "api_call_count": 64
+    }
+  }
+}
