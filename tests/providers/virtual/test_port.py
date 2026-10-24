@@ -189,3 +189,26 @@ async def test_a_pin_push_reaches_the_pin_address(port: ProviderPort) -> None:
         port.pushed(PIN_1, SlotCredential.empty())
 
     assert pushes == [(PIN_1, Seen.EMPTY)]
+
+
+async def test_a_lagging_read_leaves_out_only_the_type_written(
+    port: ProviderPort, virtual_lock: VirtualLock
+) -> None:
+    """A password just written reads as silent; the slot's PIN is still read."""
+    await virtual_lock.async_set_usercode(1, "1234")
+
+    with patch.object(VirtualLock, "read_lag", 60.0):
+        await port.write(PASSWORD_1, "pw")
+        assert await port.read([PIN_1, PASSWORD_1]) == {PIN_1: Holds("1234")}
+
+
+async def test_a_release_lags_every_type_it_removed(
+    port: ProviderPort, virtual_lock: VirtualLock
+) -> None:
+    """A release sent with the password's clear removes the PIN too, just as lately."""
+    await virtual_lock.async_set_usercode(1, "1234")
+    port.release(1, written=True)
+
+    with patch.object(VirtualLock, "read_lag", 60.0):
+        await port.write(PASSWORD_1, None)
+        assert await port.read([PIN_1]) == {}

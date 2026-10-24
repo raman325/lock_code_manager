@@ -286,6 +286,7 @@ class ProviderPort:
         # answer or not: a provider projecting only the slots an entry manages
         # (Z-Wave JS's hard refresh) leaves an empty one it was asked about
         # out, and that is no lock that cannot report.
+        # About the lock, whichever credential type's read answered.
         if not self.reports.get(lock) and set(slots) - silent:
             self.reports[lock] = True
             self.on_reports()
@@ -327,6 +328,7 @@ class ProviderPort:
             else:
                 # One that walks the slots asked for says nothing of the rest.
                 self.others.update(heard)
+        # About the lock, whichever credential type's read answered.
         self._answered = self._answered or bool(readings)
         return readings
 
@@ -452,6 +454,14 @@ class ProviderPort:
                     slot, written=slot in self._written
                 )
                 self._released.add(slot)
+                # It removes every type at once: each is as lately written.
+                now = provider.hass.loop.time()
+                self._written_at.update(
+                    {
+                        CredentialAddress(slot, written_type): now
+                        for written_type in provider.writable_credential_types
+                    }
+                )
             elif value is None:
                 # A clear that found nothing says nothing about what is there.
                 return await provider.async_clear_slot_credential(slot, credential_type)
