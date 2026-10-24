@@ -30,7 +30,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.storage import Store
 
 from ..const import DOMAIN
-from ..model.credentials import CredentialAddress, CredentialType, pin_address
+from ..model.credentials import CredentialAddress, CredentialType
 from ..sync.slot import CLEARED, Slot
 from ..sync.worker import LockWorker
 
@@ -78,13 +78,17 @@ class LockStore:
         saved = record["slots"].get(str(address.user_ref), {})
         return _fingerprints(saved).get(address.credential_type.value)
 
-    def wrote_pin(self, key: str, slot: int) -> bool:
+    def wrote_any(self, key: str, slot: int) -> bool:
         """
-        Return whether a PIN was what was last written to ``slot`` on the lock.
+        Return whether a credential, of any type, was what was last written to ``slot``.
 
-        A slot only ever cleared never held Lock Code Manager's code.
+        A slot only ever cleared never held one of Lock Code Manager's.
         """
-        return self.wrote(key, pin_address(slot)) not in (None, CLEARED)
+        record = self._locks.get(key)
+        if record is None:
+            return False
+        saved = record["slots"].get(str(slot), {})
+        return any(value != CLEARED for value in _fingerprints(saved).values())
 
     def answered(self, key: str) -> bool:
         """Return whether the lock has ever answered."""

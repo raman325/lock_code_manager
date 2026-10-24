@@ -1852,7 +1852,7 @@ class BaseLock:
         """
         Release any lock-side state LCM owns for ``slot``.
 
-        ``written`` says whether Lock Code Manager's store showed a PIN it
+        ``written`` says whether Lock Code Manager's store showed a credential it
         wrote to ``slot`` on this lock when the release began. A provider
         that finds nothing of its own to release uses it to tell a slot LCM
         never put a code in (nothing to say) from one whose code it can no

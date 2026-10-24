@@ -986,11 +986,11 @@ async def async_resume_slot(
 
 
 def _begin_release(hass: HomeAssistant, port: ProviderPort, slot: int) -> None:
-    """Make ``slot``'s next clear on ``port`` a release, saying if LCM wrote a PIN there."""
+    """Make ``slot``'s next clear on ``port`` a release, saying if LCM wrote anything there."""
     store: LockStore | None = hass.data[DATA].get(STORE_KEY)
     port.release(
         slot,
-        written=store is not None and store.wrote_pin(port.provider.lock.id, slot),
+        written=store is not None and store.wrote_any(port.provider.lock.id, slot),
     )
 
 
