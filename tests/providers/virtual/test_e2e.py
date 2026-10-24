@@ -33,6 +33,7 @@ from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
+    issue_registry as ir,
 )
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
@@ -47,15 +48,22 @@ from custom_components.lock_code_manager.const import (
     EVENT_CREDENTIAL_USED,
 )
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.ha.runtime import (
+    async_reconcile_issues,
+    lock_registry,
+)
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
+    CredentialAddress,
     CredentialRef,
     CredentialType,
     SlotCredential,
     credential_from_slot,
+    pin_address,
 )
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
+from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Slot
 from tests.common import async_configure_flow, user_subentries
 
 from ...common import TICK_INTERVAL
@@ -571,6 +579,67 @@ class TestLockLeaving:
             hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}"
         ).async_load()
         assert stored is not None
+
+
+class TestSlotRepairs:
+    """A slot's repairs are decided over every credential it holds."""
+
+    async def test_a_held_pin_keeps_its_repair_beside_an_in_sync_password(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """The repair is the slot's: a credential in sync does not answer another's hold."""
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        # Set by hand and reconciled at once: nothing awaits in between, so the
+        # worker cannot sync them first.
+        worker.slots[pin_address(1)] = Slot(
+            "1234", seen=Holds("0000"), hold=Repair.CANT_SET
+        )
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            None, seen=Seen.EMPTY
+        )
+
+        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
+
+        issue_id = (
+            f"slot_suspended_{lcm_config_entry.entry_id}_{VIRTUAL_LOCK_ENTITY_ID}_1"
+        )
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+    async def test_a_repair_from_a_previous_run_waits_for_every_credential(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A persisted repair stays while one of the slot's credentials is not in sync."""
+        issue_id = (
+            f"slot_suspended_{lcm_config_entry.entry_id}_{VIRTUAL_LOCK_ENTITY_ID}_1"
+        )
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            issue_id,
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="slot_suspended",
+            translation_placeholders={
+                "lock_entity_id": VIRTUAL_LOCK_ENTITY_ID,
+                "lock_name": VIRTUAL_LOCK_ENTITY_ID,
+                "slot_num": "1",
+                "reason": "x",
+            },
+            data={"lock_entity_id": VIRTUAL_LOCK_ENTITY_ID, "slot": 1},
+        )
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        # The PIN was resumed and is not on the lock yet; the password is.
+        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("0000"))
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            None, seen=Seen.EMPTY
+        )
+
+        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
+
+        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
 
 
 class TestOpenBugs:

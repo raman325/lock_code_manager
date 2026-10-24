@@ -11,6 +11,7 @@ signal per lock; entities and the websocket listen to it.
 import asyncio
 from collections.abc import Iterable, Mapping
 import logging
+from operator import itemgetter
 from typing import Final
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
@@ -50,7 +51,7 @@ from ..model.queries import (
 )
 from ..providers import BaseLock
 from ..sync.registry import LockRegistry, SlotTaken
-from ..sync.slot import Holds, Reading, Repair, Seen, Status, Want
+from ..sync.slot import Holds, Reading, Repair, Seen, Slot, Status, Want
 from ..sync.worker import LockWorker
 from .adapter import PortWorker, ProviderPort, lock_error
 from .entry import LockCodeManagerConfigEntry
@@ -859,28 +860,39 @@ def async_reconcile_issues(
         if lock == lock_entity_id and clearing is not worker
     }
     raised: set[str] = set()
-    for address, slot in worker.slots.items():
-        slot_num = address.user_ref
+    by_slot: dict[int, list[tuple[CredentialAddress, Slot]]] = {}
+    for address, credential in worker.slots.items():
+        by_slot.setdefault(address.user_ref, []).append((address, credential))
+    for slot_num, credentials in by_slot.items():
         owner = configured_owner(hass, lock_entity_id, slot_num)
-        if (
-            owner is not None
-            and slot.want is not None
-            and worker.status(address)[0] is Status.IN_SYNC
-        ):
-            # Re-enabled and on the lock: a refusal's repair is answered.
-            async_delete_issue(
-                hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
-            )
-        if owner is not None and worker.status(address)[0] is Status.IN_SYNC:
-            # In sync: a hold's repair is answered, even one a previous run
-            # raised (it is persistent).
+        in_sync = all(
+            worker.status(address)[0] is Status.IN_SYNC for address, _ in credentials
+        )
+        if owner is not None and in_sync:
+            if any(slot.want is not None for _, slot in credentials):
+                # Re-enabled and on the lock: a refusal's repair is answered.
+                async_delete_issue(
+                    hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
+                )
+            # Every credential in sync: a hold's repair is answered, even one
+            # a previous run raised (it is persistent).
             async_delete_issue(
                 hass,
                 DOMAIN,
                 f"slot_suspended_{owner.entry_id}_{lock_entity_id}_{slot_num}",
             )
-        if (issue := _HOLD_ISSUES.get(slot.hold)) is None:  # type: ignore[arg-type]
+        # The slot's repair, from the first of its credentials held for one.
+        slot = next(
+            (
+                held
+                for _, held in sorted(credentials, key=itemgetter(0))
+                if held.hold in _HOLD_ISSUES
+            ),
+            None,
+        )
+        if slot is None:
             continue
+        issue = _HOLD_ISSUES[slot.hold]  # type: ignore[index]
         entry_id = (
             owner.entry_id
             if owner is not None
