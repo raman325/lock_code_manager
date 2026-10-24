@@ -50,7 +50,7 @@ from ..model.queries import (
 )
 from ..providers import BaseLock
 from ..sync.registry import LockRegistry, SlotTaken
-from ..sync.slot import Holds, Reading, Repair, Seen, Status, Want
+from ..sync.slot import Holds, Reading, Repair, Seen, Slot, Status, Want
 from ..sync.worker import LockWorker
 from .adapter import PortWorker, ProviderPort, lock_error
 from .entry import LockCodeManagerConfigEntry
@@ -616,12 +616,19 @@ async def async_hold_lock(
     hass: HomeAssistant,
     entry: ConfigEntry,
     lock_entity_id: str,
-    wants: Mapping[int, Want],
+    wants: Mapping[int, Mapping[CredentialType, Want]],
 ) -> BaseLock:
-    """Hold ``lock_entity_id`` for ``entry`` with its slots' wants; return the provider."""
+    """
+    Hold ``lock_entity_id`` for ``entry`` with its slots' wants; return the provider.
+
+    ``wants`` is what each slot should hold, by credential type; a type not
+    named is kept clear. The lock is held with every slot's PIN, so a new
+    worker's first read takes them all at once; the other types the lock
+    takes follow once its provider is built and says which they are.
+    """
     addresses = {
-        pin_address(slot): pin
-        for slot, pin in wants.items()
+        pin_address(slot): slot_wants.get(CredentialType.PIN)
+        for slot, slot_wants in wants.items()
         if async_owns_slot(hass, entry, lock_entity_id, slot)
     }
     while True:
@@ -643,7 +650,17 @@ async def async_hold_lock(
             )
             addresses = {a: v for a, v in addresses.items() if a.user_ref != err.slot}
     port = worker.port
-    port.releasing.difference_update(_slots_of(addresses))
+    held = _slots_of(addresses)
+    port.releasing.difference_update(held)
+    others = sorted(port.provider.managed_credential_types - {CredentialType.PIN})
+    for slot in held:
+        for credential_type in others:
+            lock_registry(hass).want(
+                lock_entity_id,
+                entry.entry_id,
+                CredentialAddress(slot, credential_type),
+                wants[slot].get(credential_type),
+            )
     if _re_paired(hass, lock_entity_id, worker) and not ir.async_get(
         hass
     ).async_get_issue(DOMAIN, per_lock_issue_id(RE_PAIRED_RELOAD, lock_entity_id)):
@@ -706,28 +723,53 @@ def async_hand_off(
 
 @callback
 def async_want(
-    hass: HomeAssistant, entry: ConfigEntry, lock_entity_id: str, slot: int, pin: Want
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    lock_entity_id: str,
+    slot: int,
+    wants: Mapping[CredentialType, Want],
 ) -> None:
-    """Set what ``slot`` should hold on a lock ``entry`` holds, if it owns the slot."""
+    """
+    Set what ``slot`` should hold on a lock ``entry`` holds, if it owns the slot.
+
+    ``wants`` is by credential type, for each type the lock takes; a type
+    not named is kept clear. A type the lock no longer takes is let go of,
+    what the lock holds of it left as it is.
+    """
     if not async_owns_slot(hass, entry, lock_entity_id, slot):
         return
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
     port = worker.port
-    address = pin_address(slot)
-    current = worker.slots.get(address)
-    if (
-        current is not None
-        and current.want == pin
+    types = port.provider.managed_credential_types
+    for address in [
+        address
+        for address, current in worker.slots.items()
+        if address.user_ref == slot
+        and address.credential_type not in types
         and not current.release
-        and slot not in port.releasing
-    ):
+    ]:
+        worker.forget(address)
+    changed: dict[CredentialAddress, Want] = {}
+    for credential_type in sorted(types):
+        address = CredentialAddress(slot, credential_type)
+        want = wants.get(credential_type)
+        current = worker.slots.get(address)
+        if (
+            current is None
+            or current.want != want
+            or current.release
+            or slot in port.releasing
+        ):
+            changed[address] = want
+    if not changed:
         return  # nothing new to tell the lock: no sync to queue
     port.releasing.discard(slot)
     hass.data[DATA][GIVEN_UP_KEY].pop((lock_entity_id, slot), None)
     try:
-        registry.want(lock_entity_id, entry.entry_id, address, pin)
+        for address, want in changed.items():
+            registry.want(lock_entity_id, entry.entry_id, address, want)
     except (KeyError, SlotTaken) as err:
         _LOGGER.error(
             "%s: cannot set slot %s on %s: %s",
@@ -859,28 +901,41 @@ def async_reconcile_issues(
         if lock == lock_entity_id and clearing is not worker
     }
     raised: set[str] = set()
-    for address, slot in worker.slots.items():
-        slot_num = address.user_ref
+    by_slot: dict[int, list[tuple[CredentialAddress, Slot]]] = {}
+    for address, credential in worker.slots.items():
+        by_slot.setdefault(address.user_ref, []).append((address, credential))
+    for slot_num, credentials in by_slot.items():
         owner = configured_owner(hass, lock_entity_id, slot_num)
-        if (
-            owner is not None
-            and slot.want is not None
-            and worker.status(address)[0] is Status.IN_SYNC
-        ):
-            # Re-enabled and on the lock: a refusal's repair is answered.
-            async_delete_issue(
-                hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
-            )
-        if owner is not None and worker.status(address)[0] is Status.IN_SYNC:
-            # In sync: a hold's repair is answered, even one a previous run
-            # raised (it is persistent).
+        in_sync = all(
+            worker.status(address)[0] is Status.IN_SYNC for address, _ in credentials
+        )
+        if owner is not None and in_sync:
+            if any(slot.want is not None for _, slot in credentials):
+                # Re-enabled and on the lock: a refusal's repair is answered.
+                async_delete_issue(
+                    hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
+                )
+            # Every credential in sync: a hold's repair is answered, even one
+            # a previous run raised (it is persistent).
             async_delete_issue(
                 hass,
                 DOMAIN,
                 f"slot_suspended_{owner.entry_id}_{lock_entity_id}_{slot_num}",
             )
-        if (issue := _HOLD_ISSUES.get(slot.hold)) is None:  # type: ignore[arg-type]
+        held = [
+            (address, credential)
+            for address, credential in credentials
+            if credential.hold in _HOLD_ISSUES
+        ]
+        if not held:
             continue
+        # The slot raises one repair: the warning that matters most, a code
+        # that may still open the door, then the first in address order.
+        _, slot = min(
+            held,
+            key=lambda pair: (pair[1].hold is not Repair.CODE_MAY_REMAIN, pair[0]),
+        )
+        issue = _HOLD_ISSUES[slot.hold]  # type: ignore[index]
         entry_id = (
             owner.entry_id
             if owner is not None
@@ -959,13 +1014,16 @@ async def async_resume_slot(
     """
     Try a held slot again: the user acknowledged its repair.
 
-    A clear given up on a lock no entry holds any more has no worker left;
-    it is started over as a one-off clear -- a release still. ``entry_id``
-    and ``release`` come from the repair, which outlives a restart where
-    what was remembered of the slot does not.
+    A release still under way goes to the provider again: the hold says it
+    left something on the lock. A clear given up on a lock no entry holds
+    any more has no worker left; it is started over as a one-off clear -- a
+    release still. ``entry_id`` and ``release`` come from the repair, which
+    outlives a restart where what was remembered of the slot does not.
     """
     worker = lock_registry(hass).worker(lock_entity_id)
     if worker is not None and (held := [a for a in worker.slots if a.user_ref == slot]):
+        if slot in worker.port.releasing:
+            worker.port.release_again(slot)
         for address in held:
             worker.resume(address)
         return
@@ -986,11 +1044,15 @@ async def async_resume_slot(
 
 
 def _begin_release(hass: HomeAssistant, port: ProviderPort, slot: int) -> None:
-    """Make ``slot``'s next clear on ``port`` a release, saying if LCM wrote a PIN there."""
+    """
+    Make ``slot``'s next clear on ``port`` a release.
+
+    Says whether Lock Code Manager wrote anything there.
+    """
     store: LockStore | None = hass.data[DATA].get(STORE_KEY)
     port.release(
         slot,
-        written=store is not None and store.wrote_pin(port.provider.lock.id, slot),
+        written=store is not None and store.wrote_any(port.provider.lock.id, slot),
     )
 
 

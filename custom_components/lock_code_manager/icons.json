@@ -21,6 +21,13 @@
           "off": "mdi:sync-off",
           "on": "mdi:sync"
         }
+      },
+      "password_in_sync": {
+        "default": "mdi:sync-alert",
+        "state": {
+          "off": "mdi:sync-off",
+          "on": "mdi:sync"
+        }
       }
     },
     "event": {

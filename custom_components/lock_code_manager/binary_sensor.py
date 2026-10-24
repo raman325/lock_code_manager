@@ -16,7 +16,7 @@ from .entity import (
     LockWorkerView,
 )
 from .ha.entry import LockCodeManagerConfigEntry
-from .model.credentials import CredentialAddress, managed_addresses
+from .model.credentials import CredentialType
 from .model.queries import subentry_id_for_slot
 from .providers import BaseLock
 from .sync.slot import Status
@@ -51,22 +51,18 @@ async def async_setup_entry(
         lock: BaseLock, slot_num: int, ent_reg: er.EntityRegistry
     ):
         """Add code slot sensor entities for slot."""
-        addresses = managed_addresses(slot_num)
-        # The aggregate over every managed credential, then one sensor per
-        # credential.
+        # The aggregate over every credential the slot holds on the lock,
+        # then one sensor per credential type the lock takes.
         async_add_entities(
             [
                 LockCodeManagerCodeSlotInSyncEntity(
                     hass, ent_reg, config_entry, lock, slot_num, *props
                 )
                 for props in (
-                    (ATTR_IN_SYNC, addresses),
+                    (ATTR_IN_SYNC, None),
                     *(
-                        (
-                            credential_in_sync_key(address.credential_type.value),
-                            (address,),
-                        )
-                        for address in addresses
+                        (credential_in_sync_key(credential_type.value), credential_type)
+                        for credential_type in sorted(lock.managed_credential_types)
                     ),
                 )
             ],
@@ -150,16 +146,16 @@ class LockCodeManagerCodeSlotInSyncEntity(
         lock: BaseLock,
         slot_num: int,
         key: str,
-        addresses: tuple[CredentialAddress, ...],
+        credential_type: CredentialType | None,
     ) -> None:
         """Initialize entity."""
         BaseLockCodeManagerCodeSlotPerLockEntity.__init__(
             self, hass, ent_reg, config_entry, lock, slot_num, key
         )
-        self._addresses = addresses
-        # With a single credential type a per-credential sensor reads the same
-        # as the aggregate, so only the aggregate ships enabled; enabling a
-        # per-credential one splits the view for whoever wants it.
+        self._credential_type = credential_type
+        # A per-type sensor reads the same as the aggregate on a lock with
+        # one type, and splits it on one with more: only the aggregate ships
+        # enabled, and whoever wants the split enables the rest.
         self._attr_entity_registry_enabled_default = key == ATTR_IN_SYNC
 
     @property

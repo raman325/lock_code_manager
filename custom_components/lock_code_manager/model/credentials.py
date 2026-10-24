@@ -119,14 +119,14 @@ class CredentialType(StrEnum):
     """
     Kind of credential a user presents to a lock.
 
-    Lock Code Manager writes only ``PIN`` (``MANAGED_CREDENTIAL_TYPES``), but
-    a use is reported as whichever kind the lock says was presented: ``PIN``,
-    ``RFID`` or ``FINGERPRINT`` (Matter, ZHA, Zigbee2MQTT) or ``FACE``
-    (Matter). ``PASSWORD`` and ``NFC`` are reserved so a future expansion to
-    more kinds is additive. The members map cleanly to both the Z-Wave User
-    Credential Command Class and the Matter DoorLock cluster credential-type
-    vocabularies. ``PIN`` deliberately serializes to the lowercase wire value
-    the providers already send.
+    Lock Code Manager writes ``PIN`` and ``PASSWORD``
+    (``MANAGED_CREDENTIAL_TYPES``), but a use is reported as whichever kind
+    the lock says was presented: ``PIN``, ``RFID`` or ``FINGERPRINT``
+    (Matter, ZHA, Zigbee2MQTT) or ``FACE`` (Matter). ``NFC`` is reserved so a
+    future expansion to more kinds is additive. The members map cleanly to
+    both the Z-Wave User Credential Command Class and the Matter DoorLock
+    cluster credential-type vocabularies. ``PIN`` deliberately serializes to
+    the lowercase wire value the providers already send.
     """
 
     PIN = "pin"
@@ -138,18 +138,19 @@ class CredentialType(StrEnum):
 
 
 # The credential types Lock Code Manager itself manages -- the kinds it can
-# write to a lock. Only PIN today, because a slot holds one PIN per user, and
-# that is the only credential this integration knows how to produce.
+# write to a lock. Each lock keeps the ones its provider writes and the lock
+# advertises (``BaseLock.managed_credential_types``).
 #
 # The single place to change when that stops being true. Do not restate the
-# set anywhere else: the point of naming it is that "PIN is the only one" is a
-# fact about today rather than an invariant, and every site that assumes it
-# has to move together.
+# set anywhere else: every site that depends on which types are managed has
+# to move together.
 #
 # Distinct from what a lock can REPORT. A lock may advertise types Lock Code
 # Manager cannot write -- an RFID reader on the door is one -- and a use of
 # one of those is still a use worth recording.
-MANAGED_CREDENTIAL_TYPES: frozenset[CredentialType] = frozenset({CredentialType.PIN})
+MANAGED_CREDENTIAL_TYPES: frozenset[CredentialType] = frozenset(
+    {CredentialType.PIN, CredentialType.PASSWORD}
+)
 
 
 class UserType(StrEnum):
@@ -169,9 +170,9 @@ class CredentialRule(StrEnum):
     """
     How many credentials a user must present to operate the lock.
 
-    Modeled minimally for now. ``SINGLE`` means one credential is sufficient,
-    matching today's one-PIN-per-user reality. Multi-credential rules can be
-    appended later without breaking callers.
+    ``SINGLE`` means any one credential is sufficient: a user holding a PIN
+    and a password opens the door with either. Multi-credential rules can be
+    appended without breaking callers.
     """
 
     SINGLE = "single"
@@ -255,22 +256,13 @@ class CredentialAddress(NamedTuple):
         return f"{self.user_ref} {self.credential_type}"
 
 
-def managed_addresses(user_ref: int) -> tuple[CredentialAddress, ...]:
-    """Return every credential address Lock Code Manager keeps in sync for a user."""
-    return tuple(
-        CredentialAddress(user_ref, credential_type)
-        for credential_type in sorted(MANAGED_CREDENTIAL_TYPES)
-    )
-
-
 def pin_address(user_ref: int) -> CredentialAddress:
     """
     Build the Personal Identification Number address for a managed user.
 
-    Every address in the integration is a PIN address today. This exists so
-    the call sites that assume that say so explicitly, and so adding a
-    second credential type surfaces each one as a place that needs a
-    decision rather than silently continuing to mean PIN.
+    For call sites that mean a PIN and nothing else -- the PIN entities, a
+    one-off PIN write -- so each says so explicitly, and one that should
+    cover every type a lock takes stands out as building a PIN address.
     """
     return CredentialAddress(user_ref, CredentialType.PIN)
 
@@ -280,10 +272,9 @@ class User:
     """
     A lock user and the credentials they present.
 
-    Modeled so the future "user is the unit, multiple credentials" world is
-    additive: today every user carries a single Personal Identification
-    Number credential, but ``credentials`` is already a list and the rule and
-    type fields already exist. ``credentials`` is mutable (a list), so this
+    A user carries a credential per type it holds -- a Personal
+    Identification Number, a password beside it -- and the rule and type
+    fields leave room for more. ``credentials`` is mutable (a list), so this
     aggregate is intentionally not frozen; the contained ``Credential``
     values are themselves immutable.
     """
@@ -303,10 +294,8 @@ class User:
         users into a slot-shaped view for a given credential kind. Providers
         store every type they can map (see each provider's ``async_get_users``);
         this accessor is the seam where the integration narrows that store to
-        the type the caller cares about, which today is always Personal
-        Identification Number but is wired through here so that adding a
-        second supported type (Z-Wave User Credential CC also exposes
-        ``PASSWORD``) is a caller-side change, not a provider-side change.
+        the type the caller cares about, so managing another type is a
+        caller-side change, not a provider-side change.
         """
         return [
             credential
@@ -319,9 +308,8 @@ class User:
         """
         Return this user's Personal Identification Number credentials.
 
-        Thin alias for ``credentials_of_type(CredentialType.PIN)``; kept as
-        a property because most call sites are written against the PIN-only
-        world and read cleanly that way.
+        Thin alias for ``credentials_of_type(CredentialType.PIN)``, for the
+        call sites that mean a PIN alone.
         """
         return self.credentials_of_type(CredentialType.PIN)
 
@@ -487,11 +475,10 @@ def user_from_slot(slot: int, state: SlotCredential, name: str | None = None) ->
     """
     Build the single-credential user for a managed slot.
 
-    Realizes today's one-managed-slot to one-user to one-PIN-credential
-    projection: the user identifier shares the slot index, the user owns
-    exactly one PIN credential at that index, and the user is active exactly
-    when the slot holds a code. A future multi-credential world only appends
-    to ``credentials`` -- no field changes here.
+    The one-managed-slot to one-user projection with its PIN: the user
+    identifier shares the slot index, the user owns one PIN credential at
+    that index, and the user is active exactly when the slot holds a code. A
+    provider holding another type at the slot appends it to ``credentials``.
     """
     return User(
         user_id=slot,

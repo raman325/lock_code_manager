@@ -655,7 +655,7 @@ async def test_a_lock_renamed_while_it_runs_is_still_remembered(
     await hass.async_block_till_done()
     assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is not None
 
-    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, "4321")
+    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, {CredentialType.PIN: "4321"})
     await hass.async_block_till_done()
 
     assert mock_lock(entry).codes[1] == "4321"
@@ -741,14 +741,38 @@ async def test_a_release_is_told_whether_lcm_wrote_a_pin_there(
     assert released == [(1, written)]
 
 
-async def test_a_slot_never_written_is_no_pin_lcm_wrote(hass: HomeAssistant) -> None:
-    """Nothing kept for the lock, or for the slot: no PIN of Lock Code Manager's."""
+async def test_a_slot_never_written_holds_nothing_lcm_wrote(
+    hass: HomeAssistant,
+) -> None:
+    """Nothing kept for the lock or the slot, or only clears: nothing of Lock Code Manager's."""
     store = LockStore(hass)
-    store._locks = {"key": {"answered": True, "slots": {"2": {"wrote": CLEARED}}}}
+    store._locks = {
+        "key": {
+            "answered": True,
+            "slots": {
+                "2": {"wrote": CLEARED},
+                "3": {"fingerprints": {"pin": CLEARED, "password": CLEARED}},
+            },
+        }
+    }
 
-    assert not store.wrote_pin("other", 1)
-    assert not store.wrote_pin("key", 1)
-    assert not store.wrote_pin("key", 2)
+    assert not store.wrote_any("other", 1)
+    assert not store.wrote_any("key", 1)
+    assert not store.wrote_any("key", 2)
+    assert not store.wrote_any("key", 3)
+
+
+async def test_a_password_alone_is_something_lcm_wrote(hass: HomeAssistant) -> None:
+    """A release of a slot holding only a password has Lock Code Manager's to remove."""
+    store = LockStore(hass)
+    store._locks = {
+        "key": {
+            "answered": True,
+            "slots": {"4": {"fingerprints": {"pin": CLEARED, "password": "fp"}}},
+        }
+    }
+
+    assert store.wrote_any("key", 4)
 
 
 async def test_a_record_without_types_is_read_as_the_pins(
@@ -843,4 +867,4 @@ async def test_a_slot_with_no_pin_written_keeps_no_wrote(
     store.remember(key, LOCK_1_ENTITY_ID, worker, lambda slot: None)
 
     assert store._locks[key]["slots"]["2"] == {"fingerprints": {"password": "pw"}}
-    assert not store.wrote_pin(key, 2)
+    assert store.wrote_any(key, 2)
