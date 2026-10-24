@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "833d26a2a829",
+  "strategy": "manual-commit",
+  "branch": "feat/password-model",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/ha/runtime.py",
+    "tests/providers/virtual/test_e2e.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/83/3d26a2a829/0/metadata.json",
+      "transcript": "/83/3d26a2a829/0/full.jsonl",
+      "compact_transcript": "/83/3d26a2a829/0/transcript.jsonl",
+      "content_hash": "/83/3d26a2a829/0/content_hash.txt",
+      "prompt": "/83/3d26a2a829/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 4023,
+    "cache_read_tokens": 910692,
+    "output_tokens": 1267,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 40,
+      "cache_creation_tokens": 108571,
+      "cache_read_tokens": 1023187,
+      "output_tokens": 9798,
+      "api_call_count": 19
+    }
+  }
+}
