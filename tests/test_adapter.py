@@ -1169,6 +1169,14 @@ async def test_a_provider_writes_pins_unless_it_says_otherwise(
     assert _build(hass).writable_credential_types == {CredentialType.PIN}
 
 
+async def test_a_lock_manages_the_managed_types_its_provider_writes(
+    hass: HomeAssistant,
+) -> None:
+    """Managed, writable and, once known, advertised; PIN always."""
+    lock = _build(hass)
+    assert lock.managed_credential_types == {CredentialType.PIN}
+
+
 async def test_a_type_the_provider_cannot_write_is_refused_untouched(
     hass: HomeAssistant,
 ) -> None:

@@ -31,6 +31,7 @@ from ..const import (
     LockCodeManagerData,
 )
 from ..model.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
     Credential,
     CredentialAddress,
     CredentialRef,
@@ -582,6 +583,22 @@ class BaseLock:
         adapter refuses it unsent.
         """
         return frozenset({CredentialType.PIN})
+
+    @final
+    @property
+    def managed_credential_types(self) -> frozenset[CredentialType]:
+        """
+        Return the credential types Lock Code Manager keeps in sync on this lock.
+
+        Those it manages that this provider writes and, once its capabilities
+        are cached, that the lock advertises. PIN always: every slot keeps a
+        PIN address, and a lock without PIN support is caught at setup
+        (``pin_unsupported``). Read from the cache only, never from the lock.
+        """
+        types = MANAGED_CREDENTIAL_TYPES & self.writable_credential_types
+        if (caps := self.cached_capabilities) is not None:
+            types = types.intersection(caps.credential_types)
+        return types | {CredentialType.PIN}
 
     @property
     def credential_index_follows_slot(self) -> bool:

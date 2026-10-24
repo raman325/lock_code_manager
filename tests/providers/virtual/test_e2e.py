@@ -27,6 +27,8 @@ from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
+    STATE_OFF,
+    STATE_ON,
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import Event, HomeAssistant
@@ -35,6 +37,7 @@ from homeassistant.helpers import (
     entity_registry as er,
     issue_registry as ir,
 )
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -51,6 +54,7 @@ from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordi
 from custom_components.lock_code_manager.ha.runtime import (
     async_reconcile_issues,
     lock_registry,
+    signal_lock_changed,
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
@@ -64,7 +68,12 @@ from custom_components.lock_code_manager.model.credentials import (
 )
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Slot
-from tests.common import async_configure_flow, user_subentries
+from tests.common import (
+    async_configure_flow,
+    code_entity_id,
+    in_sync_entity_id,
+    user_subentries,
+)
 
 from ...common import TICK_INTERVAL
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
@@ -694,6 +703,53 @@ class TestSlotRepairs:
         )
         assert issue is not None
         assert issue.translation_key == "slot_clear_failed"
+
+
+class TestSlotInSync:
+    """A slot's in-sync state on a lock covers every credential it holds."""
+
+    async def test_the_aggregate_in_sync_covers_every_credential_in_the_slot(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A password out of sync takes the slot out of sync; the code sensor stays the PIN."""
+        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
+        code = code_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
+        assert hass.states.get(in_sync).state == STATE_ON
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+
+        # Wanted and not on the lock, set by hand; the change signal is what the
+        # worker sends after a job.
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            "pw", seen=Seen.EMPTY
+        )
+        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
+        await hass.async_block_till_done()
+
+        assert hass.states.get(in_sync).state == STATE_OFF
+        assert hass.states.get(code).state == "1234"
+
+    async def test_a_hidden_pin_in_sync_shows_beside_a_password_out_of_sync(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """The code sensor trusts the PIN's own sync, not the slot's."""
+        code = code_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+
+        # A PIN the lock will not show, written and so trusted, beside a
+        # password wanted and not on the lock; set by hand, then the change
+        # signal the worker sends after a job.
+        pin = Slot("1234", seen=Seen.MASKED)
+        pin.wrote_want(worker.salt)
+        worker.slots[pin_address(1)] = pin
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            "pw", seen=Seen.EMPTY
+        )
+        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
+        await hass.async_block_till_done()
+
+        assert hass.states.get(code).state == "1234"
 
 
 class TestOpenBugs:

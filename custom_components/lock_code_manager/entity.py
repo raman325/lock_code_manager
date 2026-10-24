@@ -27,7 +27,7 @@ from .ha.entry import LockCodeManagerConfigEntry
 from .ha.runtime import lock_registry, signal_lock_changed
 from .ha.slot_coordinator import SlotEntityCoordinator
 from .model.config import build_slot_device_identifier, build_slot_unique_id
-from .model.credentials import CredentialAddress, pin_address
+from .model.credentials import CredentialAddress, CredentialType, pin_address
 from .model.names import fallback_name
 from .model.queries import get_entry_config
 from .providers import BaseLock
@@ -39,6 +39,10 @@ if TYPE_CHECKING:
     from .ha.adapter import PortWorker
 
 _LOGGER = logging.getLogger(__name__)
+
+# Statuses furthest from in sync first: an aggregate shows the worst of its
+# credentials'.
+_BY_DISTANCE = (Status.SUSPENDED, Status.OUT_OF_SYNC, Status.UNKNOWN)
 
 
 def build_slot_device_info(config_entry: ConfigEntry, slot_num: int) -> DeviceInfo:
@@ -401,6 +405,10 @@ class LockWorkerView:
 
     config_entry: ConfigEntry
 
+    # The credential type this entity views; None for every type the slot
+    # holds on the lock.
+    _credential_type: CredentialType | None = None
+
     @property
     def _pin(self) -> CredentialAddress:
         """Return the address of this slot's PIN on the lock."""
@@ -422,18 +430,36 @@ class LockWorkerView:
             return None
         return registry.worker(lock_entity_id)
 
+    def _addresses(self, worker: PortWorker) -> list[CredentialAddress]:
+        """Return the addresses this entity views that the worker tracks."""
+        slot_num = int(self.slot_num)
+        return [
+            address
+            for address in worker.slots
+            if address.user_ref == slot_num
+            and self._credential_type in (None, address.credential_type)
+        ]
+
     def _core_slot(self) -> Slot | None:
-        """Return the worker's view of this slot, if the lock's worker has it."""
+        """Return the worker's view of this slot's PIN, if the lock's worker has it."""
         if (worker := self._core_worker()) is None:
             return None
         return worker.slots.get(self._pin)
 
     def _core_status(self) -> Status | None:
-        """Return the slot's sync status, or None if the worker does not have it."""
+        """
+        Return the sync status of what this entity views, or None if untracked.
+
+        Of several credentials, the one furthest from in sync: held, then
+        out of sync, then being checked.
+        """
         worker = self._core_worker()
-        if worker is None or self._pin not in worker.slots:
+        if worker is None or not (addresses := self._addresses(worker)):
             return None
-        return worker.status(self._pin)[0]
+        statuses = {worker.status(address)[0] for address in addresses}
+        return next(
+            (status for status in _BY_DISTANCE if status in statuses), Status.IN_SYNC
+        )
 
     @property
     def available(self) -> bool:
@@ -447,17 +473,20 @@ class LockWorkerView:
         """
         assert isinstance(self, BaseLockCodeManagerCodeSlotPerLockEntity)
         worker = self._core_worker()
-        return (
-            self._is_available()
-            and worker is not None
-            and (slot := worker.slots.get(self._pin)) is not None
-            and (slot.seen is not None or worker.answered)
+        if not self._is_available() or worker is None:
+            return False
+        if not (addresses := self._addresses(worker)):
+            return False
+        return worker.answered or all(
+            worker.slots[address].seen is not None for address in addresses
         )
 
     def _core_syncing(self) -> bool:
-        """Return whether a sync of this slot is queued or running."""
+        """Return whether a sync of anything this entity views is queued or running."""
         worker = self._core_worker()
-        return worker is not None and worker.syncing(self._pin)
+        return worker is not None and any(
+            worker.syncing(address) for address in self._addresses(worker)
+        )
 
     @callback
     def _watch_lock(self) -> None:
