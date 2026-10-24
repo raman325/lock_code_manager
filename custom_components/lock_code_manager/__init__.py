@@ -739,10 +739,10 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         schema=_entry_schema(
             {
                 vol.Required(CONF_NAME): cv.string,
-                # The whole vocabulary, not just what can be stored today.
-                # A kind this integration cannot yet write is refused by the
-                # handler with a message saying so, which reads better than
-                # the schema calling a real credential kind invalid.
+                # The whole vocabulary, not just what the configuration
+                # stores. A kind it cannot store is refused by the handler
+                # with a message saying so, which reads better than the
+                # schema calling a real credential kind invalid.
                 vol.Required(ATTR_CREDENTIAL_TYPE): vol.Coerce(CredentialType),
                 # Stripped for the reason every other credential field is: a
                 # submitted code is stripped before it is matched, so padding

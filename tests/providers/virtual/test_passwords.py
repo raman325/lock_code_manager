@@ -18,6 +18,7 @@ from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.ha.runtime import (
     async_give_up,
+    async_resume_slot,
     async_want,
     lock_registry,
 )
@@ -27,7 +28,7 @@ from custom_components.lock_code_manager.model.credentials import (
     pin_address,
 )
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
-from custom_components.lock_code_manager.sync.slot import Status
+from custom_components.lock_code_manager.sync.slot import Repair, Status
 
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
@@ -146,3 +147,46 @@ async def test_a_password_lock_keeps_its_password_clear_until_one_is_wanted(
 
     assert worker.slots[PASSWORD_1].want is None
     assert worker.status(PASSWORD_1)[0] is Status.IN_SYNC
+
+
+async def _release_pin_only(
+    lock: VirtualLock, slot: int, *, written: bool = False
+) -> None:
+    """Release a slot as a provider that leaves its password behind would."""
+    await lock.async_clear_slot_credential(slot, CredentialType.PIN)
+
+
+async def test_a_resumed_release_goes_to_the_provider_again(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Acknowledging a held release's repair sends the release again."""
+    lock = get_virtual_lock(hass, lcm_config_entry)
+    await _start_from(hass, lcm_config_entry, lock, "1111", "pw")
+    worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+    assert worker is not None
+    release_everything = VirtualLock.async_release_managed_slot
+
+    with patch.object(
+        VirtualLock,
+        "async_release_managed_slot",
+        autospec=True,
+        side_effect=_release_pin_only,
+    ) as released:
+        async_give_up(hass, lcm_config_entry, VIRTUAL_LOCK_ENTITY_ID, 1)
+        await worker.settled()
+
+        assert released.call_count == 1
+        assert _held(lock, "password") == "pw"
+        assert worker.status(PASSWORD_1) == (
+            Status.SUSPENDED,
+            Repair.CODE_MAY_REMAIN,
+        )
+
+        released.side_effect = release_everything
+        await async_resume_slot(hass, VIRTUAL_LOCK_ENTITY_ID, 1)
+        await worker.settled()
+
+    assert released.call_count == 2
+    assert "1" not in lock._data
+    assert PIN_1 not in worker.slots
+    assert PASSWORD_1 not in worker.slots

@@ -380,6 +380,15 @@ class ProviderPort:
         else:
             self._written.discard(slot)
 
+    def release_again(self, slot: int) -> None:
+        """
+        Send ``slot``'s release to the provider again, with its next clear.
+
+        A release held after its tries left something on the lock: the user
+        acknowledging its repair asks for it to be sent once more.
+        """
+        self._released.discard(slot)
+
     async def write(self, address: CredentialAddress, value: str | None) -> bool | None:
         """Put ``value`` at ``address`` or clear it (see ``_write``), timed for logs."""
         self._writable(address)

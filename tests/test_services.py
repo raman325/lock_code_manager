@@ -1716,13 +1716,16 @@ async def test_set_credential_refuses_a_kind_it_cannot_store(
     lock_code_manager_config_entry,
 ) -> None:
     """
-    A real credential kind that is not supported yet says so.
+    A real credential kind it does not store says so.
 
     RFID is in the vocabulary because providers report it; Lock Code Manager
     has nowhere to keep one. The caller should learn that rather than that
-    the word was invalid.
+    the word was invalid, and not that one is coming.
     """
-    with pytest.raises(ServiceValidationError, match="cannot store"):
+    with pytest.raises(
+        ServiceValidationError,
+        match=r"cannot store a rfid credential\. Supported: pin$",
+    ):
         await hass.services.async_call(
             DOMAIN,
             SERVICE_SET_CREDENTIAL,
@@ -2396,6 +2399,9 @@ async def test_a_password_cannot_be_set_through_the_configuration_yet(
     if service == SERVICE_SET_CREDENTIAL:
         data[ATTR_VALUE] = "pw"
 
-    with pytest.raises(ServiceValidationError, match="password"):
+    with pytest.raises(
+        ServiceValidationError,
+        match=r"cannot store a password credential yet\. Supported: pin$",
+    ):
         await hass.services.async_call(DOMAIN, service, data, blocking=True)
     assert get_entry_config(entry).users["test1"][CONF_PIN] == pin

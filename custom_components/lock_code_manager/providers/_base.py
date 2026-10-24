@@ -1471,7 +1471,7 @@ class BaseLock:
         the empty placeholders are load-bearing. Occupied slots
         the lock reports that are not managed are surfaced too.
         Credentials of other types are dropped here -- the seam keeps
-        everything below it slot-shaped and single-type this round.
+        everything below it slot-shaped, one type per read.
 
         This is the chokepoint where the base class narrows the lock's users
         to one credential type: ``async_get_slot_credentials`` asks it once
@@ -1509,9 +1509,10 @@ class BaseLock:
         Return the slot -> ``SlotCredential`` map for Personal Identification Numbers.
 
         Thin Personal-Identification-Number-shaped wrapper over
-        ``_project_users_to_slots``; preserved as a stable name because
-        the lock's worker and the slot entities are all
-        Personal Identification Number-scoped today.
+        ``_project_users_to_slots``: the Personal Identification Number
+        read a provider may override (``async_get_slot_credentials`` routes
+        that type here), and the read the lock card and the unmanaged-code
+        views use.
 
         ``slots`` replaces the set of slots this integration manages, for
         callers asking what the lock holds rather than what this integration
