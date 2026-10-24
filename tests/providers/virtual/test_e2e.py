@@ -1,7 +1,7 @@
 """Full lifecycle E2E tests for Virtual lock provider."""
 
 import logging
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -43,6 +43,7 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
+    ATTR_SYNC_STATUS,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
@@ -68,6 +69,7 @@ from custom_components.lock_code_manager.model.credentials import (
 )
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Slot
+from custom_components.lock_code_manager.sync.worker import LockWorker
 from tests.common import (
     async_configure_flow,
     code_entity_id,
@@ -750,6 +752,64 @@ class TestSlotInSync:
         await hass.async_block_till_done()
 
         assert hass.states.get(code).state == "1234"
+
+    async def test_a_held_password_outranks_an_out_of_sync_pin(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """The aggregate shows the credential furthest from in sync."""
+        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+
+        # Set by hand and shown at once: nothing awaits in between, so the
+        # worker cannot sync them first.
+        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("0000"))
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
+            "pw", seen=Seen.EMPTY, hold=Repair.CANT_SET
+        )
+        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
+
+        state = hass.states.get(in_sync)
+        assert state.state == STATE_OFF
+        assert state.attributes[ATTR_SYNC_STATUS] == "suspended"
+
+    async def test_a_slot_with_a_credential_never_read_is_unavailable(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """Before the lock first answers, every credential in the slot must be read."""
+        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+
+        # The PIN is read and the password never was; set by hand and shown
+        # at once, so the worker cannot read the password first.
+        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("1234"))
+        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(None)
+        with patch.object(
+            LockWorker, "answered", new_callable=PropertyMock, return_value=False
+        ):
+            async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
+
+            assert hass.states.get(in_sync).state == STATE_UNAVAILABLE
+
+    async def test_a_sync_queued_for_the_password_shows_the_slot_syncing(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A sync of any credential in the slot is the slot syncing."""
+        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        password = CredentialAddress(1, CredentialType.PASSWORD)
+
+        # Queued and shown at once: nothing awaits in between, so the worker
+        # cannot run the sync first.
+        worker.slots[password] = Slot(None, seen=Seen.EMPTY)
+        worker.request_sync([password])
+        assert worker.syncing(password)
+        assert not worker.syncing(pin_address(1))
+        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
+
+        assert hass.states.get(in_sync).attributes[ATTR_SYNC_STATUS] == "syncing"
 
 
 class TestOpenBugs:

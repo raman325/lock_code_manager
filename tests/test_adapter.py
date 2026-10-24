@@ -31,6 +31,8 @@ from custom_components.lock_code_manager.ha.adapter import (
 from custom_components.lock_code_manager.model.credentials import (
     CredentialAddress,
     CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
     SlotCredential,
     pin_address,
 )
@@ -60,6 +62,7 @@ from custom_components.lock_code_manager.sync.worker import (
 
 from .common import (
     NO_PIN_CAPABILITIES,
+    PIN_CAPABILITIES,
     MockLCMLock,
     MockLCMPushLock,
     when_mock_lock_built,
@@ -1173,8 +1176,36 @@ async def test_a_lock_manages_the_managed_types_its_provider_writes(
     hass: HomeAssistant,
 ) -> None:
     """Managed, writable and, once known, advertised; PIN always."""
+    pin_and_password = frozenset({CredentialType.PIN, CredentialType.PASSWORD})
+    password_only = LockCapabilities(
+        supports_user_management=False,
+        max_users=10,
+        credential_types={
+            CredentialType.PASSWORD: CredentialTypeCapability(
+                num_slots=10, min_length=0, max_length=0, supports_learn=False
+            )
+        },
+    )
     lock = _build(hass)
-    assert lock.managed_credential_types == {CredentialType.PIN}
+    with patch(
+        "custom_components.lock_code_manager.providers._base.MANAGED_CREDENTIAL_TYPES",
+        pin_and_password,
+    ):
+        # The provider writes PIN alone.
+        assert lock.managed_credential_types == {CredentialType.PIN}
+        with patch.object(
+            MockLCMLock,
+            "writable_credential_types",
+            new_callable=PropertyMock,
+            return_value=pin_and_password,
+        ):
+            # Capabilities not read yet: nothing narrows what is written.
+            assert lock.managed_credential_types == pin_and_password
+            lock._capabilities_cache = PIN_CAPABILITIES
+            assert lock.managed_credential_types == {CredentialType.PIN}
+            # Every slot keeps a PIN address, advertised or not.
+            lock._capabilities_cache = password_only
+            assert lock.managed_credential_types == pin_and_password
 
 
 async def test_a_type_the_provider_cannot_write_is_refused_untouched(
