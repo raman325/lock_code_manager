@@ -40,9 +40,7 @@ from ..model.credentials import (
     SlotCredential,
     User,
     WriteResult,
-    credential_from_slot,
     pin_address,
-    user_from_slot,
 )
 from ..model.events import CredentialOperation, async_fire_credential_used
 from ..model.exceptions import (
@@ -573,6 +571,17 @@ class BaseLock:
         legacy one-Personal-Identification-Number-per-slot model.
         """
         return False
+
+    @property
+    def writable_credential_types(self) -> frozenset[CredentialType]:
+        """
+        Return the credential types this provider can write to a lock.
+
+        PIN, unless a provider says otherwise. A type the lock advertises
+        but the provider cannot write is never kept in sync on it, and the
+        adapter refuses it unsent.
+        """
+        return frozenset({CredentialType.PIN})
 
     @property
     def credential_index_follows_slot(self) -> bool:
@@ -1247,32 +1256,99 @@ class BaseLock:
         source: Literal["sync", "direct"] = "direct",
     ) -> WriteResult:
         """
-        Set a usercode on a code slot via the User->Credential primitives.
+        Set a usercode (a PIN) on a code slot.
 
-        Projects the slot to a single Personal Identification Number
-        credential. Native-user providers run the create-on-first user
-        lifecycle via ``_set_credential``; slot-only providers write the
-        credential directly, addressing it by slot. Returns the provider's
+        The PIN case of ``async_set_slot_credential``. A provider may
+        override this for its PINs alone.
+        """
+        return await self._set_slot_credential(
+            code_slot, CredentialType.PIN, usercode, name=name, source=source
+        )
+
+    async def async_set_slot_credential(
+        self,
+        code_slot: int,
+        credential_type: CredentialType,
+        value: str,
+        *,
+        name: str | None = None,
+        source: Literal["sync", "direct"] = "direct",
+    ) -> WriteResult:
+        """
+        Set ``credential_type`` on a code slot to ``value``.
+
+        A PIN goes through ``async_set_usercode``, which a provider may
+        override; every other type through the same orchestration, typed.
+        """
+        if credential_type is CredentialType.PIN:
+            return await self.async_set_usercode(code_slot, value, name, source)
+        return await self._set_slot_credential(
+            code_slot, credential_type, value, name=name, source=source
+        )
+
+    @final
+    async def _set_slot_credential(
+        self,
+        code_slot: int,
+        credential_type: CredentialType,
+        value: str,
+        *,
+        name: str | None,
+        source: Literal["sync", "direct"],
+    ) -> WriteResult:
+        """
+        Set one credential on a code slot via the User->Credential primitives.
+
+        Projects the slot to a single credential of ``credential_type``.
+        Native-user providers run the create-on-first user lifecycle via
+        ``_set_credential``; slot-only providers write the credential
+        directly, addressing it by slot. Returns the provider's
         ``WriteResult`` (NO_CHANGE / CONFIRMED / OPTIMISTIC).
         """
-        state = SlotCredential.known(usercode)
-        credential = credential_from_slot(code_slot, state)
-        pin = self._require_readable_pin(credential)
+        credential = Credential(
+            type=credential_type, slot=code_slot, state=SlotCredential.known(value)
+        )
+        resolved = self._require_readable_pin(credential)
         if not self.supports_native_users:
             return await self.async_set_credential(
-                code_slot, credential, pin, name=name, source=source
+                code_slot, credential, resolved, name=name, source=source
             )
         return await self._set_credential(
-            user_from_slot(code_slot, state, name),
+            User(user_id=code_slot, name=name, credentials=[credential]),
             credential,
-            pin,
+            resolved,
             name=name,
             source=source,
         )
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
         """
-        Clear a usercode on a code slot via the User->Credential primitives.
+        Clear a usercode (a PIN) on a code slot.
+
+        The PIN case of ``async_clear_slot_credential``. A provider may
+        override this for its PINs alone.
+        """
+        return await self._clear_slot_credential(code_slot, CredentialType.PIN)
+
+    async def async_clear_slot_credential(
+        self, code_slot: int, credential_type: CredentialType
+    ) -> bool:
+        """
+        Clear ``credential_type`` on a code slot; return whether it changed.
+
+        A PIN goes through ``async_clear_usercode``, which a provider may
+        override; every other type through the same path, typed.
+        """
+        if credential_type is CredentialType.PIN:
+            return await self.async_clear_usercode(code_slot)
+        return await self._clear_slot_credential(code_slot, credential_type)
+
+    @final
+    async def _clear_slot_credential(
+        self, code_slot: int, credential_type: CredentialType
+    ) -> bool:
+        """
+        Clear one credential on a code slot via the User->Credential primitives.
 
         Slot-only providers address the credential by slot and delete it
         directly. Native-user providers must target the credential's actual
@@ -1300,9 +1376,7 @@ class BaseLock:
         the slot is the identity.
         """
         if not self.supports_native_users:
-            ref = CredentialRef(
-                user_id=code_slot, type=CredentialType.PIN, slot=code_slot
-            )
+            ref = CredentialRef(user_id=code_slot, type=credential_type, slot=code_slot)
             return await self.async_delete_credential(ref)
 
         # Owner resolution matches by the ``lcm:<slot>:`` tag in user.name,
@@ -1325,7 +1399,7 @@ class BaseLock:
                 user.user_id
                 for user in users
                 if self.slot_tag(user) == code_slot
-                for credential in user.pin_credentials
+                for credential in user.credentials_of_type(credential_type)
                 if credential.slot == code_slot
             )
         except StopIteration:
@@ -1336,7 +1410,7 @@ class BaseLock:
                     user.user_id
                     for user in users
                     if self.slot_tag(user) is None
-                    for credential in user.pin_credentials
+                    for credential in user.credentials_of_type(credential_type)
                     if credential.slot == code_slot
                 ),
                 None,
@@ -1345,9 +1419,7 @@ class BaseLock:
             # No user owns this slot's credential -- nothing to clear.
             return False
 
-        ref = CredentialRef(
-            user_id=owner_user_id, type=CredentialType.PIN, slot=code_slot
-        )
+        ref = CredentialRef(user_id=owner_user_id, type=credential_type, slot=code_slot)
         return await self._delete_credential(ref)
 
     async def _project_users_to_slots(
@@ -1370,21 +1442,10 @@ class BaseLock:
         Credentials of other types are dropped here -- the seam keeps
         everything below it slot-shaped and single-type this round.
 
-        This is the chokepoint for "the base class filters per credential
-        type before passing to the coordinator/entities" (Option A in the
-        design discussion). Adding a second supported type means calling
-        this helper from a second projection method -- providers store
-        every type they can map, so no provider changes are required.
-
-        TODO(option-b): when the integration adds a second supported
-        credential type (Z-Wave User Credential CC also exposes
-        ``PASSWORD``), revisit whether the coordinator/entities should
-        instead be type-scoped from the top -- one set of slot entities
-        per credential type -- rather than threading the type through a
-        single projection. The provider-side model is already ready for
-        that move; the open question is configuration / user experience
-        (do users configure "PIN slots 1-10" and "password slots 1-5"
-        separately, or is each slot polymorphic?).
+        This is the chokepoint where the base class narrows the lock's users
+        to one credential type: ``async_get_slot_credentials`` asks it once
+        per type, so providers store every type they can map and need no
+        change for a type the integration starts managing.
         """
         scope = self.managed_slots if slots is None else slots
         codes = {slot: SlotCredential.empty() for slot in scope}
@@ -1431,6 +1492,19 @@ class BaseLock:
         read separately.
         """
         return await self._project_users_to_slots(CredentialType.PIN, slots)
+
+    async def async_get_slot_credentials(
+        self, credential_type: CredentialType, slots: Collection[int] | None = None
+    ) -> dict[int, SlotCredential]:
+        """
+        Return the slot -> ``SlotCredential`` map for ``credential_type``.
+
+        A PIN goes through ``async_get_usercodes``, which a provider may
+        override; every other type is projected from the lock's users.
+        """
+        if credential_type is CredentialType.PIN:
+            return await self.async_get_usercodes(slots)
+        return await self._project_users_to_slots(credential_type, slots)
 
     @final
     @property

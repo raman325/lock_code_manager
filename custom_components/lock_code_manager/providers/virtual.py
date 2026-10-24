@@ -3,7 +3,7 @@
 from collections.abc import Collection
 from dataclasses import dataclass, field
 import logging
-from typing import Literal, TypedDict, override
+from typing import Literal, NotRequired, TypedDict, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
@@ -27,10 +27,39 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CodeSlotData(TypedDict):
-    """Type for code slot data."""
+    """What a virtual lock holds in one slot: a PIN, a password, or both."""
 
-    code: str
+    code: NotRequired[str]
+    password: NotRequired[str]
     name: str | None
+
+
+# Where a slot's record keeps each credential type it stores. The PIN is
+# under ``code``, the key the store has always used for it.
+_FIELDS: dict[CredentialType, Literal["code", "password"]] = {
+    CredentialType.PIN: "code",
+    CredentialType.PASSWORD: "password",
+}
+
+
+def _user(slot_num: int, record: CodeSlotData | None) -> User:
+    """Return the user a virtual slot projects to: its PIN, then its password."""
+    pin = (
+        SlotCredential.known(str(record["code"]))
+        if record is not None and "code" in record
+        else SlotCredential.empty()
+    )
+    user = user_from_slot(slot_num, pin)
+    if record is not None and "password" in record:
+        user.credentials.append(
+            Credential(
+                type=CredentialType.PASSWORD,
+                slot=slot_num,
+                state=SlotCredential.known(record["password"]),
+            )
+        )
+        user.active = True
+    return user
 
 
 @dataclass(repr=False, eq=False)
@@ -57,6 +86,12 @@ class VirtualLock(BaseLock):
         one. Recording a use against it does not need this to say otherwise.
         """
         return False
+
+    @property
+    @override
+    def writable_credential_types(self) -> frozenset[CredentialType]:
+        """Return the types a virtual lock's store keeps: PIN and password."""
+        return frozenset(_FIELDS)
 
     @override
     async def async_get_capabilities(self) -> LockCapabilities:
@@ -134,16 +169,19 @@ class VirtualLock(BaseLock):
         source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
-        Set a Personal Identification Number credential on a code slot.
+        Set one credential on a code slot; the slot's other credential stays.
 
-        Returns True if the value was changed, False if already set to this value.
+        NO_CHANGE if the slot already holds the value under the same name.
         Ignores ``user_id``; slot-only providers address the credential by slot.
         """
         slot_key = str(credential.slot)
-        new_data = CodeSlotData(code=pin, name=name)
-        if slot_key in self._data and self._data[slot_key] == new_data:
+        current = self._data.get(slot_key)
+        record = CodeSlotData(name=name) if current is None else current.copy()
+        record["name"] = name
+        record[_FIELDS[credential.type]] = pin
+        if record == current:
             return WriteResult.NO_CHANGE
-        self._data[slot_key] = new_data
+        self._data[slot_key] = record
         return WriteResult.CONFIRMED
 
     @override
@@ -151,12 +189,15 @@ class VirtualLock(BaseLock):
         """
         Delete the credential addressed by ``ref``; return whether it changed.
 
-        Returns True if a code was removed, False if the slot was already empty.
+        A slot holding no credential once it is gone leaves the store.
         """
         slot_key = str(ref.slot)
-        if slot_key not in self._data:
+        key = _FIELDS[ref.type]
+        if (current := self._data.get(slot_key)) is None or key not in current:
             return False
-        self._data.pop(slot_key)
+        del current[key]
+        if not any(field in current for field in _FIELDS.values()):
+            del self._data[slot_key]
         return True
 
     @override
@@ -164,11 +205,11 @@ class VirtualLock(BaseLock):
         """
         Return users by reading all stored and managed slots.
 
-        Returns occupied slots as known-Personal-Identification-Number users
-        and managed empty slots as empty users so the base projection can
-        surface them. Unmanaged occupied slots are also included so callers
-        like the lock-reset config flow step can detect codes not managed
-        by Lock Code Manager.
+        Each slot is a user with its PIN, empty if it has none, and its
+        password if it has one. Managed empty slots are included so the base
+        projection can surface them, and unmanaged occupied slots so callers
+        like the lock-reset config flow step can detect codes not managed by
+        Lock Code Manager.
         """
         managed_slots = self.managed_slots if slots is None else set(slots)
         stored_slots = set()
@@ -182,14 +223,7 @@ class VirtualLock(BaseLock):
                 )
                 continue
             stored_slots.add(slot_num)
-        all_slots = managed_slots | stored_slots
-        slot_states: dict[int, SlotCredential] = {}
-        for slot_num in all_slots:
-            slot_key = str(slot_num)
-            if slot_key in self._data:
-                slot_states[slot_num] = SlotCredential.known(
-                    str(self._data[slot_key]["code"])
-                )
-            else:
-                slot_states[slot_num] = SlotCredential.empty()
-        return [user_from_slot(slot, state) for slot, state in slot_states.items()]
+        return [
+            _user(slot_num, self._data.get(str(slot_num)))
+            for slot_num in managed_slots | stored_slots
+        ]

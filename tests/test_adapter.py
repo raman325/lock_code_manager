@@ -1160,3 +1160,10 @@ async def test_a_lock_with_only_slots_past_capacity_holds_them_at_once(
         assert worker.reachable
         assert 40 not in lock.codes
         await worker.stop(grace=0.1)
+
+
+async def test_a_provider_writes_pins_unless_it_says_otherwise(
+    hass: HomeAssistant,
+) -> None:
+    """The base provider's writable types: PIN alone."""
+    assert _build(hass).writable_credential_types == {CredentialType.PIN}
