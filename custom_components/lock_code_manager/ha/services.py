@@ -189,6 +189,13 @@ def _managed_credential_type(credential_type: str) -> CredentialType:
             f"Lock Code Manager cannot store a {kind} credential. "
             f"Supported: {supported}"
         )
+    if kind is not CredentialType.PIN:
+        # Kept in sync on the locks that take it, but not held in the
+        # configuration yet: written here it would land in the PIN.
+        raise ServiceValidationError(
+            f"Lock Code Manager cannot store a {kind} credential in its "
+            "configuration yet"
+        )
     return kind
 
 

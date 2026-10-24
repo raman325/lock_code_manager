@@ -207,7 +207,7 @@ def credential_in_sync_key(credential_type: str) -> str:
 # value (strings, so this module stays below the domain package). The
 # frontend carries the same map for its card rows; test_frontend_contract
 # holds the two together and to the managed credential types.
-CREDENTIAL_LABELS = {"pin": "PIN"}
+CREDENTIAL_LABELS = {"pin": "PIN", "password": "Password"}
 
 ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")
 

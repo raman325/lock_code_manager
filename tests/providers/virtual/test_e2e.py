@@ -9,6 +9,7 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
+from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -50,10 +51,13 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
+    credential_in_sync_key,
 )
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
+from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
 from custom_components.lock_code_manager.ha.runtime import (
     async_reconcile_issues,
+    async_want,
     lock_registry,
     signal_lock_changed,
 )
@@ -810,6 +814,67 @@ class TestSlotInSync:
         async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
 
         assert hass.states.get(in_sync).attributes[ATTR_SYNC_STATUS] == "syncing"
+
+
+class TestPasswordsKeptPerLock:
+    """A Virtual lock takes passwords: they occupy, are kept, and get a sensor."""
+
+    async def test_a_password_alone_occupies_a_slot(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """Allocation does not hand out a slot that holds only a password."""
+        lock = get_virtual_lock(hass, lcm_config_entry)
+        lock._data["7"] = {"name": None, "password": "pw"}
+
+        occupancy = await async_read_occupancy(
+            hass, lcm_config_entry, [VIRTUAL_LOCK_ENTITY_ID], [6, 7]
+        )
+
+        assert occupancy.locks[0].occupied == frozenset({7})
+
+    async def test_a_lock_that_stops_taking_passwords_lets_its_address_go(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A type the lock no longer takes is dropped at the next want, its value left."""
+        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+        assert worker is not None
+        password = CredentialAddress(1, CredentialType.PASSWORD)
+        assert password in worker.slots
+
+        with patch.object(
+            VirtualLock,
+            "writable_credential_types",
+            new_callable=PropertyMock,
+            return_value=frozenset({CredentialType.PIN}),
+        ):
+            async_want(
+                hass,
+                lcm_config_entry,
+                VIRTUAL_LOCK_ENTITY_ID,
+                1,
+                {CredentialType.PIN: "1234"},
+            )
+
+        assert password not in worker.slots
+
+    async def test_password_in_sync_is_registered_but_disabled_by_default(
+        self, hass: HomeAssistant, lcm_config_entry
+    ) -> None:
+        """A lock that takes passwords gets the per-type sensor, off by default."""
+        entity_id = er.async_get(hass).async_get_entity_id(
+            BINARY_SENSOR_DOMAIN,
+            DOMAIN,
+            build_slot_unique_id(
+                lcm_config_entry.entry_id,
+                1,
+                credential_in_sync_key(CredentialType.PASSWORD.value),
+                VIRTUAL_LOCK_ENTITY_ID,
+            ),
+        )
+        assert entity_id is not None
+        entry = er.async_get(hass).async_get(entity_id)
+        assert entry is not None
+        assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
 
 
 class TestOpenBugs:

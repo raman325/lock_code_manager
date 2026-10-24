@@ -47,6 +47,7 @@ from custom_components.lock_code_manager.ha.runtime import (
     slot_conflict_issue_id,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
     SlotCode,
     SlotCredential,
     pin_address,
@@ -462,7 +463,7 @@ async def test_a_slot_given_up_then_wanted_again_is_cleared_plainly(
     assert worker is not None
     assert 1 in worker.port.releasing
 
-    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, "1234")
+    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, {CredentialType.PIN: "1234"})
 
     assert 1 not in worker.port.releasing
 
@@ -1518,3 +1519,13 @@ def test_the_views_are_told_exactly_what_the_lock_said(
     ``managed`` and ``in_sync``; the label never does.
     """
     assert _label(reading) == label
+
+
+async def test_a_lock_without_passwords_gets_no_password_address(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Only the types the lock takes are kept on it."""
+    worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert worker is not None
+
+    assert {address.credential_type for address in worker.slots} == {CredentialType.PIN}

@@ -655,7 +655,7 @@ async def test_a_lock_renamed_while_it_runs_is_still_remembered(
     await hass.async_block_till_done()
     assert lock_registry(hass).worker(LOCK_1_ENTITY_ID) is not None
 
-    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, "4321")
+    async_want(hass, entry, LOCK_1_ENTITY_ID, 1, {CredentialType.PIN: "4321"})
     await hass.async_block_till_done()
 
     assert mock_lock(entry).codes[1] == "4321"

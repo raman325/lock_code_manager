@@ -1882,11 +1882,12 @@ class BaseLock:
         release is retried like any clear and held after its tries; errors
         must propagate, not be swallowed.
 
-        Clears the credential. A slot-only provider has no user record,
-        but the credential IS lock-side state this integration owns, and
-        leaving it programmed means a deleted user's PIN still opens the
-        door -- and that the slot number can never be reissued, because
-        allocation refuses to write over a code it can still read.
+        Clears every credential type Lock Code Manager keeps on the lock. A
+        slot-only provider has no user record, but the credential IS
+        lock-side state this integration owns, and leaving it programmed
+        means a deleted user's PIN still opens the door -- and that the slot
+        number can never be reissued, because allocation refuses to write
+        over a code it can still read.
 
         Providers that anchor a slot to a lock-side user (Matter, Z-Wave
         User Credential CC) override this to remove only what LCM wrote to
@@ -1895,7 +1896,8 @@ class BaseLock:
         or PIN added in the vendor's app among them. They do not also clear
         here.
         """
-        await self.async_clear_usercode(slot)
+        for credential_type in sorted(self.managed_credential_types):
+            await self.async_clear_slot_credential(slot, credential_type)
 
     async def async_set_user(self, user: User) -> SetUserResult:
         """

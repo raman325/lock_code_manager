@@ -1780,7 +1780,7 @@ async def _async_setup_new_locks(
         # Every slot's want goes in with the hold: a new worker reads them all
         # in its first exchange.
         wants = {
-            slot_num: coordinator.want
+            slot_num: coordinator.wants
             for slot_num, coordinator in runtime_data.slot_coordinators.items()
         }
         # Holding waits on the lock's provider setup, which has the operation
@@ -1825,7 +1825,7 @@ async def _async_setup_new_locks(
         # A want that changed while the hold waited -- a condition entity
         # turning, say -- was told only to the locks the entry held then.
         for slot_num, coordinator in runtime_data.slot_coordinators.items():
-            if coordinator.want != wants.get(slot_num):
+            if coordinator.wants != wants.get(slot_num):
                 coordinator.async_push_want([lock_entity_id])
         _LOGGER.debug("%s (%s): Holding lock %s", entry_id, entry_title, lock_entity_id)
         async_delete_issue(

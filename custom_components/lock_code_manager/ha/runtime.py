@@ -616,12 +616,19 @@ async def async_hold_lock(
     hass: HomeAssistant,
     entry: ConfigEntry,
     lock_entity_id: str,
-    wants: Mapping[int, Want],
+    wants: Mapping[int, Mapping[CredentialType, Want]],
 ) -> BaseLock:
-    """Hold ``lock_entity_id`` for ``entry`` with its slots' wants; return the provider."""
+    """
+    Hold ``lock_entity_id`` for ``entry`` with its slots' wants; return the provider.
+
+    ``wants`` is what each slot should hold, by credential type; a type not
+    named is kept clear. The lock is held with every slot's PIN, so a new
+    worker's first read takes them all at once; the other types the lock
+    takes follow once its provider is built and says which they are.
+    """
     addresses = {
-        pin_address(slot): pin
-        for slot, pin in wants.items()
+        pin_address(slot): slot_wants.get(CredentialType.PIN)
+        for slot, slot_wants in wants.items()
         if async_owns_slot(hass, entry, lock_entity_id, slot)
     }
     while True:
@@ -643,7 +650,17 @@ async def async_hold_lock(
             )
             addresses = {a: v for a, v in addresses.items() if a.user_ref != err.slot}
     port = worker.port
-    port.releasing.difference_update(_slots_of(addresses))
+    held = _slots_of(addresses)
+    port.releasing.difference_update(held)
+    others = sorted(port.provider.managed_credential_types - {CredentialType.PIN})
+    for slot in held:
+        for credential_type in others:
+            lock_registry(hass).want(
+                lock_entity_id,
+                entry.entry_id,
+                CredentialAddress(slot, credential_type),
+                wants[slot].get(credential_type),
+            )
     if _re_paired(hass, lock_entity_id, worker) and not ir.async_get(
         hass
     ).async_get_issue(DOMAIN, per_lock_issue_id(RE_PAIRED_RELOAD, lock_entity_id)):
@@ -706,28 +723,53 @@ def async_hand_off(
 
 @callback
 def async_want(
-    hass: HomeAssistant, entry: ConfigEntry, lock_entity_id: str, slot: int, pin: Want
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    lock_entity_id: str,
+    slot: int,
+    wants: Mapping[CredentialType, Want],
 ) -> None:
-    """Set what ``slot`` should hold on a lock ``entry`` holds, if it owns the slot."""
+    """
+    Set what ``slot`` should hold on a lock ``entry`` holds, if it owns the slot.
+
+    ``wants`` is by credential type, for each type the lock takes; a type
+    not named is kept clear. A type the lock no longer takes is let go of,
+    what the lock holds of it left as it is.
+    """
     if not async_owns_slot(hass, entry, lock_entity_id, slot):
         return
     registry = lock_registry(hass)
     if (worker := registry.worker(lock_entity_id)) is None:
         return
     port = worker.port
-    address = pin_address(slot)
-    current = worker.slots.get(address)
-    if (
-        current is not None
-        and current.want == pin
+    types = port.provider.managed_credential_types
+    for address in [
+        address
+        for address, current in worker.slots.items()
+        if address.user_ref == slot
+        and address.credential_type not in types
         and not current.release
-        and slot not in port.releasing
-    ):
+    ]:
+        worker.forget(address)
+    changed: dict[CredentialAddress, Want] = {}
+    for credential_type in sorted(types):
+        address = CredentialAddress(slot, credential_type)
+        want = wants.get(credential_type)
+        current = worker.slots.get(address)
+        if (
+            current is None
+            or current.want != want
+            or current.release
+            or slot in port.releasing
+        ):
+            changed[address] = want
+    if not changed:
         return  # nothing new to tell the lock: no sync to queue
     port.releasing.discard(slot)
     hass.data[DATA][GIVEN_UP_KEY].pop((lock_entity_id, slot), None)
     try:
-        registry.want(lock_entity_id, entry.entry_id, address, pin)
+        for address, want in changed.items():
+            registry.want(lock_entity_id, entry.entry_id, address, want)
     except (KeyError, SlotTaken) as err:
         _LOGGER.error(
             "%s: cannot set slot %s on %s: %s",
