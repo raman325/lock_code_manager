@@ -473,7 +473,7 @@
         "step": {
           "init": {
             "title": "{lock_name} refused the {credential} for slot {slot_num}",
-            "description": "Lock `{lock_entity_id}` refused the {credential} for slot {slot_num}.\n\n**Reason:** {reason}\n\nThe slot's other credentials still work. Change the {credential}, or click **Submit** to try it again."
+            "description": "Lock `{lock_entity_id}` refused the {credential} for slot {slot_num}.\n\n**Reason:** {reason}\n\nChange the {credential}, or click **Submit** to try it again."
           }
         }
       }

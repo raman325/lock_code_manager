@@ -123,8 +123,8 @@ _HOLD_ISSUES = {
         "slot_clear_failed",
         "the lock did not clear the slot after two tries",
     ),
-    # Only while the user keeps another credential: otherwise the slot is
-    # turned off and `slot_disabled` says so.
+    # Raised whenever the refused credential is held: the slot was not turned
+    # off. Turning it off empties what it wants, which lifts the hold.
     Repair.SLOT_DISABLED: ("credential_refused", "the lock refused it"),
 }
 
@@ -909,8 +909,8 @@ def async_reconcile_issues(
 
     A slot it could not set is ``slot_suspended``; a clear that would not
     take is ``slot_clear_failed`` -- the code may still open the door. A
-    refused value is ``credential_refused`` while the user keeps another
-    credential; otherwise it turns the slot off through ``on_disable``. A lock
+    refused value is ``credential_refused`` while it is held; when it was the
+    user's only credential, ``on_disable`` turns the slot off instead. A lock
     that answered before and has stopped answering is ``lock_offline``.
     """
     data = hass.data[DATA]
@@ -960,10 +960,6 @@ def async_reconcile_issues(
             (address, credential)
             for address, credential in credentials
             if credential.hold in _HOLD_ISSUES
-            and (
-                credential.hold is not Repair.SLOT_DISABLED
-                or _keeps_another_credential(owner, slot_num, address)
-            )
         ]
         if not held:
             continue

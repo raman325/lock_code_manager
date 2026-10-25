@@ -845,6 +845,36 @@ async def test_a_refused_only_credential_turns_the_slot_off(
     assert issue is not None
     assert issue.translation_placeholders is not None
     assert "refused the Password for slot" in issue.translation_placeholders["reason"]
+    # Turned off, the slot wants nothing: the hold is lifted, so only
+    # `slot_disabled` is raised.
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, _hold_issue_id(lcm_config_entry))
+        is None
+    )
+
+
+async def test_a_refused_password_stays_reported_once_the_pin_is_cleared(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The password, now the only credential, is still held: its repair stays."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    with patch.object(
+        VirtualLock,
+        "async_set_slot_credential",
+        _refuse_passwords(VirtualLock.async_set_slot_credential),
+    ):
+        await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+        await _settled(hass)
+        await coordinator.async_request_credential_update(CredentialType.PIN, "")
+        await _settled(hass)
+
+    assert coordinator.is_enabled is True
+    worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+    assert worker is not None
+    assert worker.status(PASSWORD_1) == (Status.SUSPENDED, Repair.SLOT_DISABLED)
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, _hold_issue_id(lcm_config_entry))
+    assert issue is not None
+    assert issue.translation_key == "credential_refused"
 
 
 async def test_a_new_password_lifts_the_refusal(
