@@ -303,6 +303,7 @@ class SlotEntityCoordinator:
 
         Clearing the slot's last credential turns an enabled slot off: a user
         with nothing to present would read as active (spec decision 4).
+        Clearing a credential the user does not hold writes nothing.
         """
         if credential_type is CredentialType.PIN:
             value = value.strip()
@@ -325,6 +326,9 @@ class SlotEntityCoordinator:
                 self._log_prefix,
             )
             updates[CONF_ENABLED] = False
+        elif not value and credential_type not in held:
+            # Nothing to clear, and nothing else changes: no write, no pass.
+            return
 
         self._write_config_fields(updates)
 

@@ -576,6 +576,28 @@ async def test_clear_credential_clears_the_password_only(
     assert slot[CONF_ENABLED] is True
 
 
+async def test_clearing_a_password_the_user_does_not_hold_writes_nothing(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Nothing to clear: the user's stored data is left as it was."""
+    subentry_id = subentry_id_for_slot(lcm_config_entry, 1)
+    before = dict(lcm_config_entry.subentries[subentry_id].data)
+    assert "password" not in before
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_CREDENTIAL,
+        {
+            CONF_NAME: "slot1",
+            ATTR_CREDENTIAL_TYPE: "password",
+            "config_entry_id": lcm_config_entry.entry_id,
+        },
+        blocking=True,
+    )
+
+    assert dict(lcm_config_entry.subentries[subentry_id].data) == before
+
+
 async def test_add_user_with_a_password_only(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
