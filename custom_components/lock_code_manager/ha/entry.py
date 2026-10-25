@@ -75,8 +75,10 @@ def available_credential_types(
     Return the credential types the entry's users can be given.
 
     The union of what the entry's locks take, and always the PIN (spec
-    decision 10). Read from the locks held now: a lock not set up yet adds
-    its types when it is.
+    decision 10). Read from the locks held now, as their capabilities were
+    read at setup. The entry's entities follow this answer when the update
+    pass reconciles them; a capability change after setup is not seen until
+    PR 4 (Z-Wave passwords) reconciles on it.
     """
     return frozenset({CredentialType.PIN}).union(
         *(lock.managed_credential_types for lock in entry.runtime_data.locks.values())

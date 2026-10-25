@@ -233,10 +233,11 @@ class EntityCallbackRegistry:
         """
         Run every entity reconciler, one after another, each awaited.
 
-        The update pass calls this once it has settled the entry's locks and
-        slots. A change in what a lock takes, once a lock's capabilities can
-        be refreshed after setup, calls it too. A reconciler that raises is
-        logged and does not keep the rest from running.
+        Only the update pass calls this, once it has settled the entry's locks
+        and slots. A lock's capabilities are not refreshed after setup yet;
+        when they are (PR 4, Z-Wave passwords), that refresh calls this too.
+        A reconciler that raises is logged and does not keep the rest from
+        running.
         """
         for cb in list(self.reconcile_entities):
             try:
