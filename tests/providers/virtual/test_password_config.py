@@ -212,6 +212,19 @@ async def test_each_slot_gets_a_password_entity(
         assert state.attributes["mode"] == "password"
 
 
+async def test_a_second_password_lock_adds_no_second_entity(
+    hass: HomeAssistant, lcm_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Each slot has one password entity, however many locks take passwords."""
+    lock = get_virtual_lock(hass, lcm_config_entry)
+
+    lcm_config_entry.runtime_data.callbacks.invoke_lock_added_handlers([lock])
+    await hass.async_block_till_done()
+
+    assert "does not generate unique IDs" not in caplog.text
+    assert _password_entity(hass, lcm_config_entry, 1) is not None
+
+
 async def test_a_user_added_later_gets_a_password_entity(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:

@@ -198,11 +198,6 @@ class SlotEntityCoordinator:
         return self._slot_config().get(CONF_PIN) or None
 
     @property
-    def password_value(self) -> str | None:
-        """Return the configured password, or None if not set."""
-        return self._slot_config().get(CONF_PASSWORD) or None
-
-    @property
     def condition_entity_id(self) -> str | None:
         """Return the configured condition entity ID for this slot."""
         return self._slot_config().get(CONF_CONDITION)
