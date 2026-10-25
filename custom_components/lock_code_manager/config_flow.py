@@ -1158,13 +1158,15 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
 class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
     """Add or edit one user of a Lock Code Manager entry."""
 
-    # Whether the edit form on screen has a Password field, decided when it
-    # is drawn. The entry's answer can change while the dialog is open (a
-    # reload, a lock still setting up, a lock added elsewhere), and a submit
-    # read against a fresh answer would delete a stored password the form
-    # never showed, or overwrite one the user typed. Not shown until drawn,
-    # so a submit with no form behind it keeps the stored password.
-    _password_offered: bool = False
+    # Whether the edit form has a Password field, decided when the dialog
+    # first draws it and kept for every re-show. The entry's answer can
+    # change while the dialog is open (a reload, a lock still setting up, a
+    # lock added elsewhere): a submit read against a fresh answer would
+    # delete a stored password the form never showed or overwrite one the
+    # user typed, and a re-show after an error that dropped the field would
+    # bring back one the user cleared. None until drawn, so a submit with no
+    # form behind it keeps the stored password.
+    _password_offered: bool | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -1421,7 +1423,8 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         description_placeholders: dict[str, Any],
     ) -> SubentryFlowResult:
         """Render the edit form, prefilled from the submission or the record."""
-        self._password_offered = _offers_password(self._get_entry())
+        if self._password_offered is None:
+            self._password_offered = _offers_password(self._get_entry())
         return self.async_show_form(
             step_id="reconfigure",
             # A password the form does not offer has no field, so the

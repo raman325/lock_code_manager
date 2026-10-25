@@ -4167,6 +4167,53 @@ async def test_an_edit_follows_the_form_that_was_drawn(
     assert entry.subentries[subentry.subentry_id].data["password"] == stored
 
 
+async def test_a_password_cleared_before_an_error_stays_cleared(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    The dialog decides once whether it offers a password, on its first form.
+
+    A re-show after an error keeps the field it was drawn with, even if the
+    entry's answer changed meanwhile: the user cleared that field.
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "Ann": {CONF_ENABLED: True, CONF_PIN: "1234", "password": "kept"},
+            "Bob": {CONF_ENABLED: True, CONF_PIN: "5678"},
+        },
+        unique_id="offer-changes-on-error",
+    )
+    subentry = next(
+        subentry for subentry in entry.subentries.values() if subentry.title == "Ann"
+    )
+
+    with patch(
+        "custom_components.lock_code_manager.config_flow._offers_password",
+        side_effect=[True, False],
+    ):
+        result = await hass.config_entries.subentries.async_init(
+            (entry.entry_id, SUBENTRY_TYPE_USER),
+            context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+        )
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Bob", CONF_ENABLED: True, CONF_PIN: "1234"},
+        )
+        assert result["type"] == "form"
+        assert result["errors"]
+        assert "password" in {str(key) for key in result["data_schema"].schema}
+        with _holding():
+            result = await hass.config_entries.subentries.async_configure(
+                result["flow_id"],
+                {CONF_NAME: "Ann", CONF_ENABLED: True, CONF_PIN: "1234"},
+            )
+
+    assert result["type"] == "abort"
+    assert not entry.subentries[subentry.subentry_id].data.get("password")
+
+
 class TestUserFormsOnALoadedEntry:
     """The user forms of an entry that is set up, whose locks answer for it."""
 
