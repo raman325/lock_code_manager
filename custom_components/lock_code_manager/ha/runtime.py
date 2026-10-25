@@ -947,7 +947,7 @@ def async_reconcile_issues(
             continue
         # The slot raises one repair: the warning that matters most, a code
         # that may still open the door, then the first in address order.
-        address, slot = min(
+        _, slot = min(
             held,
             key=lambda pair: (pair[1].hold is not Repair.CODE_MAY_REMAIN, pair[0]),
         )
@@ -988,7 +988,6 @@ def async_reconcile_issues(
                 "lock_name": provider.display_name or lock_entity_id,
                 "slot_num": str(slot_num),
                 "reason": reason,
-                "credential": CREDENTIAL_LABELS[address.credential_type.value],
             },
             # Persisted with the repair: after a restart, acknowledging it
             # still knows whose slot it was and that it was on its way out.
