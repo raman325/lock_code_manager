@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable, Collection, Container, Iterable, Mapping, Sequence
 import logging
+from types import MappingProxyType
 from typing import Any, override
 
 import probatio as vol
@@ -17,7 +18,13 @@ from homeassistant.config_entries import (
     ConfigSubentryFlow,
     SubentryFlowResult,
 )
-from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import (
+    CONF_CONDITION,
+    CONF_ENABLED,
+    CONF_NAME,
+    CONF_PASSWORD,
+    CONF_PIN,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.data_entry_flow import UnknownFlow
 from homeassistant.helpers import (
@@ -46,8 +53,15 @@ from .ha.allocation import (
     async_check_slot_capacity,
     async_read_occupancy,
 )
+from .ha.entry import available_credential_types
 from .ha.runtime import locks_that_cannot_report
-from .model.config import EntryConfig, async_write_entry_config
+from .model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    credential_values,
+    has_credential,
+)
+from .model.credentials import CredentialType, credential_value_error
 from .model.names import (
     identity,
     name_error,
@@ -80,17 +94,88 @@ CODE_SLOT_SCHEMA = vol.Schema(
     }
 )
 
+# Not stripped: a password is kept as typed (spec decision 7). A selector
+# rather than a validator, because this schema is rendered and a callable has
+# no form.
+PASSWORD_FIELD = sel.TextSelector(
+    sel.TextSelectorConfig(type=sel.TextSelectorType.PASSWORD)
+)
 
-def _slot_enabled_without_pin(slot: dict[str, Any]) -> bool:
-    """Return True if a slot is enabled but has no PIN set."""
-    return bool(slot.get(CONF_ENABLED)) and not slot.get(CONF_PIN)
+
+def _code_slot_schema(*, password: bool) -> vol.Schema:
+    """Return the one-user form, with a Password field when it is offered."""
+    if not password:
+        return CODE_SLOT_SCHEMA
+    return CODE_SLOT_SCHEMA.extend({vol.Optional(CONF_PASSWORD): PASSWORD_FIELD})
 
 
-def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
-    """Validate that if enabled is True, pin is set."""
-    if any(_slot_enabled_without_pin(val) for val in data.values()):
-        raise vol.Invalid("PIN must be set if enabled is True")
+def _offers_password(entry: ConfigEntry) -> bool:
+    """
+    Return whether the entry's locks take passwords.
+
+    Known only once the entry is loaded: its locks are what answer.
+    """
+    return getattr(entry, "runtime_data", None) is not None and (
+        CredentialType.PASSWORD in available_credential_types(entry)
+    )
+
+
+def _slot_enabled_without_credential(slot: Mapping[str, Any]) -> bool:
+    """Return True if a slot is enabled but holds no credential of any type."""
+    return bool(slot.get(CONF_ENABLED)) and not has_credential(slot)
+
+
+def enabled_requires_credential(data: dict[str, Any]) -> dict[str, Any]:
+    """Validate that every enabled user has a credential."""
+    if any(_slot_enabled_without_credential(val) for val in data.values()):
+        raise vol.Invalid("A PIN or password must be set if enabled is True")
     return data
+
+
+def _obeys_rule(credential_type: CredentialType) -> Callable[[str], str]:
+    """Return a validator refusing a ``credential_type`` its rule refuses."""
+
+    def _validate(value: str) -> str:
+        # The reason names the rule, never the value: it is logged.
+        if error := credential_value_error(credential_type, value):
+            raise vol.Invalid(error)
+        return value
+
+    return _validate
+
+
+def _credential_errors(fields: Mapping[str, Any]) -> dict[str, str]:
+    """Return a form error for each credential its type's rule refuses."""
+    return {
+        credential_type.value: f"invalid_{credential_type.value}"
+        for credential_type, value in credential_values(fields).items()
+        if credential_value_error(credential_type, value)
+    }
+
+
+def _duplicate_credentials(
+    fields: Mapping[str, Any],
+    others: Mapping[str, Mapping[str, Any]],
+    previous: Mapping[str, Any] = MappingProxyType({}),
+) -> dict[str, str]:
+    """
+    Return a form error for each credential another user already holds.
+
+    Per type: a password may equal a PIN (spec decision 12). A credential
+    equal to what the edited user already holds (``previous``) is not
+    checked, so a duplicate saved before this rule refuses only an edit
+    that changes it.
+    """
+    held = credential_values(previous)
+    return {
+        credential_type.value: f"{credential_type.value}_not_unique"
+        for credential_type, value in credential_values(fields).items()
+        if value != held.get(credential_type)
+        and any(
+            credential_values(other).get(credential_type) == value
+            for other in others.values()
+        )
+    }
 
 
 # The editor's shape: users keyed by name, with no slot number anywhere. The
@@ -99,7 +184,11 @@ def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
 # that way.
 USER_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_PIN): STRIPPED_PIN,
+        vol.Optional(CONF_PIN): vol.All(STRIPPED_PIN, _obeys_rule(CredentialType.PIN)),
+        # Not stripped: a password is kept as typed (spec decision 7).
+        vol.Optional(CONF_PASSWORD): vol.All(
+            cv.string, _obeys_rule(CredentialType.PASSWORD)
+        ),
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_CONDITION): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
@@ -107,7 +196,9 @@ USER_SCHEMA = vol.Schema(
     }
 )
 
-USERS_SCHEMA = vol.All(vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_pin)
+USERS_SCHEMA = vol.All(
+    vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_credential
+)
 
 LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
@@ -267,7 +358,7 @@ async def _async_validate_users_yaml(
     raw_users: dict[Any, Any],
     locks: Iterable[str],
     *,
-    taken: Collection[str] = (),
+    taken: Mapping[str, Mapping[str, Any]] = MappingProxyType({}),
 ) -> tuple[dict | None, dict, dict]:
     """
     Validate a users submission for the editor and the yaml setup path.
@@ -281,11 +372,12 @@ async def _async_validate_users_yaml(
     the flow that is still creating one; it is what the lock reads this
     performs are made on behalf of.
 
-    ``taken`` is whichever names the block is being added alongside, empty
+    ``taken`` is whichever users the block is being added alongside, empty
     when it IS the whole configuration. A block added to an entry has to
     clear the users already there as well as its own: two keys meaning one
     person collapse into a single key on the way into storage whether they
-    arrived together or a week apart.
+    arrived together or a week apart, and a credential two users share is
+    recorded as either of them whoever presents it.
 
     Returns the parsed users -- or ``None`` when validation failed -- with the
     accumulated errors and description placeholders.
@@ -309,6 +401,12 @@ async def _async_validate_users_yaml(
     for name in parsed_users:
         if identity(name) in spoken_for:
             return None, {"base": "name_not_unique"}, {"name": name}
+
+    seen: dict[str, Mapping[str, Any]] = dict(taken)
+    for name, fields in parsed_users.items():
+        if duplicates := _duplicate_credentials(fields, seen):
+            return None, {"base": next(iter(duplicates.values()))}, {"name": name}
+        seen[name] = fields
 
     # The same refusal the guided path gives. Both write the one field, so a
     # condition entity this integration cannot read must fail on both routes
@@ -404,23 +502,38 @@ async def _allocate_for(
 def _validate_user_form(
     hass: HomeAssistant,
     user_input: dict[str, Any],
-    taken: Collection[str],
+    taken: Mapping[str, Mapping[str, Any]],
+    previous: Mapping[str, Any] = MappingProxyType({}),
 ) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
     """
-    Validate one user's submitted form against the names already spoken for.
+    Validate one user's submitted form against the users already there.
 
     Shared by the setup flow, which collects users before the entry exists,
     and the subentry flow, which adds and edits them afterwards. One
     definition of a valid user, so the two routes cannot answer differently.
 
-    ``taken`` is whichever names this submission must not collide with -- for
-    an edit, everybody except the user being edited.
+    ``taken`` is whichever users this submission must not collide with, by
+    name or by credential -- for an edit, everybody except the user being
+    edited, whose stored fields are ``previous``.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, Any] = {}
+    # Compared as it will be stored: a PIN is stripped where it enters.
+    submitted = {**user_input, CONF_PIN: (user_input.get(CONF_PIN) or "").strip()}
 
-    if _slot_enabled_without_pin(user_input):
-        errors[CONF_PIN] = "missing_pin_if_enabled"
+    if _slot_enabled_without_credential(submitted):
+        errors["base"] = "missing_credential_if_enabled"
+    invalid = _credential_errors(submitted)
+    errors.update(invalid)
+    errors.update(
+        {
+            field: error
+            for field, error in _duplicate_credentials(
+                submitted, taken, previous
+            ).items()
+            if field not in invalid
+        }
+    )
 
     name: str | None = None
     if error := name_error(user_input.get(CONF_NAME)):
@@ -446,7 +559,8 @@ def _validate_user_form(
     if errors:
         return None, {}, errors, placeholders
 
-    fields = CODE_SLOT_SCHEMA({**user_input, CONF_NAME: name})
+    # The widest form, so a password the caller carried or offered is kept.
+    fields = _code_slot_schema(password=True)({**user_input, CONF_NAME: name})
     del fields[CONF_NAME]
     return name, fields, errors, placeholders
 
@@ -1108,7 +1222,7 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="one",
             data_schema=self.add_suggested_values_to_schema(
-                CODE_SLOT_SCHEMA, user_input or {}
+                _code_slot_schema(password=_offers_password(entry)), user_input or {}
             ),
             errors=errors,
             description_placeholders=description_placeholders,
@@ -1231,10 +1345,16 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         # a dict that still holds their old name issues their new one a
         # second number.
         others = {other: user for other, user in config.users.items() if other != held}
+        offered = _offers_password(entry)
 
         if user_input is not None:
+            if not offered and (kept := subentry.data.get(CONF_PASSWORD)):
+                # Not offered by this entry's locks now, still the user's
+                # (spec decision 10): the form cannot show it, so it cannot
+                # have cleared it.
+                user_input = {**user_input, CONF_PASSWORD: kept}
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, others
+                self.hass, user_input, others, subentry.data
             )
             description_placeholders.update(placeholders)
 
@@ -1267,7 +1387,11 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                         errors.update(allocation_errors)
                         description_placeholders.update(allocation_placeholders)
                         return self._async_show_reconfigure(
-                            subentry, user_input, errors, description_placeholders
+                            subentry,
+                            offered,
+                            user_input,
+                            errors,
+                            description_placeholders,
                         )
                     held_slot = config.assignment.reconcile(
                         {**others, name: fields},
@@ -1283,12 +1407,13 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 )
 
         return self._async_show_reconfigure(
-            subentry, user_input, errors, description_placeholders
+            subentry, offered, user_input, errors, description_placeholders
         )
 
     def _async_show_reconfigure(
         self,
         subentry: ConfigSubentry,
+        offered: bool,
         user_input: dict[str, Any] | None,
         errors: dict[str, str],
         description_placeholders: dict[str, Any],
@@ -1296,8 +1421,10 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         """Render the edit form, prefilled from the submission or the record."""
         return self.async_show_form(
             step_id="reconfigure",
+            # A password the form does not offer has no field, so the
+            # suggestions cannot echo it.
             data_schema=self.add_suggested_values_to_schema(
-                CODE_SLOT_SCHEMA,
+                _code_slot_schema(password=offered),
                 user_input
                 or {
                     key: value

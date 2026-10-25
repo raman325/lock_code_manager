@@ -1,5 +1,8 @@
 """A password in the configuration, end to end on a Virtual lock."""
 
+import json
+from pathlib import Path
+
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -8,8 +11,10 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
+from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
+from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
@@ -17,11 +22,14 @@ from custom_components.lock_code_manager.const import (
     ATTR_CREDENTIAL_TYPE,
     ATTR_VALUE as ATTR_CREDENTIAL_VALUE,
     CONF_LOCKS,
+    CONF_SLOT,
     CONF_SLOTS,
+    CONF_USERS,
     DOMAIN,
     SERVICE_ADD_USER,
     SERVICE_CLEAR_CREDENTIAL,
     SERVICE_SET_CREDENTIAL,
+    SUBENTRY_TYPE_USER,
 )
 from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.ha.runtime import lock_registry
@@ -488,3 +496,205 @@ async def test_add_user_refuses_a_password_outside_printable_ascii(
 
     assert "café" not in str(err.value)
     assert "Guest" not in get_entry_config(lcm_config_entry).users
+
+
+async def _subentry_configure(hass: HomeAssistant, flow_id: str, user_input):
+    """Submit to a subentry flow, waiting out an allocation's progress step."""
+    result = await hass.config_entries.subentries.async_configure(flow_id, user_input)
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.subentries.async_configure(flow_id)
+    return result
+
+
+async def _add_user_form(hass: HomeAssistant, entry, path: str = "one"):
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER), context={"source": SOURCE_USER}
+    )
+    return await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {"next_step_id": path}
+    )
+
+
+async def _edit_user_form(hass: HomeAssistant, entry, slot: int):
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={
+            "source": "reconfigure",
+            "subentry_id": subentry_id_for_slot(entry, slot),
+        },
+    )
+    assert result["step_id"] == "reconfigure"
+    return result
+
+
+async def test_the_add_user_form_offers_a_password(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The entry's lock takes passwords: the form has the field."""
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    assert "password" in {str(key) for key in result["data_schema"].schema}
+
+
+async def test_the_password_field_is_labelled(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Both forms that show it name it: an unlabelled field shows its key."""
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    steps = strings["config_subentries"]["user"]["step"]
+
+    for result in (
+        await _add_user_form(hass, lcm_config_entry),
+        await _edit_user_form(hass, lcm_config_entry, 1),
+    ):
+        fields = {str(key) for key in result["data_schema"].schema}
+        assert fields == set(steps[result["step_id"]]["data"])
+
+
+async def test_a_user_with_only_a_password_can_be_added_enabled(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """A password is a credential: enabled without a PIN."""
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "Guest", CONF_ENABLED: True, "password": "welcome in"},
+    )
+
+    assert result["type"] == "create_entry"
+    assert result["data"]["password"] == "welcome in"
+    assert CONF_SLOT in result["data"]
+
+
+async def test_a_password_outside_printable_ascii_is_refused_in_the_form(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Refused on its field, and the value appears in no error."""
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "Guest", CONF_ENABLED: True, "password": "café-marker"},
+    )
+
+    assert result["errors"] == {"password": "invalid_password"}
+    assert "café-marker" not in str(result.get("description_placeholders"))
+
+
+async def test_another_users_password_is_refused_in_the_form(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Per type: slot 1's password, offered as a new user's password."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {
+            CONF_NAME: "slot1",
+            ATTR_CREDENTIAL_TYPE: "password",
+            ATTR_CREDENTIAL_VALUE: "taken",
+            "config_entry_id": lcm_config_entry.entry_id,
+        },
+        blocking=True,
+    )
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "Guest", CONF_ENABLED: True, "password": "taken"},
+    )
+
+    assert result["errors"] == {"password": "password_not_unique"}
+
+
+async def test_a_password_may_equal_another_users_pin_in_the_form(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Slot 1's PIN as a new user's password is not a duplicate."""
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "Guest", CONF_ENABLED: True, "password": "1234"},
+    )
+
+    assert result["type"] == "create_entry"
+
+
+async def test_editing_a_user_offers_and_sets_their_password(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The edit form takes a password where the entry's locks take one."""
+    result = await _edit_user_form(hass, lcm_config_entry, 1)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "slot1", CONF_ENABLED: True, CONF_PIN: "1234", "password": "pw"},
+    )
+
+    assert result["type"] == "abort"
+    assert get_entry_config(lcm_config_entry).slot(1)["password"] == "pw"
+
+
+async def test_pasted_users_may_carry_a_password(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The block path takes `password:`."""
+    result = await _add_user_form(hass, lcm_config_entry, path="several")
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_USERS: {"Guest": {"password": "welcome in", "enabled": True}}},
+    )
+
+    assert result["type"] == "abort"
+    assert get_entry_config(lcm_config_entry).users["Guest"]["password"] == (
+        "welcome in"
+    )
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param({"password": "café"}, id="password-character"),
+        pytest.param({"password": "x" * 256}, id="password-length"),
+        pytest.param({CONF_PIN: "1" * 256}, id="pin-length"),
+    ],
+)
+async def test_pasted_users_obey_the_credential_rules(
+    hass: HomeAssistant, lcm_config_entry, fields: dict[str, str]
+) -> None:
+    """The block path refuses what the form refuses."""
+    result = await _add_user_form(hass, lcm_config_entry, path="several")
+
+    result = await _subentry_configure(
+        hass, result["flow_id"], {CONF_USERS: {"Guest": fields}}
+    )
+
+    assert result["errors"] == {"base": "invalid_config"}
+    assert "Guest" not in get_entry_config(lcm_config_entry).users
+
+
+async def test_pasted_users_sharing_a_password_are_refused(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Within the pasted block, per type."""
+    result = await _add_user_form(hass, lcm_config_entry, path="several")
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_USERS: {"A": {"password": "same"}, "B": {"password": "same"}}},
+    )
+
+    assert result["errors"] == {"base": "password_not_unique"}
+    assert result["description_placeholders"] == {"name": "B"}
