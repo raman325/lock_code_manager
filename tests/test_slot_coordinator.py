@@ -65,6 +65,8 @@ from .common import (
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_PIN_ENTITY,
     async_write_slot_pin,
+    unnumbered_user_subentry,
+    user_subentries,
     write_entry_config,
 )
 
@@ -1254,6 +1256,34 @@ async def test_an_unchanged_pin_shared_with_another_user_is_left_alone(
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
 
     await coordinator.async_request_credential_update(CredentialType.PIN, "1234")
+
+
+async def test_a_pin_held_by_a_user_with_no_slot_number_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Every user in the entry counts, numbered or not (spec decision 12)."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            *user_subentries({1: {CONF_NAME: "Ann", CONF_ENABLED: True}}),
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_PIN: "1234", CONF_ENABLED: True}
+            ),
+        ],
+        unique_id="unplaced-duplicate",
+        version=5,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError, match="Unplaced"):
+        await coordinator.async_request_credential_update(CredentialType.PIN, "1234")
+
+    assert not get_entry_config(entry).slot(1).get(CONF_PIN)
+    await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def test_a_turned_off_users_pin_is_refused(

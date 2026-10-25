@@ -334,14 +334,12 @@ class SlotEntityCoordinator:
 
         Two users sharing a credential: whoever presents it is recorded as
         either, and turning one off leaves it working (spec decision 12).
-        Names the other user, never the value.
+        Every user counts, one with no slot number too. Names the other user,
+        never the value.
         """
         config = get_entry_config(self._config_entry)
-        others = {
-            slot_config[CONF_NAME]: slot_config
-            for slot_num, slot_config in config.slots.items()
-            if slot_num != self._slot_num
-        }
+        own = config.name_for(self._slot_num)
+        others = {name: user for name, user in config.users.items() if name != own}
         if (other := credential_holder(others, credential_type, value)) is not None:
             label = CREDENTIAL_LABELS[credential_type.value]
             raise ServiceValidationError(f"{other} already has this {label}")
