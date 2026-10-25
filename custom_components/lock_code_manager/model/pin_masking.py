@@ -34,7 +34,7 @@ def mask_credential(
     """
     Return a deterministic masked representation of a credential for logging.
 
-    CRC32 salted with the HA instance ID and slot number, so the same value
+    CRC32 salted with the Home Assistant instance ID and slot number, so the same value
     on the same slot always produces the same 8-char hex token regardless of
     which lock or config entry it belongs to. Any type but the PIN is salted
     with its type too, so a PIN and a password of the same value differ.

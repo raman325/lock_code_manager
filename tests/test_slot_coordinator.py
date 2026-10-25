@@ -98,7 +98,7 @@ async def test_request_pin_update_rejects_out_of_range_pin(
     coordinator = runtime_data.slot_coordinators[1]
 
     with pytest.raises(ServiceValidationError):
-        await coordinator.async_request_pin_update("12")
+        await coordinator.async_request_credential_update(CredentialType.PIN, "12")
 
     # The rejected PIN must not reach config.
     assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == (
@@ -118,7 +118,9 @@ async def test_request_pin_update_rejects_too_long_pin(
     coordinator = runtime_data.slot_coordinators[1]
 
     with pytest.raises(ServiceValidationError):
-        await coordinator.async_request_pin_update("123456789")
+        await coordinator.async_request_credential_update(
+            CredentialType.PIN, "123456789"
+        )
 
 
 async def test_request_pin_update_allows_in_range_pin(
@@ -132,7 +134,7 @@ async def test_request_pin_update_allows_in_range_pin(
         lock._capabilities_cache = _pin_caps(4, 8)
     coordinator = runtime_data.slot_coordinators[1]
 
-    await coordinator.async_request_pin_update("567890")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "567890")
     await hass.async_block_till_done()
 
     assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == (
@@ -162,7 +164,7 @@ async def test_request_pin_update_skips_lock_advertising_no_pin_type(
     coordinator = runtime_data.slot_coordinators[1]
 
     # A single character would fail any real bound, so acceptance proves the skip.
-    await coordinator.async_request_pin_update("1")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "1")
     await hass.async_block_till_done()
 
     assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == "1"
@@ -179,7 +181,7 @@ async def test_request_pin_update_empty_pin_exempt_from_length(
         lock._capabilities_cache = _pin_caps(4, 8)
     coordinator = runtime_data.slot_coordinators[1]
 
-    await coordinator.async_request_pin_update("")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
     await hass.async_block_till_done()
 
     assert get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == ""
@@ -193,7 +195,7 @@ async def test_request_pin_update_fails_open_without_capabilities(
     """Locks with unknown capabilities do not block a write."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
 
-    await coordinator.async_request_pin_update("12")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "12")
     await hass.async_block_till_done()
 
     assert (
@@ -213,7 +215,7 @@ async def test_validation_names_each_offending_lock(
     coordinator = runtime_data.slot_coordinators[1]
 
     with pytest.raises(ServiceValidationError) as exc:
-        await coordinator.async_request_pin_update("12")
+        await coordinator.async_request_credential_update(CredentialType.PIN, "12")
 
     message = str(exc.value)
     assert runtime_data.locks[LOCK_1_ENTITY_ID].display_name in message
@@ -232,7 +234,7 @@ async def test_request_pin_update_accepts_boundary_lengths(
     coordinator = runtime_data.slot_coordinators[1]
 
     for ok in ("1234", "12345678"):  # exactly the min (4) and the max (8)
-        await coordinator.async_request_pin_update(ok)
+        await coordinator.async_request_credential_update(CredentialType.PIN, ok)
         await hass.async_block_till_done()
         assert (
             get_entry_config(lock_code_manager_config_entry).slot(1).get(CONF_PIN) == ok
@@ -240,7 +242,7 @@ async def test_request_pin_update_accepts_boundary_lengths(
 
     for bad in ("123", "123456789"):  # one under the min and one over the max
         with pytest.raises(ServiceValidationError):
-            await coordinator.async_request_pin_update(bad)
+            await coordinator.async_request_credential_update(CredentialType.PIN, bad)
 
 
 async def test_validation_message_unbounded_max_says_at_least(
@@ -255,7 +257,7 @@ async def test_validation_message_unbounded_max_says_at_least(
     coordinator = runtime_data.slot_coordinators[1]
 
     with pytest.raises(ServiceValidationError) as exc:
-        await coordinator.async_request_pin_update("12")
+        await coordinator.async_request_credential_update(CredentialType.PIN, "12")
 
     assert "at least 6 characters" in str(exc.value)
 
@@ -299,7 +301,7 @@ async def test_request_pin_update_auto_disables_on_empty(
     assert coordinator.is_enabled is True
     assert coordinator.pin_value == "1234"
 
-    await coordinator.async_request_pin_update("")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
     await hass.async_block_till_done()
 
     config = get_entry_config(lock_code_manager_config_entry).slot(1)
@@ -322,7 +324,7 @@ async def test_request_pin_update_normalizes_whitespace(
 ):
     """A whitespace-only PIN normalizes to empty and auto-disables the slot."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
-    await coordinator.async_request_pin_update("   ")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "   ")
     await hass.async_block_till_done()
 
     config = get_entry_config(lock_code_manager_config_entry).slot(1)
@@ -347,7 +349,9 @@ async def test_request_pin_update_strips_surrounding_whitespace(
         lock._capabilities_cache = _pin_caps(4, 8)
     coordinator = runtime_data.slot_coordinators[1]
 
-    await coordinator.async_request_pin_update("  12345678  ")
+    await coordinator.async_request_credential_update(
+        CredentialType.PIN, "  12345678  "
+    )
     await hass.async_block_till_done()
 
     config = get_entry_config(lock_code_manager_config_entry).slot(1)
@@ -363,7 +367,7 @@ async def test_request_active_toggle_blocks_when_no_pin(
     """Toggling active=True without a PIN raises and writes a repair issue."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
     # Clear PIN first (auto-disables the slot)
-    await coordinator.async_request_pin_update("")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
     await hass.async_block_till_done()
     assert coordinator.is_enabled is False
     assert coordinator.pin_value is None
@@ -386,7 +390,7 @@ async def test_request_active_toggle_clears_credential_required_issue(
 ):
     """Successful enable removes the credential_required repair issue."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
-    await coordinator.async_request_pin_update("")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
     await hass.async_block_till_done()
     with pytest.raises(CredentialRequiredError):
         await coordinator.async_request_active_toggle(True)
@@ -399,7 +403,7 @@ async def test_request_active_toggle_clears_credential_required_issue(
     )
 
     # Re-add a PIN and successfully enable; the repair issue must be cleared
-    await coordinator.async_request_pin_update("4242")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "4242")
     await hass.async_block_till_done()
     await coordinator.async_request_active_toggle(True)
     await hass.async_block_till_done()
@@ -529,7 +533,7 @@ async def test_request_pin_update_auto_disables_in_single_write(
     with patch.object(
         hass.config_entries, "async_update_subentry", side_effect=capture
     ):
-        await coordinator.async_request_pin_update("")
+        await coordinator.async_request_credential_update(CredentialType.PIN, "")
         await hass.async_block_till_done()
 
     assert len(captured) == 1
@@ -737,7 +741,7 @@ async def test_write_config_fields_refreshes_runtime_config_before_notify(
 
     unsub = coordinator.register_state_subscriber(capture_subscriber)
     try:
-        await coordinator.async_request_pin_update("5555")
+        await coordinator.async_request_credential_update(CredentialType.PIN, "5555")
         await hass.async_block_till_done()
     finally:
         unsub()
@@ -1086,7 +1090,7 @@ async def test_credential_required_issue_creation_failure_is_swallowed(
 ):
     """A failure creating the credential_required repair issue does not swallow the raise."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
-    await coordinator.async_request_pin_update("")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
     await hass.async_block_till_done()
     assert coordinator.pin_value is None
 

@@ -3,7 +3,11 @@
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from custom_components.lock_code_manager.const import DOMAIN
+from custom_components.lock_code_manager.const import (
+    DATA,
+    DOMAIN,
+    LockCodeManagerData,
+)
 from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialRef,
@@ -14,6 +18,7 @@ from custom_components.lock_code_manager.model.credentials import (
     credential_from_slot,
     user_from_slot,
 )
+from custom_components.lock_code_manager.model.pin_masking import mask_pin
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 
 
@@ -352,3 +357,12 @@ async def test_a_virtual_lock_writes_pins_and_passwords(
         CredentialType.PIN,
         CredentialType.PASSWORD,
     }
+
+
+async def test_a_provider_masks_a_pin_as_the_logs_always_have(
+    hass: HomeAssistant, virtual_lock: VirtualLock
+):
+    """A provider's PIN token is the one deobfuscation maps back."""
+    instance_id = hass.data.get(DATA, LockCodeManagerData()).get("instance_id", "")
+
+    assert virtual_lock.mask_pin("1234", 3) == mask_pin("1234", 3, instance_id)

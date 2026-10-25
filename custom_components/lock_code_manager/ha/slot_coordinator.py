@@ -48,7 +48,11 @@ from ..model.config import (
     credential_values,
     has_credential,
 )
-from ..model.credentials import CredentialType, credential_value_error
+from ..model.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
+    CredentialType,
+    credential_value_error,
+)
 from ..model.names import name_error, normalize_name
 from ..model.queries import get_entry_config
 from .runtime import async_want
@@ -141,7 +145,7 @@ class SlotEntityCoordinator:
         values = credential_values(self._slot_config())
         return {
             credential_type: values.get(credential_type) if self._is_active else None
-            for credential_type in (CredentialType.PIN, CredentialType.PASSWORD)
+            for credential_type in sorted(MANAGED_CREDENTIAL_TYPES)
         }
 
     @callback
@@ -275,10 +279,6 @@ class SlotEntityCoordinator:
             raise InvalidNameError("name_not_unique", self._slot_num, conflict)
 
         self._write_config_fields({CONF_NAME: name})
-
-    async def async_request_pin_update(self, value: str) -> None:
-        """Apply a PIN write (see ``async_request_credential_update``)."""
-        await self.async_request_credential_update(CredentialType.PIN, value)
 
     async def async_request_credential_update(
         self, credential_type: CredentialType, value: str

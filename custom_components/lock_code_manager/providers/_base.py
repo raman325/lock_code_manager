@@ -55,7 +55,7 @@ from ..model.exceptions import (
     ProviderNotImplementedError,
 )
 from ..model.locks import lock_display_name, per_lock_issue_id
-from ..model.pin_masking import mask_credential, mask_pin
+from ..model.pin_masking import mask_credential
 from ..model.queries import (
     configured_owner,
     get_entry_config,
@@ -408,11 +408,7 @@ class BaseLock:
 
     def mask_pin(self, pin: str | None, code_slot: int | str = 0) -> str:
         """Return a masked representation of a PIN for logging."""
-        return mask_pin(
-            pin,
-            code_slot,
-            self.hass.data.get(DATA, LockCodeManagerData()).get("instance_id", ""),
-        )
+        return self.mask_credential(pin, code_slot, CredentialType.PIN)
 
     def mask_credential(
         self, value: str | None, code_slot: int | str, credential_type: CredentialType
