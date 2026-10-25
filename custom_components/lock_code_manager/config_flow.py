@@ -1364,8 +1364,10 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 # decision 10): the form did not show it, so it cannot have
                 # cleared it.
                 user_input = {**user_input, CONF_PASSWORD: kept}
+            # Compared with the user as read, PIN stripped: one stored with
+            # padding is the same PIN submitted without it.
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, others, subentry.data
+                self.hass, user_input, others, config.users.get(held, subentry.data)
             )
             description_placeholders.update(placeholders)
 

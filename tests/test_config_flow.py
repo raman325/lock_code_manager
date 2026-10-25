@@ -4058,6 +4058,35 @@ async def test_editing_a_user_leaves_a_shared_pin_alone(
     assert result["type"] == "abort"
 
 
+async def test_editing_a_user_leaves_a_padded_shared_pin_alone(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The stored PIN is compared as it is read, stripped, not as written."""
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "Ann": {CONF_ENABLED: True, CONF_PIN: " 1234"},
+            "Bob": {CONF_ENABLED: True, CONF_PIN: "1234"},
+        },
+        unique_id="padded-shared-pin",
+    )
+    subentry = next(s for s in entry.subentries.values() if s.title == "Ann")
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"],
+            {CONF_NAME: "Annie", CONF_ENABLED: True, CONF_PIN: " 1234"},
+        )
+
+    assert result["type"] == "abort"
+    assert entry.subentries[subentry.subentry_id].title == "Annie"
+
+
 async def test_editing_a_user_onto_another_users_pin_is_refused(
     hass: HomeAssistant, mock_lock_config_entry
 ):
