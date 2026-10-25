@@ -195,8 +195,9 @@ USER_ENTRY_SCHEMA = vol.Schema(
     }
 )
 
-# The fields a pre-6.0 `add_user` call carried at the top level.
-_FLAT_USER_FIELDS = (CONF_NAME, CONF_PIN, CONF_ENABLED, CONF_CONDITION)
+# The fields an `add_user` call may carry at the top level, the pre-6.0 shape.
+# It takes every field a user in the list takes.
+_FLAT_USER_FIELDS = (CONF_NAME, CONF_PIN, CONF_PASSWORD, CONF_ENABLED, CONF_CONDITION)
 
 
 def _flat_user_to_list(data: dict[str, Any]) -> dict[str, Any]:

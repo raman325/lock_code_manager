@@ -499,6 +499,26 @@ async def test_add_user_with_a_password_only(
     assert config.users["Guest"][CONF_ENABLED] is True
 
 
+async def test_add_user_takes_a_password_in_the_flat_shape(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The top-level shape carries a password as it carries a PIN."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            CONF_NAME: "Guest",
+            "password": "welcome in",
+            "config_entry_id": lcm_config_entry.entry_id,
+        },
+        blocking=True,
+    )
+
+    config = get_entry_config(lcm_config_entry)
+    assert config.users["Guest"]["password"] == "welcome in"
+    assert config.users["Guest"][CONF_ENABLED] is True
+
+
 async def test_add_user_refuses_a_password_another_user_holds(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
