@@ -388,9 +388,11 @@ class SlotEntityCoordinator:
 
         Disable is unconditional. Enable needs a credential of any type and
         raises ``CredentialRequiredError`` without one (the switch translates
-        that into ``HomeAssistantError``). On a successful enable the
-        ``credential_required`` repair issue is cleared; failures inside the
-        issue registry are logged and do not unwind the write.
+        that into ``HomeAssistantError``). A successful enable answers the
+        ``credential_required`` repair and a refusal's ``slot_disabled`` one:
+        turning the slot back on is what each asks the user to do, and a value
+        refused again raises its repair afresh. Failures inside the issue
+        registry are logged and do not unwind the write.
         """
         if not enabled:
             self._write_config_fields({CONF_ENABLED: False})
@@ -403,17 +405,19 @@ class SlotEntityCoordinator:
             )
 
         self._write_config_fields({CONF_ENABLED: True})
-        try:
-            async_delete_issue(
-                self._hass,
-                DOMAIN,
-                f"credential_required_{self._config_entry.entry_id}_{self._slot_num}",
-            )
-        except Exception:
-            _LOGGER.exception(
-                "%s: Failed to delete credential_required repair issue after enable",
-                self._log_prefix,
-            )
+        for issue in ("credential_required", "slot_disabled"):
+            try:
+                async_delete_issue(
+                    self._hass,
+                    DOMAIN,
+                    f"{issue}_{self._config_entry.entry_id}_{self._slot_num}",
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "%s: Failed to delete %s repair issue after enable",
+                    self._log_prefix,
+                    issue,
+                )
 
     # -- Config change hook (called by async_update_listener) ----------------
 

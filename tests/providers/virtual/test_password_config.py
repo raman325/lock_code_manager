@@ -46,7 +46,10 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     pin_address,
 )
-from custom_components.lock_code_manager.model.exceptions import CodeRejectedError
+from custom_components.lock_code_manager.model.exceptions import (
+    CodeRejectedError,
+    LockOperationUnsupported,
+)
 from custom_components.lock_code_manager.model.queries import (
     get_entry_config,
     subentry_id_for_slot,
@@ -54,7 +57,7 @@ from custom_components.lock_code_manager.model.queries import (
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
 from custom_components.lock_code_manager.sync.slot import Repair, Status
 
-from ...common import LOCK_1_ENTITY_ID, async_add_users
+from ...common import LOCK_1_ENTITY_ID, async_add_users, mock_lock
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
 PASSWORD_1 = CredentialAddress(1, CredentialType.PASSWORD)
@@ -1113,42 +1116,104 @@ async def test_a_new_password_lifts_the_refusal(
     )
 
 
-async def test_a_refusal_is_answered_while_another_types_clear_is_held(
+def _disabled_issue(hass: HomeAssistant, entry) -> ir.IssueEntry | None:
+    return ir.async_get(hass).async_get_issue(
+        DOMAIN, f"slot_disabled_{entry.entry_id}_1"
+    )
+
+
+def _suspend_passwords_and_refuse_pin(pin: str):
+    """A password write the lock cannot take, and ``pin`` refused."""
+    real = VirtualLock.async_set_slot_credential
+
+    async def _set(self, code_slot, credential_type, value, **kwargs):
+        if credential_type is CredentialType.PASSWORD:
+            raise LockOperationUnsupported("no room for a password")
+        if value == pin:
+            raise CodeRejectedError(code_slot, self.lock.entity_id, "too simple")
+        return await real(self, code_slot, credential_type, value, **kwargs)
+
+    return _set
+
+
+async def test_a_suspended_password_is_no_fallback_for_a_refused_pin(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The password never got onto the lock: the PIN refused, the user is off."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+    assert worker is not None
+    with patch.object(
+        VirtualLock,
+        "async_set_slot_credential",
+        _suspend_passwords_and_refuse_pin("2468"),
+    ):
+        await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+        await _settled(hass)
+        assert worker.status(PASSWORD_1) == (Status.SUSPENDED, Repair.CANT_SET)
+        assert coordinator.is_enabled is True
+
+        await coordinator.async_request_credential_update(CredentialType.PIN, "2468")
+        await _settled(hass)
+
+    assert coordinator.is_enabled is False
+    assert _disabled_issue(hass, lcm_config_entry) is not None
+
+
+async def test_a_credential_the_refusing_lock_does_not_take_is_no_fallback(
+    hass: HomeAssistant,
+    virtual_lock_entity,
+    mock_lock_config_entry,
+) -> None:
+    """A password working on another lock does not open the lock that refused the PIN."""
+    entry = await _set_up_entry(hass, [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID])
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+    await hass.async_block_till_done()
+    virtual_worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
+    pin_only_worker = lock_registry(hass).worker(LOCK_1_ENTITY_ID)
+    assert virtual_worker is not None
+    assert pin_only_worker is not None
+    await virtual_worker.settled()
+    assert virtual_worker.status(PASSWORD_1) == (Status.IN_SYNC, None)
+    assert PASSWORD_1 not in pin_only_worker.slots
+
+    mock_lock(entry).refuse("set", 1, times=1)
+    await coordinator.async_request_credential_update(CredentialType.PIN, "2468")
+    await hass.async_block_till_done()
+    await pin_only_worker.settled()
+    await hass.async_block_till_done()
+
+    assert coordinator.is_enabled is False
+    assert _disabled_issue(hass, entry) is not None
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_re_enabling_answers_slot_disabled(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
     """
-    The PIN back on the lock answers ``slot_disabled``.
+    The repair is answered when the user turns the slot back on.
 
-    A held clear of the password is its own repair, not part of the refusal.
+    Refused again, the same PIN raises a fresh repair the usual way.
     """
     coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
-    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
-    await _settled(hass)
-    disabled_id = f"slot_disabled_{lcm_config_entry.entry_id}_1"
-
-    async def _refuse_password_clears(self, code_slot, credential_type):
-        raise CodeRejectedError(code_slot, self.lock.entity_id, "busy")
-
     with patch.object(
-        VirtualLock, "async_clear_slot_credential", _refuse_password_clears
+        VirtualLock,
+        "async_set_slot_credential",
+        _suspend_passwords_and_refuse_pin("2468"),
     ):
-        # A refusal answered on the lock, as a run that turned the slot back
-        # on before the password was taken off would leave it.
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            disabled_id,
-            is_fixable=True,
-            is_persistent=True,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="slot_disabled",
-            translation_placeholders={"slot_num": "1", "reason": "x"},
-        )
-        await coordinator.async_request_credential_update(CredentialType.PASSWORD, "")
+        await coordinator.async_request_credential_update(CredentialType.PIN, "2468")
+        await _settled(hass)
+        assert coordinator.is_enabled is False
+        assert _disabled_issue(hass, lcm_config_entry) is not None
+
+        await coordinator.async_request_active_toggle(True)
+        assert coordinator.is_enabled is True
+        assert _disabled_issue(hass, lcm_config_entry) is None
+
         await _settled(hass)
 
-    worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-    assert worker is not None
-    assert worker.status(PASSWORD_1) == (Status.SUSPENDED, Repair.CODE_MAY_REMAIN)
-    assert worker.status(pin_address(1)) == (Status.IN_SYNC, None)
-    assert ir.async_get(hass).async_get_issue(DOMAIN, disabled_id) is None
+    assert coordinator.is_enabled is False
+    assert _disabled_issue(hass, lcm_config_entry) is not None

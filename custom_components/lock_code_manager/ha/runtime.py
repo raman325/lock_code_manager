@@ -129,26 +129,21 @@ _HOLD_ISSUES = {
 }
 
 
-def _keeps_another_credential(
-    entry: ConfigEntry | None, worker: PortWorker, address: CredentialAddress
-) -> bool:
+def _another_credential_works(worker: PortWorker, address: CredentialAddress) -> bool:
     """
-    Return whether the slot's user wants a credential other than ``address``'s.
+    Return whether another of the slot's credentials works on this lock.
 
-    One this lock has refused too is no fallback. One it does not take still
-    counts: the user may use it on another lock.
+    Spec decision 11: a refused value holds only its own credential while
+    the user has another one in sync on the lock that refused it. Asked of
+    the lock's worker, not the configuration: a credential this lock does
+    not take, one it could not set, or one not written yet opens nothing here.
     """
-    slot = address.user_ref
-    runtime = getattr(entry, "runtime_data", None)
-    coordinator = runtime.slot_coordinators.get(slot) if runtime else None
-    return coordinator is not None and any(
-        want is not None
-        and (
-            (held := worker.slots.get(CredentialAddress(slot, credential_type))) is None
-            or held.hold is not Repair.SLOT_DISABLED
-        )
-        for credential_type, want in coordinator.wants.items()
-        if credential_type is not address.credential_type
+    return any(
+        other.user_ref == address.user_ref
+        and other != address
+        and slot.want is not None
+        and worker.status(other)[0] is Status.IN_SYNC
+        for other, slot in worker.slots.items()
     )
 
 
@@ -267,7 +262,7 @@ def async_setup_lock_registry(
             slot = address.user_ref
             if (entry := configured_owner(hass, lock_entity_id, slot)) is None:
                 return
-            if _keeps_another_credential(entry, worker, address):
+            if _another_credential_works(worker, address):
                 # Held with its own repair; the slot's other credentials work.
                 return
             # Why, as the lock or the duplicate check said it (which slot
@@ -919,9 +914,11 @@ def async_reconcile_issues(
 
     A slot it could not set is ``slot_suspended``; a clear that would not
     take is ``slot_clear_failed`` -- the code may still open the door. A
-    refused value is ``credential_refused`` while it is held; when it was the
-    user's only credential, ``on_disable`` turns the slot off instead. A lock
-    that answered before and has stopped answering is ``lock_offline``.
+    refused value is ``credential_refused`` while it is held; when no other
+    credential of the user works on this lock, ``on_disable`` turns the slot
+    off instead, and its ``slot_disabled`` is answered when the user turns it
+    back on. A lock that answered before and has stopped answering is
+    ``lock_offline``.
     """
     data = hass.data[DATA]
     given_up = data[GIVEN_UP_KEY]
@@ -947,17 +944,6 @@ def async_reconcile_issues(
         in_sync = all(
             worker.status(address)[0] is Status.IN_SYNC for address, _ in credentials
         )
-        wanted = [address for address, slot in credentials if slot.want is not None]
-        if (
-            owner is not None
-            and wanted
-            and all(worker.status(address)[0] is Status.IN_SYNC for address in wanted)
-        ):
-            # Re-enabled and on the lock: a refusal's repair is answered. A
-            # held clear of another type is not part of the refusal.
-            async_delete_issue(
-                hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
-            )
         if owner is not None and in_sync:
             # Every credential in sync: a hold's repair is answered, even one
             # a previous run raised (it is persistent).

@@ -61,8 +61,8 @@ class Key(Hashable, Protocol):
 class Repair(StrEnum):
     """Why a slot is held, and what the user is told."""
 
-    # The lock refused the value; the slot is turned off if it was the only
-    # credential.
+    # The lock refused the value; the slot is turned off unless another of
+    # its credentials works on that lock.
     SLOT_DISABLED = "slot_disabled"
     # The PIN would not go on; nothing is written until the target changes.
     CANT_SET = "cant_set"
