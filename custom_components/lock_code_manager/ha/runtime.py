@@ -130,13 +130,23 @@ _HOLD_ISSUES = {
 
 
 def _keeps_another_credential(
-    entry: ConfigEntry | None, slot: int, address: CredentialAddress
+    entry: ConfigEntry | None, worker: PortWorker, address: CredentialAddress
 ) -> bool:
-    """Return whether the slot's user wants a credential other than ``address``'s."""
+    """
+    Return whether the slot's user wants a credential other than ``address``'s.
+
+    One this lock has refused too is no fallback. One it does not take still
+    counts: the user may use it on another lock.
+    """
+    slot = address.user_ref
     runtime = getattr(entry, "runtime_data", None)
     coordinator = runtime.slot_coordinators.get(slot) if runtime else None
     return coordinator is not None and any(
         want is not None
+        and (
+            (held := worker.slots.get(CredentialAddress(slot, credential_type))) is None
+            or held.hold is not Repair.SLOT_DISABLED
+        )
         for credential_type, want in coordinator.wants.items()
         if credential_type is not address.credential_type
     )
@@ -257,7 +267,7 @@ def async_setup_lock_registry(
             slot = address.user_ref
             if (entry := configured_owner(hass, lock_entity_id, slot)) is None:
                 return
-            if _keeps_another_credential(entry, slot, address):
+            if _keeps_another_credential(entry, worker, address):
                 # Held with its own repair; the slot's other credentials work.
                 return
             # Why, as the lock or the duplicate check said it (which slot

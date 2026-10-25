@@ -866,6 +866,36 @@ async def test_a_refused_only_credential_turns_the_slot_off(
     )
 
 
+def _refuse_every_credential(real):
+    async def _set(self, code_slot, credential_type, value, **kwargs):
+        raise CodeRejectedError(code_slot, self.lock.entity_id, "too simple")
+
+    return _set
+
+
+async def test_a_lock_refusing_every_credential_turns_the_slot_off(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Each refused credential is no fallback for the other: the slot goes off."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    with patch.object(
+        VirtualLock,
+        "async_set_slot_credential",
+        _refuse_every_credential(VirtualLock.async_set_slot_credential),
+    ):
+        await coordinator.async_request_credential_update(CredentialType.PIN, "2468")
+        await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+        await _settled(hass)
+
+    assert coordinator.is_enabled is False
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, f"slot_disabled_{lcm_config_entry.entry_id}_1"
+        )
+        is not None
+    )
+
+
 async def test_a_refused_password_stays_reported_once_the_pin_is_cleared(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
