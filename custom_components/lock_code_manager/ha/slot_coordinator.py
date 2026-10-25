@@ -7,7 +7,7 @@ views over the coordinator: they register write callbacks for state
 changes and dispatch user intent (set a PIN, toggle enabled) through the
 coordinator. The coordinator updates the canonical config entry, manages
 slot-level repair issues, and tells each of the entry's locks what the slot
-wants: its PIN while it is active, nothing otherwise.
+wants: its credentials while it is active, nothing otherwise.
 
 There is one SlotEntityCoordinator per (config_entry, slot_num).
 """
@@ -20,6 +20,7 @@ from homeassistant.const import (
     CONF_CONDITION,
     CONF_ENABLED,
     CONF_NAME,
+    CONF_PASSWORD,
     CONF_PIN,
     STATE_OFF,
     STATE_ON,
@@ -39,9 +40,9 @@ from homeassistant.helpers.issue_registry import (
     async_delete_issue,
 )
 
-from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
-from ..model.config import EntryConfig, async_write_entry_config
-from ..model.credentials import CredentialType
+from ..const import ATTR_IN_SYNC, CREDENTIAL_LABELS, DOMAIN, EVENT_CREDENTIAL_USED
+from ..model.config import EntryConfig, async_write_entry_config, credential_values
+from ..model.credentials import CredentialType, credential_value_error
 from ..model.names import name_error, normalize_name
 from ..model.queries import get_entry_config
 from .runtime import async_want
@@ -130,8 +131,12 @@ class SlotEntityCoordinator:
 
     @property
     def wants(self) -> dict[CredentialType, str | None]:
-        """Return what the slot should hold, by credential type: its PIN while active."""
-        return {CredentialType.PIN: self.pin_value if self._is_active else None}
+        """Return what the slot should hold, by credential type: its credentials while active."""
+        values = credential_values(self._slot_config())
+        return {
+            credential_type: values.get(credential_type) if self._is_active else None
+            for credential_type in (CredentialType.PIN, CredentialType.PASSWORD)
+        }
 
     @callback
     def async_push_want(self, lock_entity_ids: Iterable[str] | None = None) -> None:
@@ -186,6 +191,11 @@ class SlotEntityCoordinator:
     def pin_value(self) -> str | None:
         """Return the configured PIN, or None if not set."""
         return self._slot_config().get(CONF_PIN) or None
+
+    @property
+    def password_value(self) -> str | None:
+        """Return the configured password, or None if not set."""
+        return self._slot_config().get(CONF_PASSWORD) or None
 
     @property
     def condition_entity_id(self) -> str | None:
@@ -266,34 +276,45 @@ class SlotEntityCoordinator:
         self._write_config_fields({CONF_NAME: name})
 
     async def async_request_pin_update(self, value: str) -> None:
+        """Apply a PIN write (see ``async_request_credential_update``)."""
+        await self.async_request_credential_update(CredentialType.PIN, value)
+
+    async def async_request_credential_update(
+        self, credential_type: CredentialType, value: str
+    ) -> None:
         """
-        Apply a PIN write requested by the text entity.
+        Apply a credential write requested by a text entity or an action.
 
-        Normalizing whitespace and the empty-PIN side effect (disabling
-        the slot on an active slot whose PIN was cleared) live here so
-        entities do not have to coordinate sibling state themselves.
-        Stripping applies to every PIN, not just the whitespace-only one:
-        a submitted code is stripped before it is matched, so padding kept
-        on the stored side makes a credential nothing typed can match.
+        A PIN is stripped: a submitted code is stripped before it is matched,
+        so padding kept on the stored side makes a credential nothing typed
+        can match. A password is kept as typed (spec decision 7).
 
-        A non-empty PIN is validated against every bound lock's advertised
-        length range before it is written; an empty PIN clears the slot and
-        is exempt. This is the authoritative gate for BOTH ends: the text
-        entity keeps ``native_min`` and ``native_max`` permissive so Home
-        Assistant's ``text.set_value`` service neither rejects the empty clear
-        nor pre-empts the per-lock error built here -- and so a lock
-        advertising a limit tighter than it really accepts cannot silently
-        stop the keystrokes with no message at all.
+        A non-empty value must pass the type's character rule and every bound
+        lock's length range; an empty one clears the credential and is
+        exempt. This is the authoritative gate: the text entity keeps
+        ``native_min`` and ``native_max`` permissive so Home Assistant's
+        ``text.set_value`` neither rejects the empty clear nor pre-empts the
+        per-lock error built here -- whose errors would quote the value.
+
+        Clearing the slot's last credential turns an enabled slot off: a user
+        with nothing to present would read as active (spec decision 4).
         """
-        value = value.strip()
-
+        if credential_type is CredentialType.PIN:
+            value = value.strip()
         if value:
-            self._validate_credential_length(value, CredentialType.PIN)
+            if error := credential_value_error(credential_type, value):
+                raise ServiceValidationError(error)
+            self._validate_credential_length(value, credential_type)
 
-        updates: dict[str, Any] = {CONF_PIN: value}
-        if not value and self.is_enabled:
+        updates: dict[str, Any] = {credential_type.value: value}
+        remaining = {
+            other: held
+            for other, held in credential_values(self._slot_config()).items()
+            if other is not credential_type
+        }
+        if not value and not remaining and self.is_enabled:
             _LOGGER.debug(
-                "%s: PIN cleared on enabled slot, auto-disabling",
+                "%s: last credential cleared on enabled slot, auto-disabling",
                 self._log_prefix,
             )
             updates[CONF_ENABLED] = False
@@ -336,7 +357,7 @@ class SlotEntityCoordinator:
                 violations.append(f"{required} for {lock.display_name}")
         if violations:
             raise ServiceValidationError(
-                f"{credential_type.value.upper()} length {length} is not accepted "
+                f"{CREDENTIAL_LABELS[credential_type.value]} length {length} is not accepted "
                 f"by all locks: {'; '.join(violations)}"
             )
 
@@ -479,7 +500,13 @@ class SlotEntityCoordinator:
         slot_config = self._slot_config()
         states: dict[str, bool | None] = {}
         for key, value in slot_config.items():
-            if key in (EVENT_CREDENTIAL_USED, CONF_NAME, CONF_PIN, ATTR_IN_SYNC):
+            if key in (
+                EVENT_CREDENTIAL_USED,
+                CONF_NAME,
+                CONF_PIN,
+                CONF_PASSWORD,
+                ATTR_IN_SYNC,
+            ):
                 continue
             if key == CONF_CONDITION:
                 hass_state = self._hass.states.get(value)

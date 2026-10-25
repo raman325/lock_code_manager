@@ -1152,3 +1152,29 @@ async def test_an_entry_holding_no_lock_yet_offers_pins() -> None:
     entry = MockConfigEntry(domain=DOMAIN)
     entry.runtime_data = LockCodeManagerConfigEntryRuntimeData()
     assert available_credential_types(entry) == {CredentialType.PIN}
+
+
+async def test_a_refused_password_value_is_never_written(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """The character rule refuses before the config is touched, without the value."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError) as refused:
+        await coordinator.async_request_credential_update(
+            CredentialType.PASSWORD, "café-marker-7f3a"
+        )
+
+    assert "marker-7f3a" not in str(refused.value)
+    assert "password" not in get_entry_config(lock_code_manager_config_entry).slot(1)
+
+
+async def test_a_stored_empty_password_does_not_gate_the_slot(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """A credential field is never an active gate, cleared or not."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "")
+
+    assert coordinator.is_active is True

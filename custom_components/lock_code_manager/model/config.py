@@ -15,6 +15,7 @@ from homeassistant.const import CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
 
 from ..const import CONF_LOCKS, CONF_SLOT, CONF_SLOTS, CONF_USERS, SUBENTRY_TYPE_USER
+from .credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from .names import normalize_name
 from .slot_assignment import (
     CONF_SLOT_ASSIGNMENT,
@@ -54,6 +55,25 @@ def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(pin := normalized.get(CONF_PIN), str):
         normalized[CONF_PIN] = pin.strip()
     return normalized
+
+
+def credential_values(user: Mapping[str, Any]) -> dict[CredentialType, str]:
+    """
+    Return the credentials a user's stored fields hold, by type.
+
+    Each managed type is stored under its own value as the key (``pin``,
+    ``password``); an empty one is no credential.
+    """
+    return {
+        credential_type: value
+        for credential_type in MANAGED_CREDENTIAL_TYPES
+        if (value := user.get(credential_type.value))
+    }
+
+
+def has_credential(user: Mapping[str, Any]) -> bool:
+    """Return whether a user's stored fields hold a credential of any type."""
+    return bool(credential_values(user))
 
 
 @dataclass(frozen=True, slots=True)
