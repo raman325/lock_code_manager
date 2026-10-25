@@ -82,6 +82,7 @@ from .common import (
     async_set_slot_pin,
     async_setup_lcm_entry,
     async_switch_slot,
+    async_write_slot_pin,
     code_entity_id,
     current_entry,
     in_sync_entity_id,
@@ -787,15 +788,15 @@ async def test_a_pin_another_user_has_on_the_lock_turns_the_slot_off(
     """
     A PIN another user already has on the lock is refused before it is sent.
 
-    No config-flow check refuses the same PIN in two slots, so without this
-    two users would share one PIN, in sync, with no repair. The slot is
-    turned off and gets its repair.
+    The configuration refuses a duplicate when it is set, so this one is a
+    configuration saved before that rule, and the lock's check is what
+    catches it: without it two users would share one PIN, in sync, with no
+    repair. The slot is turned off and gets its repair.
     """
     entry = await async_setup_lcm_entry(hass)
     lock = mock_lock(entry)
 
-    await async_set_slot_pin(hass, entry, 2, "1234")  # slot 1's PIN
-    await hass.async_block_till_done()
+    await async_write_slot_pin(hass, entry, 2, "1234")  # slot 1's PIN
 
     assert lock.codes.get(2) != "1234"
     assert lcm_issue_ids(hass, "slot_disabled")
@@ -804,13 +805,18 @@ async def test_a_pin_another_user_has_on_the_lock_turns_the_slot_off(
 async def test_moving_a_pin_from_a_slot_turned_off_is_not_a_duplicate(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
-    """A slot on its way out does not count against the PIN it held."""
+    """
+    A slot on its way out does not count against the PIN it held.
+
+    The configuration itself refuses this move, since the turned-off user
+    still holds the PIN; on the lock, where a turned-off slot's PIN is not
+    held, it is not a duplicate.
+    """
     entry = await async_setup_lcm_entry(hass)
     lock = mock_lock(entry)
 
     await async_switch_slot(hass, entry, 1, SERVICE_TURN_OFF)
-    await async_set_slot_pin(hass, entry, 2, "1234")
-    await hass.async_block_till_done()
+    await async_write_slot_pin(hass, entry, 2, "1234")
 
     assert lock.codes.get(2) == "1234"
     assert 1 not in lock.codes or not lock.codes[1]

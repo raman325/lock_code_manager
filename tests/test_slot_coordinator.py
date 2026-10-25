@@ -63,6 +63,7 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_PIN_ENTITY,
+    async_write_slot_pin,
     write_entry_config,
 )
 
@@ -1201,3 +1202,52 @@ async def test_a_leftover_pin_required_issue_is_deleted_at_setup(
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, f"pin_required_{entry_id}_1") is None
     )
+
+
+async def test_another_users_pin_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Two users sharing a PIN: whoever types it opens the door as either."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError) as refused:
+        await coordinator.async_request_credential_update(CredentialType.PIN, "5678")
+
+    assert "5678" not in str(refused.value)
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
+
+
+async def test_an_unchanged_pin_shared_with_another_user_is_left_alone(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """A duplicate saved before this rule is not refused until it changes."""
+    await async_write_slot_pin(hass, lock_code_manager_config_entry, 2, "1234")
+    assert get_entry_config(lock_code_manager_config_entry).slot(2)[CONF_PIN] == "1234"
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_credential_update(CredentialType.PIN, "1234")
+
+
+async def test_a_turned_off_users_pin_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A turned-off user's PIN is still theirs, so it is still a duplicate.
+
+    Nothing checks for duplicates again when the user is turned back on.
+    """
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    config = get_entry_config(lock_code_manager_config_entry)
+    assert config.slot(1)[CONF_ENABLED] is False
+    assert config.slot(1)[CONF_PIN] == "1234"
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[2]
+
+    with pytest.raises(ServiceValidationError):
+        await coordinator.async_request_credential_update(CredentialType.PIN, "1234")
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(2)[CONF_PIN] == "5678"

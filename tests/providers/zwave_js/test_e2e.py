@@ -102,6 +102,7 @@ from tests.common import (
     async_set_slot_pin,
     async_switch_slot,
     async_tick_until,
+    async_write_slot_pin,
     code_entity_id,
     in_sync_entity_id,
     lcm_issue_ids,
@@ -2411,18 +2412,20 @@ class TestDuplicates:
         """
         Swapping two users' PINs in place turns the first slot edited off.
 
-        Re-enabling it once the other slot moved on puts both in sync and
-        clears the repair.
+        The configuration refuses a swap made one field at a time; this is the
+        lock's recovery when a configuration carries one anyway. Re-enabling
+        the slot once the other moved on puts both in sync and clears the
+        repair.
         """
         entry = fake_zwave_lock_entry
         await self._settle(hass, freezer, entry, lock_entity)
 
-        await async_set_slot_pin(hass, entry, 1, "1234")  # slot 2's PIN
+        await async_write_slot_pin(hass, entry, 1, "1234")  # slot 2's PIN
         await async_advance_sync_ticks(hass, freezer, 5)
         assert _switch(hass, entry, 1) == STATE_OFF
         assert lcm_issue_ids(hass, "slot_disabled")
 
-        await async_set_slot_pin(hass, entry, 2, "9999")
+        await async_write_slot_pin(hass, entry, 2, "9999")
         await async_advance_sync_ticks(hass, freezer, 5)
         await async_switch_slot(hass, entry, 1, SERVICE_TURN_ON)
         await async_advance_sync_ticks(hass, freezer, 5)

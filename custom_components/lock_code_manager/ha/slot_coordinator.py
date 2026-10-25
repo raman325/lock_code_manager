@@ -310,6 +310,10 @@ class SlotEntityCoordinator:
             if error := credential_value_error(credential_type, value):
                 raise ServiceValidationError(error)
             self._validate_credential_length(value, credential_type)
+        if value and value != credential_values(self._slot_config()).get(
+            credential_type
+        ):
+            self._refuse_duplicate(credential_type, value)
 
         updates: dict[str, Any] = {credential_type.value: value}
         remaining = {
@@ -325,6 +329,28 @@ class SlotEntityCoordinator:
             updates[CONF_ENABLED] = False
 
         self._write_config_fields(updates)
+
+    def _refuse_duplicate(self, credential_type: CredentialType, value: str) -> None:
+        """
+        Refuse ``value`` if another user in the entry holds it as the same type.
+
+        Two users sharing a credential: whoever presents it is recorded as
+        either, and turning one off leaves it working (spec decision 12).
+        Names the other user, never the value.
+        """
+        config = get_entry_config(self._config_entry)
+        other = next(
+            (
+                slot_config[CONF_NAME]
+                for slot_num, slot_config in config.slots.items()
+                if slot_num != self._slot_num
+                and credential_values(slot_config).get(credential_type) == value
+            ),
+            None,
+        )
+        if other is not None:
+            label = CREDENTIAL_LABELS[credential_type.value]
+            raise ServiceValidationError(f"{other} already has this {label}")
 
     def _validate_credential_length(
         self, value: str, credential_type: CredentialType

@@ -111,7 +111,7 @@ async def test_switch_entity(
     await hass.services.async_call(
         TEXT_DOMAIN,
         SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "1234"},
+        service_data={ATTR_VALUE: "5678"},
         target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
         blocking=True,
     )

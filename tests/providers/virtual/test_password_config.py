@@ -1,7 +1,10 @@
 """A password in the configuration, end to end on a Virtual lock."""
 
+import pytest
+
 from homeassistant.const import CONF_ENABLED
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.ha.runtime import lock_registry
@@ -126,3 +129,27 @@ async def test_a_password_alone_can_enable_the_slot(
     await coordinator.async_request_active_toggle(True)
 
     assert coordinator.is_enabled is True
+
+
+async def test_another_users_password_is_refused(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Duplicates are per type: another user's password is refused."""
+    slot_coordinators = lcm_config_entry.runtime_data.slot_coordinators
+    await slot_coordinators[2].async_request_credential_update(
+        CredentialType.PASSWORD, "shared"
+    )
+
+    with pytest.raises(ServiceValidationError):
+        await slot_coordinators[1].async_request_credential_update(
+            CredentialType.PASSWORD, "shared"
+        )
+
+
+async def test_a_password_may_equal_a_pin(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """A password the same string as another user's PIN is not a duplicate."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "5678")

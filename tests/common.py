@@ -102,6 +102,7 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
+from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.sync.worker import LockWorker
@@ -840,6 +841,23 @@ async def async_switch_slot(
         },
         blocking=True,
     )
+
+
+async def async_write_slot_pin(
+    hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int, pin: str
+) -> None:
+    """
+    Write a slot's PIN into the configuration, past the entity's checks.
+
+    For a configuration the entity would refuse, such as one saved before a
+    rule existed: the lock sees it through the entry's update listener.
+    """
+    async_write_entry_config(
+        hass,
+        config_entry,
+        get_entry_config(config_entry).with_slot_field_set(slot_num, CONF_PIN, pin),
+    )
+    await hass.async_block_till_done()
 
 
 # The version Lock Code Manager writes its entries at today.
