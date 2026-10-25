@@ -1,18 +1,19 @@
 """A password in the configuration, end to end on a Virtual lock."""
 
 import pytest
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_PIN
+from homeassistant.const import ATTR_ENTITY_ID, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
+from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
 from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
@@ -26,7 +27,7 @@ from custom_components.lock_code_manager.model.queries import (
     subentry_id_for_slot,
 )
 
-from ...common import async_add_users
+from ...common import LOCK_1_ENTITY_ID, async_add_users
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
 
 PASSWORD_1 = CredentialAddress(1, CredentialType.PASSWORD)
@@ -278,3 +279,65 @@ async def test_the_password_entity_leaves_with_the_last_password_lock(
     assert _password_entity(hass, lcm_config_entry, 1) is None
     assert _password_entity(hass, lcm_config_entry, 2) is None
     assert get_entry_config(lcm_config_entry).slot(1)["password"] == "pw"
+
+
+async def test_the_password_entity_stays_while_a_password_lock_remains(
+    hass: HomeAssistant, virtual_lock_entity, mock_lock_config_entry
+) -> None:
+    """Removing a PIN-only lock leaves the entry's password lock, and the entity."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID],
+            CONF_SLOTS: {
+                1: {CONF_NAME: "slot1", CONF_PIN: "1234", CONF_ENABLED: True},
+                2: {CONF_NAME: "slot2", CONF_PIN: "5678", CONF_ENABLED: True},
+            },
+        },
+        unique_id="test_virtual_and_pin_only",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    pin_only = entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    assert CredentialType.PASSWORD not in pin_only.managed_credential_types
+    assert _password_entity(hass, entry, 1) is not None
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_LOCKS: [VIRTUAL_LOCK_ENTITY_ID]}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+
+    assert LOCK_1_ENTITY_ID not in entry.runtime_data.locks
+    for slot in (1, 2):
+        entity_id = _password_entity(hass, entry, slot)
+        assert entity_id is not None
+        assert hass.states.get(entity_id) is not None
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_password_longer_than_a_state_is_refused(
+    hass: HomeAssistant, lcm_config_entry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """
+    Over Home Assistant's 255-character state limit, refused before it is kept.
+
+    Kept, it would make every later state write of its entity raise, quoting it.
+    """
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    marker = "leak-marker-77ab"
+    value = marker + "x" * (300 - len(marker))
+
+    with pytest.raises(ServiceValidationError) as refused:
+        await coordinator.async_request_credential_update(
+            CredentialType.PASSWORD, value
+        )
+    await _settled(hass)
+
+    assert not get_entry_config(lcm_config_entry).slot(1).get("password")
+    assert "password" not in get_virtual_lock(hass, lcm_config_entry)._data["1"]
+    assert marker not in str(refused.value)
+    assert marker not in caplog.text

@@ -209,7 +209,11 @@ class LockCodeManagerCredentialText(LockCodeManagerText):
     One of a slot's credentials, keyed by its type.
 
     Sets no ``pattern``: Home Assistant's own refusal quotes the value
-    (spec decision 6). The coordinator is the only gate.
+    (spec decision 6). The coordinator is the gate for every rule but one.
+    Home Assistant caps a text entity at 255 characters whatever its
+    ``native_max``, and ``text.set_value`` refuses a longer value before this
+    entity sees it, with an error that quotes it. That is a limit of Home
+    Assistant this integration cannot close.
     """
 
     def __init__(

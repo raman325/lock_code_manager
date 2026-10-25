@@ -8,7 +8,8 @@ one-user to one-Personal-Identification-Number-credential projection is a
 thin pure function, while a future "user is the unit, multiple credentials"
 world only needs to append to ``User.credentials`` -- no field changes.
 
-These are pure value types with no Home Assistant dependencies. The credential
+These are pure value types; of Home Assistant they take only its state length
+limit, which bounds a credential the integration can show. The credential
 and capability types are immutable; ``User`` is a mutable aggregate of immutable
 credentials. ``SlotCredential`` is one slot's state on one lock, and ``SlotCode`` the
 labels the views show for a slot the lock gave no PIN for.
@@ -19,6 +20,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Final, NamedTuple, override
+
+from homeassistant.const import MAX_LENGTH_STATE_STATE
+
+from ..const import CREDENTIAL_LABELS
 
 
 class SlotCode(StrEnum):
@@ -163,7 +168,15 @@ def credential_value_error(credential_type: CredentialType, value: str) -> str |
 
     The reason names the rule and never the value: it reaches errors and
     logs. A PIN has no character rule here -- each lock's own applies.
+
+    No credential may be longer than a Home Assistant state: its text entity
+    shows it as one, and a longer state raises an error quoting the value.
     """
+    if len(value) > MAX_LENGTH_STATE_STATE:
+        return (
+            f"{CREDENTIAL_LABELS[credential_type]} may be at most "
+            f"{MAX_LENGTH_STATE_STATE} characters"
+        )
     if (
         credential_type is CredentialType.PASSWORD
         and not set(value) <= _PASSWORD_CHARACTERS

@@ -523,3 +523,24 @@ def test_a_password_outside_printable_ascii_is_refused(value: str) -> None:
 def test_the_pin_keeps_its_rules() -> None:
     """No character rule for a PIN here: the lock's own rules apply."""
     assert credential_value_error(CredentialType.PIN, "12#4") is None
+
+
+@pytest.mark.parametrize(
+    ("credential_type", "label"),
+    [(CredentialType.PIN, "PIN"), (CredentialType.PASSWORD, "Password")],
+)
+def test_a_credential_fits_in_a_state(
+    credential_type: CredentialType, label: str
+) -> None:
+    """
+    At most Home Assistant's 255-character state limit, for every type.
+
+    A longer value would make its text entity's state raise, quoting it.
+    """
+    assert credential_value_error(credential_type, "1" * 255) is None
+
+    value = "1" * 256
+    error = credential_value_error(credential_type, value)
+
+    assert error == f"{label} may be at most 255 characters"
+    assert value not in error

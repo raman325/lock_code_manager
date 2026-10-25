@@ -917,10 +917,14 @@ async def test_hook_dispatch_routes_each_entity_kind_to_the_right_collection(
     assert active_view_owners == {"LockCodeManagerActiveEntity"}
 
 
+@pytest.mark.parametrize(
+    "entity_class", ["LockCodeManagerCredentialText", "LockCodeManagerNameText"]
+)
 async def test_text_set_value_raises_when_slot_coordinator_missing(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    entity_class: str,
 ):
     """text ``async_set_value`` surfaces a HomeAssistantError, not a silent no-op.
 
@@ -933,8 +937,7 @@ async def test_text_set_value_raises_when_slot_coordinator_missing(
     text_entity = next(
         sub.__self__
         for sub in coordinator._state_subscribers
-        if hasattr(sub, "__self__")
-        and type(sub.__self__).__name__ == "LockCodeManagerCredentialText"
+        if hasattr(sub, "__self__") and type(sub.__self__).__name__ == entity_class
     )
 
     text_entity._slot_coordinator = None
