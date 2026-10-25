@@ -1,0 +1,2254 @@
+check if we have any existing documentation in docs/ or specs/ on supporting additional credential types
+
+---
+
+I want to move forward with adding password support. In my mind, it should be a separate text entity class with its own limitations (can we enforce characters via regex, max and min length, etc). In the card, I am thinking there should be a single input box and icons/tabs for pin, password, etc. to switch between them, but I am open to ideas
+
+---
+
+yes, one note though that there is a rule that disables a slot when the PIN is blank. The rule shifts to disabling the slot when there is no credential. If at least one credential (PIN, password, something else in the futre) exists, that's good enough
+
+---
+
+yes. One open note is how to handle the lock cards
+
+---
+
+Yes. Wondering if we should avoid the pattern on password too and just validate upstream
+
+---
+
+yes
+
+---
+
+can you give me a TLDR version of it?
+
+---
+
+why not support for matter?
+
+---
+
+if you find it in the Matter spec, confirm the other providers too against standards/code
+
+---
+
+<task-notification>
+<task-id>a8744737bffab6f70</task-id>
+<tool-use-id>toolu_01YNJxqSf6C1Vvk5E1Dtyfb3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a8744737bffab6f70.output</output-file>
+<status>completed</status>
+<summary>Agent "Zigbee password credential support" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I ran this read-only and changed nothing. **Zigbee locks have no password credential distinct from a PIN, at any of the four layers.** The Door Lock cluster as implemented defines only two credential kinds: PIN and RFID.
+
+| Layer | Credential types available | Password? | Citation |
+|---|---|---|---|
+| (a) ZCL Door Lock 0x0101, as zigpy 2.2.0 models it | PIN and RFID. Commands are `set/get/clear/clear_all_pin_code(s)` and the matching `rfid_code` set. `OperationEventSource` is `Keypad=0, RF=1, Manual=2, RFID=3, Indeterminate=0xFF`. `ProgrammingEvent` has only PIN and RFID added/deleted. Attributes `num_of_pin_users_supported` and `num_of_rfid_users_supported` | No | `.venv/lib/python3.14/site-packages/zigpy/zcl/clusters/closures.py:196-201, 223-230, 319-337, 429-446, 517-534` |
+| (b) zha library 2.2.2 | PIN only. `async_set/enable/disable/clear_lock_user_code` call `set_pin_code` / `clear_pin_code`. There is no RFID write | No | `site-packages/zha/application/platforms/lock/__init__.py:156-182` |
+| (b) HA ZHA | PIN only, through 4 services: `set/enable/disable/clear_lock_user_code` | No | `site-packages/homeassistant/components/zha/lock.py:27-30` |
+| (c) LCM ZHA and Z2M providers (`origin/main`) | Writes go through `set_pin_code`. Unlock events can report PIN, RFID, or FINGERPRINT (source value 4, a vendor extension) | No | `providers/zha.py:169-178, 256-267`; `providers/zigbee2mqtt.py:61-70, 182-185` |
+| (d) zigbee-herdsman-converters (master) | Only `pin_code` is settable (`pincode_lock` sends `setPinCode` / `clearPinCode`). `lockSourceName` is `keypad, rf, manual, rfid, fingerprint`. GitHub code search for `setRfidCode` in the repo returns 0 hits | No | [exposes.ts:1387-1396](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/exposes.ts), [toZigbee.ts:439-462](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/converters/toZigbee.ts), [constants.ts:290-296](https://github.com/Koenkk/zigbee-herdsman-converters/blob/master/src/lib/constants.ts) |
+
+**Caveats:**
+- I could not find the CSA ZCL specification text itself. Secondary sources describe the same PIN and RFID command set: [Silicon Labs SetRfid](https://docs.silabs.com/zigbee/7.0/zigbee-af-api/zcl-door-lock-cluster-set-rfid-command) and [Espressif ZCL door_lock](https://docs.espressif.com/projects/esp-zigbee-sdk/en/latest/esp32/api-reference/zcl/esp_zigbee_zcl_door_lock.html).
+- "password" does appear in Z2M vendor files: Aqara S2 in `lumi.ts:3132-3146`, as actions like `password_add`/`password_open`, and a Yale raw action in `yale.ts:513`. These are read-only event labels; the Aqara S2 has `toZigbee: []`, so nothing can be written. The source doesn't say whether "password" there means anything other than the keypad code.
+
+**Conclusion:** The PIN-only limit is not LCM's choice. The cluster has no password type, so there is nothing for zigpy, ZHA or Z2M to expose. RFID is the one other kind the standard defines. zigpy can send it, but neither HA ZHA nor zigbee-herdsman-converters offers a way to write it, so RFID writes would be the only possible extension. Password should stay unsupported for both Zigbee providers.</result>
+<usage><subagent_tokens>55966</subagent_tokens><tool_uses>14</tool_uses><duration_ms>66735</duration_ms></usage>
+</task-notification>
+
+---
+
+update the specs checkout
+
+---
+
+<task-notification>
+<task-id>ae3131f3ef16641c0</task-id>
+<tool-use-id>toolu_01V2Ce46kvvrsjNRmHFWLVTR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ae3131f3ef16641c0.output</output-file>
+<status>completed</status>
+<summary>Agent "Schlage and Akuvox password support" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Neither lock offers a password credential separate from the numeric PIN. The limit sits below Lock Code Manager: the Home Assistant integration and the Python library each enforce a 4-8 digit PIN, and neither has a password type.
+
+| Provider | Credential types available | Password? | Citation |
+|---|---|---|---|
+| Schlage | One kind only: an access code. `pyschlage` `AccessCode` has `name`, `code`, `schedule`, `notify_on_use`, `disabled`. The code is sent as `"accessCode": int(self.code)`, so it must be numeric. HA's `add_code` service checks `cv.matches_regex(r"^\d{4,8}$")`. HA's services are `add_code`, `delete_code` and `get_codes`. | No. Every "password" hit in `pyschlage` is the account login (`auth.py:72`). | `~/.cache/uv/archive-v0/hNEV6MGJw0CZeSWw/pyschlage/code.py:164-188, 253` (2026.9.0); `.venv/.../homeassistant/components/schlage/__init__.py:37`, `services.yaml` |
+| Akuvox (`local_akuvox`, tykeal; library `pylocal-akuvox` 1.6.0) | The `User` record holds two credentials: `private_pin` and `card_code` (an RF card). Its other fields are scheduling, relay, floor and source data. The PIN is checked with `_PIN_PATTERN = re.compile(r"^[0-9]{4,8}$")` in the library, and again by the integration ("PIN must be 4-8 digits"). | No. `open_door_password` is a setting for a capability-report test (`report_service.py:33`), not a user credential. | `pylocal_akuvox/models/users.py:19-31`, `users.py:25,38-47` (wheel unpacked to `/tmp/akuvox-dl.pGVs`); `/Users/raman/projects/homeassistant-local-akuvox/custom_components/local_akuvox/validation.py:53-65`, `services.yaml` `add_user` |
+
+**What LCM reports today:** neither `schlage.py` nor `akuvox.py` overrides `async_get_capabilities` or `supports_native_users`. For such providers the base class always builds credentials as `CredentialType.PIN` (`_base.py:1302-1304`, `1349`). The Akuvox provider writes only `private_pin` (`akuvox.py:140,162`) and ignores `card_code`.
+
+**Conclusion:** For both locks, password support is blocked by the API, not by LCM. Each offers one value-type credential, and it is digits-only, 4-8 long. I could only check what the libraries and integrations expose. For Schlage's cloud API and Akuvox's device firmware I found nothing showing a password type, and I'm not claiming more than that. The one extra credential either side exposes is Akuvox's RF `card_code`. It has no format check in the integration's service schema (`cv.string`), and it's a card, not a password.</result>
+<usage><subagent_tokens>67250</subagent_tokens><tool_uses>24</tool_uses><duration_ms>262634</duration_ms></usage>
+</task-notification>
+
+---
+
+as a PR to zwave-js/specs
+
+---
+
+after that lets submit a fix to zwave-js?
+
+---
+
+whyd we delete the xlsx registries in the specs PR?
+
+---
+
+yes move them to a legacy folder, then push the zwave-js fix and create the RP
+
+---
+
+ok great, now lets get back to the main thing we were working on
+
+---
+
+lets just raise the minimum, kerep things simple
+
+---
+
+yes
+
+---
+
+should the type just be part of the salt when its not PIN?
+
+---
+
+no its fine keep it the same for every type. Lets make it subagent driven
+
+---
+
+<task-notification>
+<task-id>a3a7275c91e767df1</task-id>
+<tool-use-id>toolu_012DZqLBPFR2boGe2mcQ7ELP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a3a7275c91e767df1.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 3: generic registry" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+- **Commit:** `ad1a9b62`, made with `--no-verify`. It contains only `tests/sync/test_registry.py` (9 insertions, 3 deletions). `.entire/.gitignore` is still modified and uncommitted.
+- **Test change:** `test_forgetting_a_slot_keeps_a_clear_another_entry_gave_up` is now parametrized over `how` (`"unclaim"` or `"release"`). `unclaim` calls `registry.unclaim("front", "b", 3)` and `release` calls `await registry.release("front", "b")`. The assertions are the same for both.
+- **Mutant:** I put the pre-fix loop (`for key in self._keys(...): entry.worker.forget(key)`) back in `release` only. The `[release]` case failed and `[unclaim]` passed, giving 1 failed and 39 passed. I restored `registry.py` from a saved copy.
+- **Results after restoring:**
+  - `tests/sync` plus `tests/test_architecture.py`: 224 passed.
+  - ruff check, ruff format and flake8 pass on the test file.</result>
+<usage><subagent_tokens>73101</subagent_tokens><tool_uses>2</tool_uses><duration_ms>23943</duration_ms></usage>
+</task-notification>
+
+---
+
+as an aside, check the review comment on the zwave-js/zwave-js PR we submitted earlier
+
+---
+
+<task-notification>
+<task-id>ad16d7a25286eebc5</task-id>
+<tool-use-id>toolu_0141SsszgJMREGVbG28pQPbS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ad16d7a25286eebc5.output</output-file>
+<status>completed</status>
+<summary>Agent "Review Task 8 (spec + quality)" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>```
+Stage 1: ✅ compliant
+Stage 2:
+  Strengths: …
+  Issues: Minor ×2 (none Critical or Important)
+  Assessment: APPROVED
+```
+
+**Stage 1: compliant.** I read every changed line in `git diff d0ec990b f4cb7599 -- tests`. Each change is one of two kinds: a key now spelled with `pin_address(n)`, or a type annotation that changed from `int` to `CredentialAddress`. The task allows a store shape and a diagnostics shape to change, but neither changed here, and no expected value changed meaning.
+
+Slot-level calls correctly keep the bare int, for example `port.others.get(slot)` in the z2m `_record_pushes` helper and `async_give_up(..., 2)`.
+
+Three changed files weren't on the task's list: `tests/conftest.py`, `tests/providers/matter/test_e2e.py` and `tests/providers/test_seam.py`. All three fall under the task's rule. The `test_seam` edits were needed anyway, because `ProviderPort.write` given an int raises `AttributeError`.
+
+Two listed files were left unchanged: `test_migration_history.py` and `test_repairs_references.py`. That's correct. The task's grep only matched `entity_registry` in them, and neither touches a worker, registry or store key.
+
+**Stage 2**
+
+Strengths:
+- The implementer was right that the flipped `not in` assertions were passing without checking anything at the base commit, since the worker was already keyed by address there. Spelling the key as an address makes them check something again.
+- The project gate (`prek run mypy --all-files`) passes, and `prek` on the 14 changed files passes.
+
+**1. Hunt for remaining silent no-ops: none found.**
+- **Runtime check.** I loaded a pytest plugin from outside the repo; no repo files were touched. It recorded every bare int handed to `LockWorker.want`, `forget`, `resume`, `status`, `syncing`, `push`, `request_sync` and `read`. It did the same for `LockRegistry.want`, `read_once` and `write_once`, and for every lookup on `worker.slots` (`[]`, `in`, `.get`, `.pop`, assignment). I ran it over the whole suite except `tests/sync`, with `-n auto`.
+  - Every hit came from one test: `tests/test_adapter.py::test_a_silent_lock_backs_off_doubling_to_the_cap_then_starts_over`, at lines 1071, 1075 and 1094.
+  - That test uses `rig_factory` and `FakeLock` imported from `tests/sync/test_worker.py`, which are int-keyed by design. So these are correct, and they also show the plugin does catch int keys.
+  - No int key reached the engine from any other test, or from `custom_components/` on any path the suite exercises.
+- **Static check.**
+  - The tests' own push recorders (`pushed`/`pushes` lists and dicts in matter, zha, z2m and `test_adapter`) all use addresses. So do the `observe_push` mock assertions in `zwave_js_ui/test_push.py`.
+  - `test_push.py:289` (`confirm.assert_called_once_with(4, ...)`) is aimed at the provider's `_confirm_slot`, which takes a slot number, so the int is correct there.
+  - No test reaches into the worker's private `_queued`, `_syncing`, `_written` and similar.
+  - In the source, every use of `worker.slots`, `status`, `syncing`, `forget`, `resume`, `read_once` and `write_once` builds an address, or converts back to slot numbers via `_slots_of` or `.user_ref`. `store.wrote` given an int would raise `AttributeError` rather than pass silently.
+  - Running the venv's mypy over `tests/` found no int-versus-address errors.
+
+**2. Changed assertions:** all of them are key re-spellings, as covered in Stage 1.
+
+**3. The `conftest` helper (Minor).** The fix is real, but no test depends on it:
+- A probe confirmed that each of the helper's 21 calls now queues exactly one sync job, for a key the worker tracks, on a started worker. At the base commit it queued a job for int `1`, and the worker's `_sync` then found no such slot and returned.
+- I made the helper a no-op (`pass`) at `tests/conftest.py:416` and ran every file that uses it, without xdist: matter e2e, zwave_js e2e, `test_binary_sensor`, `test_init` and `test_websocket`. All 540 passed, so the mutation survived.
+- An earlier run of the same mutation with `-n auto` showed 2 failures. They were `TestPacing::test_writes_at_startup_are_spaced` and the binary-sensor paced flake. Neither test calls the helper, so those were load flakes.
+- The helper probably makes no difference because the worker already syncs on `want`. The fix is correct, but nothing asserts it, which is consistent with the suite passing while the helper did nothing.
+- Possible follow-up, outside this no-behavior-change task: either remove the helper's `request_sync`, or make one test depend on it.
+- I restored `conftest.py` with a shell trap. `git status` afterwards showed only `.entire/.gitignore`.
+
+**4. The flakes, run alone:** each passed 5 out of 5 times.
+- `test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced`: 0/5 failed.
+- `test_a_paced_test_keeps_the_real_delay_between_operations`: 0/5 failed. It failed once in my own `-n auto` run (3153 passed, 1 failed), which fits the claim that it's a load flake.
+- `zwave_js` `TestPacing::test_writes_at_startup_are_spaced` also failed once under `-n auto`, so it's another paced test that's sensitive to load.
+
+**Minor:** the implementer's 2271 passed doesn't match my rerun of the task's Step 3 file list: 2201 passed, 2 skipped, 9 xfailed, 0 failed. The likeliest reason is that their run included the extra files. I didn't count it.
+
+**Clean-up:** `git status` shows only `.entire/.gitignore`. The scratch directory `/tmp/lcm-t8-tripwire` (plugins and the `conftest.py` backup) has been deleted, and nothing was committed or stashed.</result>
+<usage><subagent_tokens>114249</subagent_tokens><tool_uses>36</tool_uses><duration_ms>659475</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5eda57da869f2782</task-id>
+<tool-use-id>toolu_01GbzdUwVazQYEUaTREuqpHV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a5eda57da869f2782.output</output-file>
+<status>completed</status>
+<summary>Agent "Task 9: whole-suite verification" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** Task 9 is verified apart from one thing. `prek run --all-files` failed on the `yarn-lint` hook at first, and that was an environment problem, not a code problem. Nothing was fixed or committed. HEAD is still `f4cb7599`, and the only dirty file is the pre-existing `.entire/.gitignore`.
+
+**1. Full suite with coverage (no xdist)**
+- **Result:** 3373 passed, 3 skipped, 14 xfailed in 299 s. The total is 99.38%, not 100%.
+- **Base comparison:** I ran the same command at `ce1e1088`. It gives 3358 passed, 3 skipped, 14 xfailed, and 99.37% coverage. Both runs miss the same 53 statements, so the 100% in the plan doesn't hold in this venv even at base.
+- **Newly uncovered lines:** none. I mapped each uncovered line at HEAD to its source text and compared it with base. Every line matches except one: in `ha/runtime.py`, the uncovered `del wants[err.slot]` became `addresses = {a: v for a, v in addresses.items() if a.user_ref != err.slot}`. It sits in the already-uncovered "managed by another entry" block, at runtime.py:636-644 at HEAD and 619-627 at base.
+- **Uncovered lines at HEAD:**
+
+| File | Lines |
+|---|---|
+| `diagnostics.py` | 29 |
+| `entity.py` | 428 |
+| `ha/adapter.py` | 243, 416, 466-467, 588 |
+| `ha/runtime.py` | 636-644, 716, 731-739, 766, 798-799, 827-828, 1080-1083 |
+| `ha/services.py` | 111-112 |
+| `ha/slot_coordinator.py` | 140 |
+| `providers/_base.py` | 811-816, 821, 1093, 1186, 1346 |
+| `providers/matter.py` | 379, 2253-2260, 2319 |
+| `providers/zha.py` | 618 |
+| `providers/zigbee2mqtt.py` | 759-773 |
+| `repairs.py` | 30-31, 76, 128-130, 133 |
+| `sensor.py` | 82 |
+| `sync/registry.py` | 296-297 |
+| `sync/slot.py` | 39 |
+| `sync/worker.py` | 457-459 |
+
+- The scratch worktree `/tmp/lcm-base` has been removed.
+
+**2. Timing flakes**
+- All three tests passed inside the full run, so I didn't re-run them separately.
+
+**3. Property tests at the CI profile**
+- 74 passed in 25 s.
+
+**4. `prek run --all-files`**
+- Every hook passed, mypy included, except `yarn-lint`, which failed with `eslint: command not found` (exit 127). This branch changes no `.ts` or other non-Python files.
+- With the main checkout's `node_modules/.bin` on `PATH`, `prek run yarn-lint --all-files` passed. So `eslint` is only missing from the worktree's `.bin`.
+- I did not run this hook at base.
+
+**5. Oracle checks**
+- **`tests/sync` stat:** only `test_registry.py` (+136) and `test_worker.py` (+22) changed, 158 insertions and 0 deletions.
+- **`git diff origin/main -- tests/sync | grep '^-[^-]'`:** it printed nothing, as required.
+- **Filtered assert diff over `tests`:** it printed 63 removed assert lines. I checked each one against the added lines, after normalising `pin_address(x)` to `x`. All 63 fall into three kinds, and none is a behavior change:
+  - **Key re-spelling:** integer keys became `pin_address(n)` in `worker.slots[...]`, `worker.status(...)`, `port.read([...])`, `port.write(...)`, `store.wrote(id, n)` and `pushed`/`disabled` comparisons. In the same shape: `in worker.slots`, `not in worker.slots`, `pushed_to_worker[3]` and `worker.read(...)` results.
+  - **Reflowed multi-line asserts:** some lines were re-wrapped by ruff format.
+  - **Store and diagnostics shape:**
+    - Diagnostics nested by type: `worker_diag["slots"]["1"]` became `["1"]["pin"]`.
+    - The store's `wrote` record nested by type, `{"pin": ...}`.
+    - Direct reads of that record updated the same way, for example `.get("wrote", {}).get("pin")`.
+
+No other assertion changed.</result>
+<usage><subagent_tokens>64641</subagent_tokens><tool_uses>20</tool_uses><duration_ms>694083</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0d0c484fb61cb150</task-id>
+<tool-use-id>toolu_01Vx7kMLx4RQQcT8dniT2MJx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a0d0c484fb61cb150.output</output-file>
+<status>completed</status>
+<summary>Agent "Final whole-branch review PR 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I found no critical issues, and nothing in the design will force a second re-key when PASSWORD addresses arrive. There are a few small fixes worth making before you open it, plus a list of things PR 2 has to deal with.
+
+I checked the branch at f4cb7599: `prek run mypy --all-files` passes, and the targeted tests pass (`tests/sync`, store, adapter, diagnostics, credentials, runtime, architecture: 464 passed). `tests/sync` only gains lines (+136 and +22, nothing removed). All paths below are under `/Users/raman/projects/lock_code_manager/.worktrees/credential-address-core/custom_components/lock_code_manager/`.
+
+## Critical
+None.
+
+## Important
+1. **The `CredentialAddress` docstring is now wrong.** `model/credentials.py:244-248` says `user_ref` will become the user's name and that this would be "a one-place type change rather than a second re-key". This PR makes `user_ref` = slot number load-bearing:
+   - the registry's `slot_of` (`ha/runtime.py:175`);
+   - the store's `str(address.user_ref)` key (`ha/lock_store.py:93,148`);
+   - `releasing`, `GIVEN_UP_KEY` and the issue ids.
+
+   Users are already named and the slot stayed the identifier. **Fix:** reword it to say `user_ref` is the managed slot number, that entries own slots, and that the registry and store key by it.
+
+## Minor
+1. **Two small silent changes in the code that follows a slot's addresses:**
+   - **`hold` checks slots in set order.** `sync/registry.py:123` builds `{self._slot_of(key) for key in wants}`, a set. Base checked `wants` in insertion order. When two or more slots are taken, the "managed by another entry" warnings can now come in a different order. **Fix:** `dict.fromkeys(self._slot_of(k) for k in wants)`.
+   - **Re-pair rebuild forgets more than it did.** `ha/runtime.py:486` forgets every address in a moot slot, but `moot` is computed from release addresses only. Base forgot exactly those. **Fix:** `for address in [a for a, s in worker.slots.items() if s.release]: worker.forget(address)`.
+2. **The `slot_of` default is a type hole** (`sync/registry.py:31,67`). `_itself` is `Any -&gt; Any`. A `LockRegistry[CredentialAddress, …]` built without `slot_of` would key `owners` by address, so `owner`, `unclaim` and `give_up` would silently never match, and mypy can't catch it. Production passes it, and the default only exists so `tests/sync` stays unedited. **Fix:** either `@overload` `__init__` so `slot_of` may be omitted only when `K` is `int`, or a one-line comment naming the trap.
+3. **Naming that breaks the worker's slot/key vocabulary:**
+   - `LockWorker.want(self, slot, pin, …)` (`sync/worker.py:217`): rename `pin` → `value` to match `LockPort.write(slot, value)`.
+   - `ProviderPort.read(self, slots: Collection[CredentialAddress])` and `write(self, slot: CredentialAddress, …)` (`ha/adapter.py:183,334`): everywhere else in the adapter `slot` means an `int`. Rename to `addresses` / `address`.
+4. **`_slots_of(worker.slots)` is rebuilt for every `given_up` item** (`ha/runtime.py:852`). Compute a set once before the loop.
+5. **`lock_codes` loop is hard to read** (`ha/runtime.py:1039`). The generator inside the `for` header is awkward. A plain loop over `worker.slots.items()` with `if address.credential_type is not CredentialType.PIN: continue` reads better.
+6. **One test builds its own input** (`tests/test_lock_store.py:832`). It feeds `remember` a `SimpleNamespace` worker, which is the pattern your test-input rule warns against. Use a real `LockWorker` with a stub port.
+
+## Silent behavior changes
+Beyond the diagnostics nesting and the worker log labels, these are the user-visible changes:
+- **Downgrade breaks setup entirely.** On an older release, `Store(version=1)` raises `UnsupportedStorageVersionError` on a version 2 file. That happens inside `async_setup` (`__init__.py:612` → `ha/runtime.py:154`), so the whole integration fails to load, every entry included. Recovery:
+  - Restore a Home Assistant backup.
+  - Or delete `.storage/lock_code_manager.core`. That costs one rewrite of each PIN on locks that hide their codes, and it forgets any release clears still owed, so those codes stay on the lock.
+- **Batched worker logs** read `(1 pin, 2 pin)` instead of `(1, 2)`. Adapter timing logs still say `slot 3`.
+
+Nothing else changed:
+- Probe order is the same: addresses sort as `(slot, type)`.
+- `worker.slots` iteration order is the same.
+- The migration is exact: release fields stay at slot level, records with no `wrote` pass through, `reports` and `entity_id` are kept.
+- With PIN-only data, `remember` produces the same record as base.
+- The new `_forget` release guard can't fire with one key per slot, because an owned key is never a release key.
+
+## Simplicity
+Proportionate for the job. The generic key, `slot_of`, the `_Store` subclass and the diagnostics helper are each small. The only piece built ahead of need is `remember`'s per-type merge, and the version 2 shape requires it. Nothing reads as overcomplicated.
+
+## PR 2 must handle
+1. **One release per slot.** `give_up` creates a release clear for every tracked key in the slot. `port.releasing` and `_written` are per slot, so the first clear deletes the user and every later key sends a second release. Make that later release idempotent: return `False` and let the read-back find the slot empty. Don't make the worker look inside keys.
+2. **`release(written=…)` reads only the PIN.** `wrote_pin` (`ha/lock_store.py:98`) feeds it and checks PIN only. A password-only slot needs "Lock Code Manager wrote any type here".
+3. **Repair issue ids are per slot** (`ha/runtime.py:865-932`). With two addresses in a slot, one that is in sync deletes `slot_suspended_*` / `slot_disabled_*` that a held one just raised, depending on dict order. Aggregate per slot before raising or deleting.
+4. **`_on_disable(address)` turns the whole slot off.** Decide what a refused password does when the PIN is fine (spec decision 4).
+5. **The in-sync entities read only the PIN.** `LockWorkerView._pin` (`entity.py:405`) drives both the aggregate `in_sync` and `pin_in_sync`. The binary sensor already stores `self._addresses` (dead since before this PR). Aggregate over those.
+6. **The adapter routes by PIN only.**
+   - `_pin_slot` refuses a whole read batch if any address isn't a PIN.
+   - `pushed`, `others`, `_writing`, `_written_at` and `wants_pin` are int-slot and PIN-only.
+   - `_Coordinator.observe_push` and `desired_credential` drop the type, round-tripping through `pin_address`.
+   - Echo suppression is per slot, so a password write would swallow a PIN push for the same slot.
+7. **The HA-layer entry points are PIN-only.** `async_hold_lock(wants: Mapping[int, Want])`, `async_want`, `async_write_once` and `async_resume_slot` (which calls `write_once(pin_address(slot))`) need the per-lock managed address set.
+8. **Occupancy reads only PINs.** `_async_occupied` (`ha/allocation.py:537`) needs every managed type the lock takes, since a slot holding only a password is occupied.
+9. **Fingerprints for types no longer tracked are kept.** `remember` keeps the last fingerprint of a type the worker stops tracking, for example after a lock loses password support. If that type comes back, recall trusts the stale write. Confirm that's wanted.
+10. **Already right for PR 2:** `_duplicate_of` filtering to PIN (duplicates are per type) and `lock_codes` showing only PINs.
+
+## PR body summary
+- The sync engine (worker, port, registry) now works with any key the integration chooses, instead of a bare slot number. The integration keys it by `CredentialAddress(slot, credential type)`. Today every address is a PIN, so behavior is unchanged.
+- An entry still owns a whole slot: the registry is told which slot a key belongs to. Claiming, releasing and clearing a slot act on every credential type in it.
+- The provider adapter turns an address back into today's slot-based provider calls, and refuses any other credential type before anything is sent.
+- The lock store moves to version 2 and keeps what was last written per credential type: `{"wrote": {"pin": …}}`. Version 1 records are migrated on load.
+- **Downgrade limit:** after this upgrade, an earlier release can't read the store and Lock Code Manager won't set up. Restore a backup, or delete `.storage/lock_code_manager.core`. That costs one rewrite of each PIN on locks that hide their codes, and forgets clears still owed.
+- Diagnostics now nest each lock's worker slots by credential type: `slots["3"]["pin"]`.
+- Worker debug logs name a credential type with its slot ("slot 3 pin").
+- Every existing test passes unchanged apart from how keys and the store/diagnostics shapes are spelled. The `tests/sync` suite only gained tests, for keys that hold a slot and a type.
+
+## Assessment
+**Ready to open** once the `CredentialAddress` docstring is fixed. The Minor items are cheap and worth folding in, but none blocks.</result>
+<usage><subagent_tokens>162644</subagent_tokens><tool_uses>43</tool_uses><duration_ms>377259</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aa6d5c43062b806be</task-id>
+<tool-use-id>toolu_012EECxCwGQxzPPLtqKkWqDx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/aa6d5c43062b806be.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix final-review findings PR 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status: DONE.** All eight fixes are in one commit, `ec183ef2` (parent `f4cb7599`). mypy passes, the targeted tests pass, and the commit hooks passed. `.entire/.gitignore` is still not committed.
+
+Worktree: `/Users/raman/projects/lock_code_manager/.worktrees/credential-address-core`. All paths below are under `custom_components/lock_code_manager/` unless stated.
+
+**Changes, by item**
+1. **`model/credentials.py`:** the `CredentialAddress` docstring now reads: "``user_ref`` is the managed slot number. An entry owns a slot and every credential type in it, so the sync registry (``slot_of``) and the lock store key by it."
+2. **`sync/registry.py`, `hold`:** now `_check_free(entry, owner, dict.fromkeys(self._slot_of(key) for key in wants))`, so slots are checked in insertion order. ruff format split it over three lines.
+3. **`ha/runtime.py`, `_async_rebuild_if_re_paired`:** now forgets only the releasing addresses: `for address in [a for a, s in worker.slots.items() if s.release]`. The `moot` list and the `GIVEN_UP_KEY` pops are unchanged.
+4. **`sync/registry.py`:** added the comment at the `slot_of` parameter, just above its `_itself` default: a registry whose keys are not slot numbers must pass `slot_of`, or `owner`, `unclaim` and `give_up` never match. No overloads.
+5. **Renames:**
+   - **`sync/worker.py`:** `want(self, slot, value, …)`. The body and docstring are updated, and the docstring now reads "Say ``slot`` should hold ``value``; a release clear when ``release``."
+   - **Keyword callers:** no call passes `pin=` to `want` anywhere in `custom_components` or `tests`. Every `pin=` hit belongs to unrelated APIs.
+   - **`ha/adapter.py`:** `ProviderPort.read(self, addresses, …)` and `write(self, address, value)`, with their docstrings updated. To fit the 88-character limit I shortened the `write` docstring to "...timed for logs."
+   - **`LockPort[K]` protocol:** mypy accepted the renamed parameters even though the protocol still names them `slots` and `slot`, so I left the protocol as it was.
+6. **`ha/runtime.py`, `async_reconcile_issues`:** `tracked = set(_slots_of(worker.slots))` is computed once before the loop, and the `if` now fits on one line.
+7. **`ha/runtime.py`, `lock_codes`:** the generator is bound to `pins` first, then `for slot_num, slot in pins:`. The comment is kept and there is no `continue`.
+8. **`tests/test_lock_store.py`:**
+   - The test now uses a real `LockWorker(object(), b"salt")` that is never started, with a one-line comment saying so, then sets `worker.slots[pin_address(1)] = Slot("1234", wrote="new")`.
+   - I used a plain `object()` as the stub port. That is enough because the worker is never started, and mypy does not check `tests/`.
+   - `answered_ever` on the real worker is False. I checked this separately and added no assertion for it. The test's assertions are unchanged.
+   - The `SimpleNamespace` import is removed, and a `LockWorker` import is added.
+
+**Checks**
+- **mypy:** `prek run mypy --all-files` passed.
+- **Tests:** the targeted pytest command you gave, including `tests/sync` and `tests/providers/zigbee2mqtt`, gave 784 passed and 1 skipped in about 104 seconds. I didn't check whether that one skip predates this commit.
+- **Commit hooks:** the commit ran with hooks on. ruff check, ruff format, flake8, mypy and the rest all passed.
+
+Nothing differed from the task text except the protocol names (item 5) and the shortened `write` docstring.</result>
+<usage><subagent_tokens>72510</subagent_tokens><tool_uses>20</tool_uses><duration_ms>194286</duration_ms></usage>
+</task-notification>
+
+---
+
+i agree
+
+---
+
+I agree re: zwave-js/zwave-js
+
+---
+
+<task-notification>
+<task-id>bw6cdffb4</task-id>
+<tool-use-id>toolu_018Ee94BdSNBWJy4fXiMhLSe</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/bw6cdffb4.output</output-file>
+<status>completed</status>
+<summary>Background command "Check worktree state and credential data call sites" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+commit and push
+
+---
+
+seems to be a github error: 
+raman@Ramans-Personal-Laptop:~/projects/*node-zwave-js-u3c-password* on github: node-zwave-js (fix/u3c-password-utf16)  ↑1
+$ git push origin fix/u3c-password-utf16
+
+---
+
+good catch try now
+
+---
+
+why do we have to move the store version? We just added a new key, we can always handle it as an optional field
+
+---
+
+yes follow up commit
+
+---
+
+Why can’t we just switch the key we use and use the old one as a fallback which we can delete after switching the key
+
+---
+
+Or we just leave the old key in there for now and write to both for the foreseeable future
+
+---
+
+why not just make it fingerprints
+
+---
+
+how about state?
+
+---
+
+fingerprints is fine
+
+---
+
+Etgef
+
+---
+
+Merged
+
+---
+
+1
+
+---
+
+<task-notification>
+<task-id>affcfdb51df572eba</task-id>
+<tool-use-id>toolu_01Cv4EyNUYSC6DQLuXBzsx7Z</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/affcfdb51df572eba.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+New commit: `d029cc95`. It sits on top of `06292130`, which I did not amend.
+
+**Finding 1: refuse a type the provider cannot write**
+- Both `async_set_slot_credential` and `async_clear_slot_credential` now call a new `_require_writable_type` first. That raises `LockOperationUnsupported` for any type not in `writable_credential_types`.
+- The message names the lock entity id and the credential type, never a value.
+- The new test `test_a_type_the_provider_cannot_write_is_refused_untouched` uses a `MockLCMLock`. A password set and a password clear both raise `LockOperationUnsupported`, and the mock's `codes` and `service_calls` are unchanged.
+- Red check: before the fix, the set raised `ProviderNotImplementedError` instead, so the test failed as intended.
+
+**Finding 2: typed hooks route PIN through the PIN hooks**
+- The new test is `test_the_typed_hooks_route_a_pin_through_the_pin_hooks`. A PIN set, read and clear on slot 5 reach the mock's own methods, and `service_calls` is exactly `set_usercode`, `get_usercodes`, `clear_usercode`, in that order.
+- I asserted the read as `read[5] == known("5555")` rather than comparing the whole map. The mock's `async_get_usercodes` also returns its other stored slots (1 and 2).
+- Mutation: I made `async_get_slot_credentials` always call `_project_users_to_slots`. The routing test failed. I restored `_base.py` from a backup in a `finally` block, confirmed it matches the commit, and the test passes again.
+
+**Checks**
+- `tests/test_adapter.py`, `tests/providers/virtual`, `tests/providers/test_seam.py` and `tests/providers/test_base.py` give 227 passed, 1 xfailed.
+- `prek run mypy --all-files` and `prek run --files` on the changed files both pass.
+
+Files changed:
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/custom_components/lock_code_manager/providers/_base.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/tests/test_adapter.py`</result>
+<usage><subagent_tokens>94845</subagent_tokens><tool_uses>7</tool_uses><duration_ms>52023</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab4d906170c314122</task-id>
+<tool-use-id>toolu_0143cCoLSNVYhLM2kSZQhMJd</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ab4d906170c314122.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 2a Task 1" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Re-review of d029cc95: APPROVED.** Both Minor findings are fixed correctly and completely, and nothing else changed.
+
+The commit touches only `custom_components/lock_code_manager/providers/_base.py` (+14) and `tests/test_adapter.py` (+36). There are no other edits.
+
+**Fix 1: refusing a type the provider cannot write** (`providers/_base.py:1283`, `:1290-1300`, `:1355`)
+- `_require_writable_type` is the first line of both `async_set_slot_credential` and `async_clear_slot_credential`. It runs before PIN routing, so even a provider that declared no PIN would be refused.
+- It raises `LockOperationUnsupported`. That fits: the class is documented as "the request itself is invalid for this lock", which means no retry.
+- The message names only the entity id and the type (`cannot write password credentials`). No value can reach it.
+- `async_get_slot_credentials` is left unguarded, which is right: a read can't land on the PIN.
+- The new test, `test_a_type_the_provider_cannot_write_is_refused_untouched` (`tests/test_adapter.py:1172`), checks that both calls raise and that `codes` and `service_calls` are untouched.
+
+**Fix 2: the routing test** (`tests/test_adapter.py:1188`)
+- `test_the_typed_hooks_route_a_pin_through_the_pin_hooks` drives the set, get and clear typed hooks with PIN on `MockLCMLock`. That mock overrides all three PIN hooks and records each call.
+- The test asserts the stored effects and the recorded `set_usercode`, `get_usercodes`, `clear_usercode` calls.
+
+**Mutations.** I ran five on `_base.py`, restoring the file after each and confirming with `cmp` that it matches the committed version. Each mutation was killed by the matching new test:
+1. Removing the set guard was killed by the refusal test.
+2. Removing the clear guard was killed by the refusal test.
+3. Sending a PIN read straight to `_project_users_to_slots` was killed by the routing test.
+4. Sending a PIN set straight to `_set_slot_credential` was killed by the routing test.
+5. Sending a PIN clear straight to `_clear_slot_credential` was killed by the routing test.
+
+**Checks.** The Virtual, adapter, seam and base tests gave 227 passed and 1 xfailed. `prek run mypy --all-files` passed.
+
+**Nits (no change needed):**
+- The routing test asserts `list(lock.service_calls)`. Those are the distinct call names in first-seen order, so `lock.call_order` would pin the sequence more strictly. It still kills every routing mutation as written.
+- `_require_writable_type` could be `@final`, but `_require_readable_pin` isn't either, so it is consistent with the code around it.
+
+**Worktree note:** `git status` shows `.entire/.gitignore` modified (adds `redactors/local/`; the file's mtime is 20:39 today). That wasn't me or d029cc95; it looks like the Entire session tooling. The rules say never to commit anything under `.entire/`, so the implementer should leave it out of any commit.</result>
+<usage><subagent_tokens>94843</subagent_tokens><tool_uses>5</tool_uses><duration_ms>63924</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af53fd6c798b84f85</task-id>
+<tool-use-id>toolu_01GgHygCygWe3FRGMkdgz4zX</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/af53fd6c798b84f85.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 2" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+All three review findings are fixed in a new commit, `ed7df23f`, on top of `5ddc7ec0`, which I did not amend.
+
+**What changed**
+1. **A release stamps every type.** In `_write`'s release branch, after `_released.add(slot)`, the port now records the write time for `CredentialAddress(slot, t)` for every `t` in `provider.writable_credential_types`. The added comment reads: "It removes every type at once: each is as lately written." On PIN-only providers this stamps the same PIN address as before, so their behavior is unchanged.
+2. **Two new tests in `tests/providers/virtual/test_port.py`.** Both patch `VirtualLock.read_lag` (a class attribute) to 60.0, and both set the PIN with `virtual_lock.async_set_usercode` directly, so the port never stamps it.
+   - `test_a_lagging_read_leaves_out_only_the_type_written`: after a password write, reading `[PIN_1, PASSWORD_1]` returns `{PIN_1: Holds("1234")}`, with the password left out as lagging. It passed before any change because it guards existing behavior; the mutation check below shows it is not vacuous.
+   - `test_a_release_lags_every_type_it_removed`: after `port.release(1, written=True)` and `port.write(PASSWORD_1, None)`, reading `[PIN_1]` returns `{}`. Before the fix it failed for the intended reason: it returned `{PIN_1: Seen.EMPTY}`.
+3. **Comments.** "About the lock, whichever credential type's read answered." now sits above the `self.reports` update and above the `_answered` update in `_read`.
+
+**Tests**
+- Targeted run (`tests/providers/virtual`, `test_adapter.py`, `test_lock_runtime.py`, `test_services.py`, `test_pin_logging.py`, `tests/providers/zwave_js/test_e2e.py`, `tests/providers/schlage`): 461 passed, 5 xfailed. Schlage is the only other provider with `read_lag`, so I added its tests.
+- `prek run --files` on both changed files and `prek run mypy --all-files` pass.
+
+**Mutation check**
+- I keyed `_written_at` by `CredentialAddress(slot, CredentialType.PIN)` both where it is stamped and where `_lagging` looks it up. A script restored the file in a `finally`.
+- `test_a_lagging_read_leaves_out_only_the_type_written` failed: `assert {} == {PIN_1: Holds(****)}`. Under the mutant, the password write marks the PIN as lagging too.
+- After restoring, it passes, the mutant text is gone from the file, and `git status` shows only `.entire/.gitignore`, which I did not stage.
+
+**Files changed** (commit `ed7df23f`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/custom_components/lock_code_manager/ha/adapter.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/tests/providers/virtual/test_port.py`
+
+**Differences and concerns:** none.</result>
+<usage><subagent_tokens>128085</subagent_tokens><tool_uses>11</tool_uses><duration_ms>123276</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a462c584acddc28f1</task-id>
+<tool-use-id>toolu_011kT3ngGfX5jV9CgimY3cyG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a462c584acddc28f1.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 2a Task 2" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The re-review of `ed7df23f` is APPROVED: the three fixes are right, PIN-only providers including Schlage are unchanged, and nothing else changed.
+
+**What changed:** the commit touches only `custom_components/lock_code_manager/ha/adapter.py` (+10 lines) and `tests/providers/virtual/test_port.py` (+23 lines).
+
+**Fix 1, release stamps every type** (`ha/adapter.py:457-464`)
+- After the provider takes the release, `_written_at` is stamped for `CredentialAddress(slot, t)` for every type in `provider.writable_credential_types`. The `finally` block still stamps the address that was written.
+- On a PIN-only provider the writable types are just PIN, and the release always comes through the PIN address. The new update stamps that one PIN address, and `finally` then overwrites it with a time at least as late. The end state is the same as before, so Schlage's lag handling doesn't change.
+
+**Fix 2, the lag tests** (`tests/providers/virtual/test_port.py:194-214`)
+- Both tests reach the rule they name. I ran the mutations myself and restored the file each time.
+
+| Mutation | Result |
+|---|---|
+| `_written_at` keyed by the PIN address always | Killed by `test_a_lagging_read_leaves_out_only_the_type_written` |
+| Release stamping removed (empty generator) | Killed by `test_a_release_lags_every_type_it_removed` |
+
+**Fix 3, the lock-level comment** (`ha/adapter.py:289` and `:331`)
+- The comment "About the lock, whichever credential type's read answered." is added above both the `reports` and the `_answered` updates. It states intent, and nothing else in those lines changed.
+
+**Checks**
+- `tests/providers tests/test_adapter.py tests/test_lock_runtime.py`: 1919 passed, 2 skipped, 9 xfailed. This includes the Schlage tests.
+- `prek run mypy --all-files` passed; ruff check and format are clean.
+- `git status` afterwards shows only `.entire/.gitignore`.
+
+**One optional nit, no change needed** (`ha/adapter.py:448-454`): the other types are stamped only when the release succeeds. If the release raises, `finally` stamps only the written address, even though a failed release "may have landed, whatever came back". Stamping every writable type in `finally` whenever a release was attempted would be more consistent. This has no effect today: PIN-only providers get the same result, and Virtual doesn't lag.</result>
+<usage><subagent_tokens>122470</subagent_tokens><tool_uses>2</tool_uses><duration_ms>287064</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a970cf0183ac32993</task-id>
+<tool-use-id>toolu_011vr7TY3dxhPofdwBLAmDpH</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a970cf0183ac32993.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 4" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE. All three review findings are fixed in a new commit, `074b88ea`; `404bd89d` was not amended.
+
+**What I implemented**
+1. **Refusal guard test:** `test_a_refusals_repair_is_answered_beside_a_password_that_wants_nothing`. It creates `slot_disabled_{entry_id}_1` by hand, puts an in-sync PIN that wants "1234" beside an in-sync password that wants nothing, reconciles, and asserts the repair is gone. It passed before any code change, as expected: the guard was already right and this test only pins it.
+2. **Repair picked by severity:** in `async_reconcile_issues`, the slot now takes `min` over its held credentials with the key `(hold is not Repair.CODE_MAY_REMAIN, address)`. A clear that would not take wins over one that could not be set, whatever type each is on; among equals the first in address order wins. A short comment says why. The `itemgetter` import is gone.
+   - New test `test_a_clear_that_would_not_take_is_the_slots_repair`: a password held `CANT_SET` beside a PIN held `CODE_MAY_REMAIN`. It failed first (`'slot_suspended' == 'slot_clear_failed'`) and passes after the change.
+3. **Comment:** the second test now has the "set by hand and reconciled at once: nothing awaits in between" comment.
+
+**Tests**
+- `TestSlotRepairs`: 4 passed.
+- `tests/providers/virtual`, `test_lock_runtime.py`, `test_init.py`, `test_repairs_references.py`, `test_binary_sensor.py`, `test_lock_store.py`, `test_open_bugs.py` and `test_harness.py`: 437 passed, 5 xfailed.
+- `prek run mypy --all-files` passed, and `prek run --files` on both changed files passed.
+
+**Mutation checks** (run from a script that restores the file in a `finally`)
+1. **`any` → `all` on the `want` guard:** only the new refusal test fails; the other three pass.
+2. **Key reduced to address order only (`key=lambda pair: pair[0]`), the old type-name order:** only the new severity test fails.
+- After both, `runtime.py` is byte-identical to the backup, all 4 tests pass, and `git status` shows only `.entire/.gitignore`, which was not staged.
+
+**Files changed** (commit `074b88ea`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/custom_components/lock_code_manager/ha/runtime.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/tests/providers/virtual/test_e2e.py`
+
+**Differences from the request:** none of substance. The severity pick is written as a filtered `held` list followed by `min(...)` with the key you suggested, and the comment sits just above the `min`.</result>
+<usage><subagent_tokens>89858</subagent_tokens><tool_uses>7</tool_uses><duration_ms>110622</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab24b430c73d5ebbe</task-id>
+<tool-use-id>toolu_01Jg3G9Hu1J4x1kXM1g8P3hF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ab24b430c73d5ebbe.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 2a Task 4" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Re-review of 074b88ea: **APPROVED**. All three Minor findings are fixed, the PIN-only path is still exactly equivalent to the old loop, and nothing else changed.
+
+**PIN-only equivalence** (`custom_components/lock_code_manager/ha/runtime.py:883-895`):
+- With one credential, `held` holds that credential only when `credential.hold in _HOLD_ISSUES`. That is the same test as the old `_HOLD_ISSUES.get(slot.hold) is None`, including `hold=None`.
+- `min` over a single pair returns that pair. So the repair, translation key, reason, placeholders and `data` (including `release`) all come from the same `Slot` as before.
+- The rest of the function is untouched: the deletions above this block, `entry_id` and the `given_up` path, `raised`, the `ISSUES_KEY` cleanup and `lock_offline`.
+- The only other change in `runtime.py` is removing the `itemgetter` import, which is no longer used.
+
+**The three fixes:**
+1. **`slot_disabled` with two credentials** (`tests/providers/virtual/test_e2e.py:646`): the new test sets a PIN that wants a value and is in sync beside a password that wants nothing, and checks that a pre-made `slot_disabled` repair is deleted. Changing `any` to `all` now fails this test; I ran that mutation myself.
+2. **Choosing by severity** (`runtime.py:890-895`): the key is `(hold is not CODE_MAY_REMAIN, address)`, so a code that may still open the door wins, then address order. The test at `test_e2e.py:674` puts a PIN `CODE_MAY_REMAIN` beside a password `CANT_SET` and asserts `slot_clear_failed`. Two mutations fail it: dropping severity and keeping address order only (the old type-name order), and inverting the severity check. The new comment states intent in the project's voice.
+3. **The comment** (`test_e2e.py:634`): the "nothing awaits in between" note is now in the second test too.
+
+**Checks:**
+- The related set (`tests/providers`, `test_lock_runtime`, `test_init`, `test_repairs_references`, `test_open_bugs`, `test_harness`, `test_binary_sensor`, `test_lock_store`) gives 2174 passed, 2 skipped, 13 xfailed.
+- `prek run mypy --all-files` passes, and the `# type: ignore[index]` is still needed. Ruff check and format are clean on both files.
+- I restored `runtime.py` in a `finally` block after each mutation. `git status` shows only `.entire/.gitignore` modified.
+
+For the original Task 4 review (404bd89d): Stage 1 was compliant, and the four departures you asked me to judge were all justified. I approved it with the three Minor findings that this commit fixes. Combined with 074b88ea, Task 4 is approved with no open findings.</result>
+<usage><subagent_tokens>97000</subagent_tokens><tool_uses>3</tool_uses><duration_ms>142711</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af1a91dfb99a99385</task-id>
+<tool-use-id>toolu_01A4M75TohxumjHWt2VmWmdk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/af1a91dfb99a99385.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 5" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**What I implemented:** a new tests-only commit that closes the six mutations the review found. No test exposed a bug, so no production code changed.
+
+1. **`managed_credential_types`** (`tests/test_adapter.py`): I extended `test_a_lock_manages_the_managed_types_its_provider_writes`. It patches `providers._base.MANAGED_CREDENTIAL_TYPES` to `{PIN, PASSWORD}` and asserts:
+   - A provider that writes only PIN gets `{PIN}`.
+   - A provider that writes both (`MockLCMLock.writable_credential_types` patched) gets `{PIN, PASSWORD}` when no capabilities are cached.
+   - With `_capabilities_cache` set to `PIN_CAPABILITIES`, it gets `{PIN}`.
+   - With cached capabilities that advertise only PASSWORD, it gets `{PIN, PASSWORD}`, so PIN stays in.
+2. **The aggregate over several credentials** (`TestSlotInSync`): three new tests.
+   - `test_a_held_password_outranks_an_out_of_sync_pin`: the slot shows off, with `sync_status` "suspended".
+   - `test_a_slot_with_a_credential_never_read_is_unavailable`: the PIN is read, the password never was, and the lock has not answered, so the slot is unavailable. I reached "not answered" by patching `LockWorker.answered` with a `PropertyMock`. That is the pattern `tests/test_binary_sensor.py::test_per_lock_entities_are_unavailable_before_the_lock_answers` already uses, so I didn't need to touch private state.
+   - `test_a_sync_queued_for_the_password_shows_the_slot_syncing`: uses the public `worker.request_sync([password])`, checks that only the password is queued, and expects `sync_status` "syncing".
+
+   Each test sends the change signal and reads the state with no await in between, so the worker cannot run first.
+
+**Test results**
+- New tests: 6 passed (the adapter test plus the five `TestSlotInSync` tests).
+- Targeted run (`tests/providers/virtual tests/test_adapter.py tests/test_binary_sensor.py tests/test_sensor.py tests/test_diagnostics.py`): 199 passed, 1 xfailed. The xfail was already there.
+- `prek run --files` and `prek run mypy --all-files` both pass, and so did the commit hook.
+
+**Mutation checks** (script `/tmp/lcm-pr2a/mut5c.py` restores each file in `finally`; afterwards `git status` showed only the two test files and `.entire/.gitignore` modified)
+
+| Mutation | Killed by |
+|---|---|
+| Ignore the cached capabilities | `test_a_lock_manages_the_managed_types_its_provider_writes` |
+| Ignore `writable_credential_types` | `test_a_lock_manages_the_managed_types_its_provider_writes` |
+| Drop the PIN floor | `test_a_lock_manages_the_managed_types_its_provider_writes` |
+| Reverse `_BY_DISTANCE` | `test_a_held_password_outranks_an_out_of_sync_pin` |
+| `available` uses `any` instead of `all` | `test_a_slot_with_a_credential_never_read_is_unavailable` |
+| `_core_syncing` looks only at the first address | `test_a_sync_queued_for_the_password_shows_the_slot_syncing` |
+
+**Files changed** (commit `12183f21`, on top of `6388f301`, which was not amended)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/tests/test_adapter.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-model/tests/providers/virtual/test_e2e.py`
+
+`.entire/.gitignore` was not staged.
+
+**Differences and concerns:** none. The review didn't specify how to set the capability cache; I assigned `lock._capabilities_cache` directly on the built mock lock, as it suggested.</result>
+<usage><subagent_tokens>107563</subagent_tokens><tool_uses>13</tool_uses><duration_ms>134441</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5f34cb2196ee9bde</task-id>
+<tool-use-id>toolu_01KH96hpuV9Lvg1xPEHar5qZ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a5f34cb2196ee9bde.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 2a Task 5" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I re-reviewed the tests-only follow-up commit `12183f21`: **APPROVED**. All six mutations that survived my first review now fail a test, and no production code changed.
+
+**No production code changed.** `git diff --stat 6388f301 12183f21 -- custom_components` is empty; only `tests/providers/virtual/test_e2e.py` and `tests/test_adapter.py` were touched. HEAD is `12183f21`.
+
+**The tests are sound:**
+- **They don't race the worker.** The three new `TestSlotInSync` tests set the slots by hand, send the change signal and read the state without awaiting in between. The in-sync entity writes its state immediately when the signal arrives, so the worker gets no turn to run first; the tests' comments say this. Across 8 repeated runs the class passed 5/5 every time.
+- **The never-read test's patch is scoped and undone.** The `PropertyMock` on `LockWorker.answered` (a real property, `sync/worker.py:271`) sits in a `with` block. The assertion is inside the block and the class is restored on exit.
+- **The syncing test checks its own setup first.** It asserts `worker.syncing(password)` and `not worker.syncing(pin_address(1))` before it reads the state. The PIN comes first in `worker.slots`, which is why the "first address only" mutant fails.
+- **The `managed_credential_types` test patches the right name.** It patches `providers._base.MANAGED_CREDENTIAL_TYPES`, which is where the property looks it up. The `PropertyMock` on `MockLCMLock.writable_credential_types` is scoped, and patching an inherited attribute is removed cleanly on exit. Setting `_capabilities_cache` on the test's own lock follows what `tests/test_slot_coordinator.py:91-173` already does.
+- **The test now covers all four cases:**
+  - a provider that writes only PIN gives `{PIN}`;
+  - writable PIN and password with no capabilities cached gives both;
+  - cached capabilities that advertise only PIN narrow it to `{PIN}`;
+  - cached capabilities that advertise only password still give both, because PIN is always kept.
+
+**Mutations, rerun myself (all six, not just two).** I used `/tmp/lcm-t5-review/mut.py`, which restores each file in a `finally`; `git status` afterwards showed only `.entire/.gitignore`.
+
+| Mutation | Killed by |
+|---|---|
+| `_BY_DISTANCE` order reversed | `test_a_held_password_outranks_an_out_of_sync_pin` |
+| `available` uses `any` instead of `all` | `test_a_slot_with_a_credential_never_read_is_unavailable` |
+| `_core_syncing` looks only at the first address | `test_a_sync_queued_for_the_password_shows_the_slot_syncing` |
+| `managed_credential_types` ignores the cached capabilities | `test_a_lock_manages_the_managed_types_its_provider_writes` |
+| `managed_credential_types` ignores `writable_credential_types` | same |
+| `managed_credential_types` drops the PIN floor | same |
+
+**Checks:** the targeted suite has 199 passed and 1 xfailed. `prek run --files` on the two test files and `prek run mypy --all-files` are clean.
+
+**Two non-blocking notes:**
+- The order test only proves that suspended outranks out of sync. Swapping just out of sync and unknown would still pass. That is optional to pin and doesn't block approval.
+- With `-W error`, the new tests error in setup. The untouched `TestFullSetupLifecycle` does too, so that comes from the existing test harness, not from this commit.</result>
+<usage><subagent_tokens>96350</subagent_tokens><tool_uses>5</tool_uses><duration_ms>141043</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a049eadd6de61bafa</task-id>
+<tool-use-id>toolu_01SJ98muAXi6LTY2mT1czdfP</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a049eadd6de61bafa.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 6" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status: DONE_WITH_CONCERNS.** Both changes are in a new commit, `525182c2`; `dc76cb10` is not amended. The 21 earlier failures now pass with no edits. 4 other tests in `tests/test_event.py` now fail, and I left them unedited as you instructed.
+
+**What I implemented:**
+- **`event.py`, `event_types`:** the floor is now `{CredentialType.PIN}` unioned with each lock's `managed_credential_types`, still together with each lock's `reported_credential_types` and its cached `caps.credential_types`. The docstring gives your reasoning as intent: PIN because `use_credential` reports a PIN whatever the locks are, so an entry with no locks gets `["pin"]`; a written type only where the lock takes it; the union across the entry's locks. The `MANAGED_CREDENTIAL_TYPES` import is gone.
+- **`ha/services.py`, `_managed_credential_type`:** one check, `kind is not CredentialType.PIN`, raising "Lock Code Manager cannot store a {kind} credential yet. Supported: pin". It has a short comment that only a PIN is held in the configuration so far. The `MANAGED_CREDENTIAL_TYPES` import is gone. Your password service test and the existing RFID test both pass.
+- **New test:** `TestCredentialUseRecording::test_a_password_is_a_kind_of_use_before_capabilities_are_read` in `tests/providers/virtual/test_e2e.py`. It empties the capabilities cache, sends the lock-changed signal, and asserts `event_types == [PASSWORD, PIN]`.
+  - The cache has to be empty because Virtual advertises every credential type once capabilities are cached, so `password` would be listed whatever the floor.
+  - This test passed on the global floor too, so it guards rather than fails first. The failing-first tests for this change were the 21 existing ones.
+
+**Test results:**
+
+| Run | Passed | Failed | Other |
+|---|---|---|---|
+| Wider set (serial, no xdist) | 2440 | 0 | 2 skipped, 9 xfailed |
+| Step 10 set plus `test_lock_store.py` | 660 | 4 | 2 xfailed |
+
+- All 19 provider e2e failures and the 2 earlier `test_event.py` failures now pass.
+- prek passes on the changed files, and `prek run mypy --all-files` passes.
+
+**The 4 still failing**, all in `tests/test_event.py`:
+- `test_event_types_names_credential_kinds_and_never_locks`
+- `test_a_use_of_a_kind_no_lock_reports_is_dropped`
+- `test_a_restored_use_does_not_widen_the_vocabulary`
+- `test_available_when_no_lock_reports_code_slot_events`
+
+Each asserts `event_types == sorted(MANAGED_CREDENTIAL_TYPES)` on a mock lock. The entity shows `["pin"]`, which is what it showed before this PR, so behavior is unchanged. What moved is the expected expression: it meant `["pin"]` before Task 6 and now means `["password", "pin"]`. Any per-lock floor fails them. The likely fix is changing their expected value to `[CredentialType.PIN]`; I didn't make it.
+
+**Mutations** (`/tmp/lcm-pr2a-t6/mutate_event.py`, which restores `event.py` in a `finally`; greps confirmed the restore):
+- **Global floor put back:** exactly the 21 tests fail: 2 in `test_event.py`, 5 Matter, 9 ZHA, 4 Zigbee2MQTT, 1 Z-Wave JS.
+- **Floor of PIN alone, without `managed_credential_types`:** the new Virtual test fails, along with the 4 tests above.
+
+**Files changed** (in `/Users/raman/projects/lock_code_manager/.worktrees/password-model/`):
+- `custom_components/lock_code_manager/event.py`
+- `custom_components/lock_code_manager/ha/services.py`
+- `tests/providers/virtual/test_e2e.py`
+
+**Commits:** `dc76cb10` (Task 6) and `525182c2` (this follow-up). `.entire/.gitignore` was not staged.</result>
+<usage><subagent_tokens>169986</subagent_tokens><tool_uses>15</tool_uses><duration_ms>458985</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a049eadd6de61bafa</task-id>
+<tool-use-id>toolu_01JQziyvpiC5J7RgQowyAVce</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a049eadd6de61bafa.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 6" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status: DONE.** Task 6 and both follow-ups are committed, and the targeted tests all pass now.
+
+**This follow-up (`d4c9a69e`):**
+- In the four `tests/test_event.py` tests, the expected `event_types` is now `[CredentialType.PIN]` in place of `sorted(MANAGED_CREDENTIAL_TYPES)`.
+- Only one of their docstrings, in `test_event_types_names_credential_kinds_and_never_locks`, named `MANAGED_CREDENTIAL_TYPES` as the floor. It now says these locks take only PINs, so the floor is a PIN, which `use_credential` reports, plus the types each lock takes.
+- `test_a_restored_use_does_not_widen_the_vocabulary` says "the floor" without naming it, so I left it alone.
+- The `MANAGED_CREDENTIAL_TYPES` import is gone from `tests/test_event.py`. Nothing else in the four tests changed.
+
+**Tests:**
+
+| Run | Passed | Failed | Other |
+|---|---|---|---|
+| `tests/test_event.py` | 16 | 0 | |
+| Step 10 set plus `test_lock_store.py` | 664 | 0 | 2 xfailed |
+| Wider set, last run before this test-only commit (2440 serially, no xdist) | 2440 | 0 | 2 skipped, 9 xfailed |
+
+prek passed on the file and at commit, mypy included.
+
+**Mutation results for Task 6 and the event-floor change:**
+
+| Mutation | Tests that failed |
+|---|---|
+| Writable filter dropped from `managed_credential_types` | both `test_a_lock_without_passwords_*` tests |
+| Base release clears PIN only | `test_a_release_leaves_nothing_and_is_sent_once`, the 8 cases that hold a password at release |
+| `worker.forget` loop removed | `test_a_lock_that_stops_taking_passwords_lets_its_address_go` |
+| Occupancy reads PIN only | `test_a_password_alone_occupies_a_slot` |
+| Global event floor put back | exactly the 21 non-Virtual event-type tests |
+| Event floor of PIN alone | `test_a_password_is_a_kind_of_use_before_capabilities_are_read` (and, before this commit, the four tests above) |
+
+Each file was restored in a `finally`, and I checked it afterwards.
+
+**Commits, all on `feat/password-model`, none amended:**
+- `dc76cb10` feat: keep passwords in sync on the locks that take them
+- `525182c2` fix(event): floor a slot's event types with the types its locks take
+- `d4c9a69e` test(event): expect a PIN-only lock's event types floored at PIN
+
+**Two things you may want to tidy:**
+- The docstring of `test_event_types_unions_what_the_entrys_locks_advertise` (around line 206 of `tests/test_event.py`) still says "the managed set is a floor under the union". It isn't one of the four tests, so I didn't touch it, but the floor is now PIN plus each lock's types.
+- The existing Virtual test `test_event_entity_records_against_the_virtual_lock` still expects `sorted(set(MANAGED_CREDENTIAL_TYPES) | set(caps.credential_types))`. It passes, because Virtual's capabilities cover every type, but it still names the old global floor.
+
+`.entire/.gitignore` was never staged.</result>
+<usage><subagent_tokens>176215</subagent_tokens><tool_uses>19</tool_uses><duration_ms>552150</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a049eadd6de61bafa</task-id>
+<tool-use-id>toolu_01U7fmTwuAMFjU1YhyeMtkxN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a049eadd6de61bafa.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement PR 2a Task 6" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status: DONE.** The required fix and all five minors are in one new commit, `87821888`; nothing was amended. All tests pass and both mutations fail the tests they should.
+
+**Required fix:** `_start_from` in `tests/providers/virtual/test_passwords.py` now takes the entry and sets the starting values through `async_want(..., {CredentialType.PIN: pin, CredentialType.PASSWORD: password})`. It then awaits `worker.settled()` and asserts the lock holds `(pin, password)`. That assert stays permanently, and the `_data` editing and its comment are gone.
+
+I also added a temporary print to confirm it isn't vacuous. The four starting states are real, including `None, REDACTED → {'name': 'slot1', 'password': 'REDACTED'}` and `9999, REDACTED → {'code': '9999', 'password': 'REDACTED'}`. The print is removed; the file was restored from a backup and I checked for leftover prints.
+
+**Minors:**
+- **`model/credentials.py`:** the `CredentialType` docstring paragraph is reflowed; the 95-character line is gone.
+- **`ha/services.py`:** the `_managed_credential_type` summary now says "cannot store".
+- **`tests/test_event.py`, line 206:** "the managed set is a floor" now reads "a PIN and the types each lock takes are a floor under the union, not a cap on it".
+- **`tests/providers/virtual/test_e2e.py`:**
+  - Both assertions now expect `sorted({CredentialType.PIN} | lock.managed_credential_types | set(lock.cached_capabilities.credential_types))`.
+  - The comment now says "on top of the types it takes".
+  - The `MANAGED_CREDENTIAL_TYPES` import is gone.
+- **New guard test:** `TestPasswordsKeptPerLock::test_a_release_in_flight_is_kept_when_the_lock_stops_taking_its_type`.
+  - It needed no hacks: `async_give_up` marks every address in the slot `release=True` synchronously.
+  - The test gives slot 1 up and asserts the password address is releasing. With nothing awaited in between, it patches Virtual's `writable_credential_types` to PIN only, calls `async_want`, and asserts the password address is still tracked and still releasing.
+
+**Tests:**
+
+| Run | Passed | Failed | Other |
+|---|---|---|---|
+| `tests/providers/virtual` | 91 | 0 | 1 xfailed |
+| Step 10 set plus `test_lock_store.py` (includes `tests/providers/virtual`) | 665 | 0 | 2 xfailed |
+
+prek passed on the changed files and at commit, and `prek run mypy --all-files` passed.
+
+**Mutations** (`/tmp/lcm-pr2a-t6/mutate_review.py`, restoring in a `finally`; `git status` and greps confirmed both files were restored):
+- **`not current.release` guard removed from the forget loop in `async_want`:** the new guard test fails, and the other 3 tests in the class pass.
+- **Base release clears PIN only, rerun on the fixed property test:** `test_a_release_leaves_nothing_and_is_sent_once` fails in 8 of 16 cases. Those are the cases with `pw_want="new pw"`, the only ones holding a password when the release runs. In the other 8 the password was already cleared by the want before the release.
+
+**Files changed** (in `/Users/raman/projects/lock_code_manager/.worktrees/password-model/`):
+- `custom_components/lock_code_manager/ha/services.py`
+- `custom_components/lock_code_manager/model/credentials.py`
+- `tests/providers/virtual/test_passwords.py`
+- `tests/providers/virtual/test_e2e.py`
+- `tests/test_event.py`
+
+**Task 6 commits on `feat/password-model`:** `dc76cb10`, `525182c2`, `d4c9a69e`, `87821888`. `.entire/.gitignore` was never staged.</result>
+<usage><subagent_tokens>192084</subagent_tokens><tool_uses>11</tool_uses><duration_ms>154868</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a987b45232e81d27d</task-id>
+<tool-use-id>toolu_01Junf9XD3L6Cp8NpXXQT8vw</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a987b45232e81d27d.output</output-file>
+<status>completed</status>
+<summary>Agent "Review PR 2a Task 6" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**APPROVED.** Commit 87821888 fixes the one required finding and all five minors. Nothing new turned up.
+
+**The required fix: the starting state is now real.** `_start_from` now puts the starting values on the lock through `async_want`, waits for the lock to settle, and asserts the lock holds them. I reran my probe with a temporary test file, since removed:
+
+| Starting values asked for (PIN, password) | Lock held after `_start_from` |
+|---|---|
+| `None`, `"REDACTED"` | `(None, 'REDACTED')` |
+| `"9999"`, `"REDACTED"` | `('9999', 'REDACTED')` |
+| `"9999"`, `None` | `('9999', None)` |
+| `None`, `None` | `(None, None)` |
+
+So a password-before case really does start with a password. All 16 cases are now distinct, and the kept assertion stops them collapsing again.
+
+**Mutations rerun.** My script restores each file in a `finally`, and `git status` afterwards shows only `.entire/.gitignore`.
+- **Base release clears PIN only:** killed. The 8 `test_a_release_leaves_nothing_and_is_sent_once` cases that want a password fail. The cases with a password before but none wanted pass under the mutation, which is correct: the want already cleared the password before the release.
+- **No `not current.release` guard in the forget loop:** killed by the new `test_a_release_in_flight_is_kept_when_the_lock_stops_taking_its_type`.
+
+**The five minors:**
+- The `CredentialType` docstring is reflowed.
+- The `_managed_credential_type` summary now says "store".
+- The `test_event.py` docstring describes the new floor.
+- Both Virtual event-type expectations are spelled `{PIN} | lock.managed_credential_types | caps`. The comment says "the types it takes", and the unused `MANAGED_CREDENTIAL_TYPES` import is gone.
+- The guard test described above is new.
+
+**Checks:** `tests/providers/virtual`, `tests/test_event.py` and `tests/test_services.py` give 195 passed and 1 xfailed. `prek run mypy --all-files` passes, and `prek run` on the changed files reports nothing.</result>
+<usage><subagent_tokens>130313</subagent_tokens><tool_uses>3</tool_uses><duration_ms>42577</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a211ae30e41f1d992</task-id>
+<tool-use-id>toolu_01AxNnb6TSmXhqyG6BGsVcKB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a211ae30e41f1d992.output</output-file>
+<status>completed</status>
+<summary>Agent "Whole-branch review of PR 2a" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**APPROVED.** Commit 636bb9c9 fixes Important 1, and I found no release path where `release_again` sends a release it shouldn't or misses one it should.
+
+**What I checked**
+- **Mutation:** with the `worker.port.release_again(slot)` call at `ha/runtime.py:1026` replaced by `pass`, `test_a_resumed_release_goes_to_the_provider_again` fails. Restored from a backup in a shell `trap`; `git status` shows only `.entire/.gitignore`.
+- **Targeted suites** (Virtual, services, runtime, adapter, repairs references, lock store, sync, properties): 660 passed, 1 xfailed.
+- **Full suite on 636bb9c9:** 3443 passed, 3 failed. The failures are the same three pacing tests as last time. They pass serially and when run under xdist by themselves. A full xdist run of an export of origin/main (c1052c37) fails the same three plus one more, so they are pre-existing load flakiness, not this branch.
+- **Regression test:** it covers my probe scenario (a release that leaves the password behind, then acknowledging the repair) and now asserts a second provider release and an empty slot.
+
+**The other release paths**
+- **Locks other than Virtual:** each slot has one address, so a resumed clear re-sent the release before this branch too. `release_again` only drops the slot from `_released`, which is empty on those paths, so nothing changes.
+- **When a second release can actually go out:** `worker.resume` sets `seen=None`, so the slot is read before anything is decided. A release goes to the provider again only if the read finds something still there. A type that the first release already removed reads empty and sends nothing, so Matter or Z-Wave can't get a spurious `written=True` second release. The original `written` flag in `_written` is kept for the re-send.
+- **Startup resumes (`_owed`):** these only reach `release_again` if a slot was given up during startup on a running worker. Even then the read-first rule above applies.
+- **A slot re-claimed mid-release:** `async_want` takes the slot out of `releasing`, so the gate at `runtime.py:1025` skips `release_again` and the resumed clears are plain ones. A leftover `_released` entry is harmless because `release()` discards it on the next give-up.
+- **No worker (`write_once` path):** it goes through `_begin_release`, then `release()`, which already resets `_released`.
+- **Re-pair rebuild:** it builds a new port, so the old `_released` set goes with the old worker.
+- **Plain holds:** a held address that isn't in release leaves the slot out of `releasing`, so `release_again` doesn't fire.
+
+**The minor findings**
+- **Minor 1 (the write-timing log line now names the type):** accepted, to be mentioned in the PR body.
+- **Minor 2:** the refusal says "yet" only for password (`ha/services.py:189-194`), and the tests now match the full messages.
+- **Minor 3:** the stale PIN-only comments are rewritten in `model/credentials.py`, `providers/_base.py`, `ha/runtime.py` and `__init__.py`. They now state intent and none narrate history.
+
+The notes for 2b and PR 4 from my first review still stand. The one this fix touches: in PR 4 the Z-Wave release override must remove the password itself. A slot it leaves now goes to a repair whose acknowledgement re-sends the release, so it is recoverable, but only after the repair is acknowledged.</result>
+<usage><subagent_tokens>203963</subagent_tokens><tool_uses>8</tool_uses><duration_ms>312004</duration_ms></usage>
+</task-notification>
+
+---
+
+Run review on PT
+
+---
+
+yes
+
+---
+
+yes
+
+---
+
+run one more review
+
+---
+
+keep it deferred
+
+---
+
+1770 merged
+
+---
+
+1
+
+---
+
+<task-notification>
+<task-id>af2d9a8af55673ffd</task-id>
+<tool-use-id>toolu_01Kmfrm3tSjt9qhcWoWkyJPL</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/af2d9a8af55673ffd.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 6: duplicates" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE. Task 6 is committed as `df798649`, with your decisions applied. The three duplicate tests now create their duplicates through the configuration, and every expected value is unchanged.
+
+**What I implemented**
+- In `ha/slot_coordinator.py`, `async_request_credential_update` now refuses a non-empty value when two things are true:
+  - it differs from what this user already holds, and
+  - another configured user holds the same value as the same type.
+- That check is a new method, `_refuse_duplicate`. It raises `ServiceValidationError("&lt;other user&gt; already has this &lt;PIN|Password&gt;")`, which names the user and never the value. Turned-off users count, as you decided.
+- New helper `async_write_slot_pin(hass, entry, slot_num, pin)` in `tests/common.py`. It writes a PIN through the production configuration write (`async_write_entry_config` with `with_slot_field_set`), skipping the entity's checks, and then waits for Home Assistant to settle.
+
+**Tests**
+- New, in `tests/test_slot_coordinator.py`:
+  - `test_another_users_pin_is_refused`
+  - `test_an_unchanged_pin_shared_with_another_user_is_left_alone` (now uses the helper and checks that slot 2 really holds `1234` first)
+  - `test_a_turned_off_users_pin_is_refused`
+- New, in `tests/providers/virtual/test_password_config.py`: `test_another_users_password_is_refused` and `test_a_password_may_equal_a_pin`.
+- Rewritten to create the duplicate through the configuration, with the docstrings changed as you asked:
+  - `tests/test_lock_runtime.py::test_a_pin_another_user_has_on_the_lock_turns_the_slot_off`
+  - `tests/test_lock_runtime.py::test_moving_a_pin_from_a_slot_turned_off_is_not_a_duplicate`
+  - `tests/providers/zwave_js/test_e2e.py::TestDuplicates::test_swapping_two_users_pins_recovers_once_both_are_set`
+- Each rewritten test still reaches its scenario at the lock, because its unchanged assertions depend on it:
+  - Test 1 still gets the `slot_disabled` repair, so the lock's duplicate check fired.
+  - Test 2 still finds `1234` in slot 2 on the lock.
+  - The swap test still sees slot 1 turned off with `slot_disabled` after the first write, then recovers.
+- PIN changes in tests that were about something else (no expected value changed):
+  - `tests/test_text.py::test_pin_entity_surfaces_lock_bounds`: `"1234"` became `"4321"`.
+  - `tests/test_switch.py::test_switch_entity`: `"1234"` became `"5678"`.
+
+**Results**
+- Before the change, the two `another_users_*` tests failed with `DID NOT RAISE`.
+- `tests/test_slot_coordinator.py tests/providers/virtual tests/test_lock_runtime.py tests/providers/zwave_js/test_e2e.py tests/test_text.py tests/test_switch.py`: 353 passed, 5 xfailed.
+- Full suite in parallel: 3478 passed and 3 failed. The three failures are paced tests that wait on real time:
+  - `test_binary_sensor::test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced`
+  - `zwave_js test_e2e::TestPacing::test_writes_at_startup_are_spaced`
+  - `test_harness::test_a_paced_test_keeps_the_real_delay_between_operations`
+
+  Run serially, all three passed in 5 of 6 runs; one serial run had one of them fail. They are intermittent timing failures, not caused by this change, but they are not quite parallel-only.
+- `prek` passes on all eight files, including `mypy --all-files`. `ruff` fixed one import order in `test_e2e.py`.
+
+**Mutation checks** (`/tmp/lcm-t6/mutate.py`, restores the file in `finally`)
+
+| Mutation | Test that failed |
+|---|---|
+| (a) The "differs from what this user holds" guard removed | `test_an_unchanged_pin_shared_with_another_user_is_left_alone` |
+| (b) Values of every type compared, not just the same type | `test_a_password_may_equal_a_pin` |
+| (c) Turned-off users skipped (`and slot_config.get(CONF_ENABLED)`) | `test_a_turned_off_users_pin_is_refused` |
+
+The source file was confirmed restored before committing: `git diff` showed only the intended 26 lines.
+
+**Files changed** (all under `/Users/raman/projects/lock_code_manager/.worktrees/password-config/`)
+- `custom_components/lock_code_manager/ha/slot_coordinator.py`
+- `tests/common.py`
+- `tests/test_slot_coordinator.py`
+- `tests/providers/virtual/test_password_config.py`
+- `tests/test_lock_runtime.py`
+- `tests/providers/zwave_js/test_e2e.py`
+- `tests/test_text.py`
+- `tests/test_switch.py`
+
+**Where I differed from the task text**
+- `write_entry_config` takes a whole old-shape configuration mapping, not a lambda. Instead of building that mapping in four places, I added `async_write_slot_pin`, which uses the same production write path. That helper is a new file change the task didn't list.</result>
+<usage><subagent_tokens>129790</subagent_tokens><tool_uses>16</tool_uses><duration_ms>271300</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adff0bf71885a5118</task-id>
+<tool-use-id>toolu_01RpZyKvPWf9zJHmjQsuuJ2r</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/adff0bf71885a5118.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 7: password text entity" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE_WITH_CONCERNS
+
+Both review findings are fixed in a new commit, `1c0cdc9a`, on top of `06a2cb0e` (no amend). New tests fail without the fixes, every mutation was caught, and the tests, `prek` and `prek run mypy --all-files` all pass.
+
+**Finding 1 (High): values over 255 characters**
+- `credential_value_error` in `model/credentials.py` now refuses any value longer than Home Assistant's `MAX_LENGTH_STATE_STATE` (verified: `homeassistant.const`, value 255). It applies to every type, PIN included, and is checked before the character rule.
+- The message names the label and the limit, never the value: "PIN may be at most 255 characters" or "Password may be at most 255 characters". The label comes from `CREDENTIAL_LABELS` in the package's `const.py`. That file imports `model` only under `TYPE_CHECKING`, so there is no import cycle, and `test_architecture` passes.
+- The coordinator's `async_request_credential_update` already calls the validator for every non-empty value of either type, so it needed no change.
+- New tests:
+  - `tests/test_credentials.py::test_a_credential_fits_in_a_state`, for PIN and password: 255 characters accepted, 256 refused, and the value is not in the message.
+  - `test_a_password_longer_than_a_state_is_refused`: a 300-character password through the coordinator raises `ServiceValidationError`. Nothing is stored in the configuration or on the Virtual lock, and the marker is in neither the error nor `caplog.text`. Before the fix it failed with "DID NOT RAISE".
+- The `LockCodeManagerCredentialText` docstring now says plainly that Home Assistant caps a text entity at 255 characters, and that `text.set_value` refuses a longer value before our code runs, with an error that quotes it. That is a Home Assistant limit this integration cannot close.
+
+**Finding 2 (Medium): the "last password lock" guard**
+- New test `test_the_password_entity_stays_while_a_password_lock_remains`. I found no existing fixture for an entry with two locks, one of them Virtual. The test builds one from the existing fixtures: `virtual_lock_entity`, plus `mock_lock_config_entry`'s `lock.test_1`, which only takes PINs. The test checks that before going further.
+- It removes `lock.test_1` through the options flow and checks that both slots still have their password entity, with a state.
+
+**Optional item:** `test_text_set_value_raises_when_slot_coordinator_missing` is now parametrized over the credential entity and the name entity.
+
+**Mutation checks** (each script restores the file in `finally`; `git diff` showed only the intended changes before the commit):
+
+| Mutation | Caught by |
+|---|---|
+| Limit check changed to `&gt; 300` | the coordinator test (DID NOT RAISE) |
+| "Any lock leaves" version of `lock_removed` | the new two-lock test (`assert None is not None`) |
+| All six checks from the first commit, re-run | still caught |
+
+**Tests run:** `test_credentials`, `test_slot_coordinator`, `providers/virtual`, `test_text`, `test_services`, `test_architecture`, `test_frontend_contract`, `test_config_flow`, `properties`, `test_init`, `test_websocket` and `test_lockless_entries`. Result: 839 passed, 2 xfailed.
+
+**Concern:** the module docstring of `model/credentials.py` said it had "no Home Assistant dependencies". Importing the limit from Home Assistant, as you asked, makes that untrue, so I changed it to say the module takes only Home Assistant's state length limit. If you'd rather keep that module free of Home Assistant, the other option is a local 255 plus a test pinning it to `MAX_LENGTH_STATE_STATE`. Tell me if you want that instead.
+
+**Files changed** (all under `/Users/raman/projects/lock_code_manager/.worktrees/password-config/`):
+- `custom_components/lock_code_manager/model/credentials.py`
+- `custom_components/lock_code_manager/text.py`
+- `tests/test_credentials.py`
+- `tests/providers/virtual/test_password_config.py`
+- `tests/test_slot_coordinator.py`</result>
+<usage><subagent_tokens>168170</subagent_tokens><tool_uses>17</tool_uses><duration_ms>189527</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a068dd4fcfb0587f4</task-id>
+<tool-use-id>toolu_017YA9Megp4ZHuyVx9UUURrn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a068dd4fcfb0587f4.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 9: config flow" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+All three review points and the optional test are fixed in a new commit, `48403b13`, on top of `62bd17fd` (not amended). The three test files pass, `prek` passes, and every new mutant fails a test.
+
+**What changed** (`custom_components/lock_code_manager/config_flow.py`)
+1. **The edit form decides once whether a password is offered.**
+   - The flow keeps the answer from when the form was drawn in `self._password_offered`, set in `_async_show_reconfigure`. A submit uses that saved answer and never asks the entry again.
+   - Drawn without the field, the submit keeps the stored password. Drawn with the field, it takes what was submitted.
+   - The default is `False`, so a submit with no form behind it keeps the stored password.
+   - The `offered` parameter I had threaded through is removed.
+   - `async_step_one` needed no change: on submit it takes whatever the drawn form accepted and never asks whether a password is offered.
+2. **Password field order:** `_code_slot_schema(password)` now builds the whole form, putting Password straight after PIN (name, pin, password, enabled, condition). `CODE_SLOT_SCHEMA` is now `_code_slot_schema(password=False)`. It stays serializable: the field is a selector, not a callable.
+
+**New tests**
+- `tests/test_config_flow.py`:
+  - `test_an_edit_follows_the_form_that_was_drawn`, run both ways:
+    - `_offers_password` patched to answer `[False, True]`: the stored password survives the edit.
+    - Patched to answer `[True, False]`: the typed password is stored.
+  - `TestUserFormsOnALoadedEntry::test_the_add_user_form_has_no_password_when_no_lock_takes_one`. It runs the real setup and unload, the same way the existing `TestOptionsFlowOverlapWithLoadedEntries` class does. It first checks that the entry is loaded and offers only PINs, then that the add-user form has no Password field.
+- `tests/providers/virtual/test_password_config.py`:
+  - `test_the_password_field_follows_the_pin`
+  - `test_emptying_an_offered_password_in_the_edit_form_removes_it`
+  - `test_emptying_every_credential_of_an_enabled_user_is_refused`: gives `missing_credential_if_enabled`, and the stored password is untouched.
+
+**Test results**
+- `pytest tests/test_config_flow.py tests/providers/virtual tests/test_frontend_contract.py`: 280 passed, 2 xfailed.
+- `prek` on the changed files passed, and so did `prek run mypy --all-files`.
+
+**Mutation checks** (script `/tmp/lcm-pr2b/t9/mutate2.py`, restores the file in `finally`; afterwards the source held no mutant text). All four were killed:
+- Asking the entry again on submit made both cases of `test_an_edit_follows_the_form_that_was_drawn` fail.
+- The weakened `_offers_password` (no password-type check) made `TestUserFormsOnALoadedEntry` fail. Before this fix it passed the whole suite.
+- Moving Password after Condition made `test_the_password_field_follows_the_pin` fail.
+- Always keeping the stored password made `test_emptying_an_offered_password_in_the_edit_form_removes_it` fail.
+
+**Files changed**
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-config/custom_components/lock_code_manager/config_flow.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-config/tests/test_config_flow.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-config/tests/providers/virtual/test_password_config.py`</result>
+<usage><subagent_tokens>195505</subagent_tokens><tool_uses>11</tool_uses><duration_ms>145973</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1930271e6dd586ed</task-id>
+<tool-use-id>toolu_01PHvriBVrJDuBP6YRjuUzSn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a1930271e6dd586ed.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement Task 10: refused value" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>- **Status:** DONE. The follow-up is committed as `16d26846`, a new commit on top of `ba8e1309` (no amend).
+
+**What changed**
+- **`ha/runtime.py`:**
+  - Dropped the `_keeps_another_credential` filter from the `held` list in `async_reconcile_issues`, so every `SLOT_DISABLED` hold now raises `credential_refused`.
+  - `_on_disable` still uses the filter to decide whether to turn the slot off.
+  - Rewrote the `_HOLD_ISSUES` comment for `SLOT_DISABLED` to say the repair is raised whenever the refused credential is held, i.e. the slot was not turned off; turning it off lifts the hold.
+  - Updated the `async_reconcile_issues` docstring to match.
+- **`strings.json` / `translations/en.json`:** the `credential_refused` description now uses your wording, without the "other credentials still work" sentence. The two files are identical.
+- **`test_password_config.py`:**
+  - `test_a_refused_only_credential_turns_the_slot_off` now also asserts that `slot_suspended_{entry}_{lock}_1` is absent after settling. It passes, so the eager-task reasoning holds: once the slot is turned off, only `slot_disabled` is raised and no `credential_refused` lingers.
+  - New gap test, `test_a_refused_password_stays_reported_once_the_pin_is_cleared`:
+    - Steps: the lock refuses the password while the PIN is set, then the PIN is cleared.
+    - It checks that the slot stays enabled and the password is still held with `SLOT_DISABLED`. It also checks that the `credential_refused` issue is still raised.
+
+**Tests**
+- `tests/providers/virtual tests/test_lock_runtime.py tests/providers/zha/test_e2e.py tests/properties tests/sync`: **611 passed, 4 xfailed**, run before and after the ruff reformat.
+- `prek` on the changed files passes. `ruff format` reflowed one line in the test file and the rerun was clean. `prek run mypy --all-files` passes.
+
+**Mutation**
+- I put the filter back in the `held` list using `/tmp/lcm-t10/mutate2.py`, which restores the file in `finally`.
+- Only `test_a_refused_password_stays_reported_once_the_pin_is_cleared` failed (1 failed, 15 passed). The file was restored: `_keeps_another_credential(owner` no longer appears in it.
+
+**Files changed** in `16d26846`, under `/Users/raman/projects/lock_code_manager/.worktrees/password-config/`:
+- `custom_components/lock_code_manager/ha/runtime.py`
+- `custom_components/lock_code_manager/strings.json`
+- `custom_components/lock_code_manager/translations/en.json`
+- `tests/providers/virtual/test_password_config.py`
+
+`.entire/.gitignore` is still left uncommitted.</result>
+<usage><subagent_tokens>174085</subagent_tokens><tool_uses>6</tool_uses><duration_ms>92355</duration_ms></usage>
+</task-notification>
+
+---
+
+Yes then run review again and start on pr3 in paralllel
+
+---
+
+<task-notification>
+<task-id>afdb0fc84a77f1e25</task-id>
+<tool-use-id>toolu_019qxwyv6zGXbmsZJR42cFf3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/afdb0fc84a77f1e25.output</output-file>
+<status>completed</status>
+<summary>Agent "Research PR 3 card changes" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've written the code map to `/tmp/lcm-pr3/research.md`. It cites file:line for every point, and ends with a 13-task breakdown and 12 open design questions, each with a recommendation. I edited nothing in the repository, and the worktree is still clean.
+
+**What changes the shape of the plan:**
+
+- **Per-type sync can't come from entity states.** The per-type in-sync sensors are disabled by default (`binary_sensor.py:154-157`), so `password_in_sync` usually has no state to read. The websocket has to compute per-type status from the lock's sync worker, the same way the in-sync sensors do (`entity.py:417-462`). I recommend pulling that into one shared helper first, so the sensors and the websocket can't drift apart.
+- **`lock_codes()` and unmanaged codes are PIN-only on purpose** (`runtime.py:1114-1153`). The lock card's password list has to come from the worker's password entries for each user, which makes it managed-only automatically.
+- **The websocket payloads don't track the password entity yet** (`websocket.py:505-529`). Without that, editing a password pushes no update to the cards.
+- **Nothing tells the add-user card which types or lengths the entry allows.** It makes no websocket call today. I suggest adding the types and length ranges to `get_config_entry_data` and fetching them when the dialog opens.
+- **The lock card has no field saying which types a lock manages.** It needs a list like `credential_types` before it can decide whether to show tabs.
+- **There is no existing tab UI, and HA tab elements are off limits.** The allowed-elements test would reject any HA tab element (and it might render as nothing). Tabs have to be plain `&lt;button role="tab"&gt;` elements styled in `shared-styles.ts`.
+- **Ordering trap:** sorting the entry's types by name puts password before PIN. Tabs need PIN first explicitly.
+- **Length ranges** reach no card today. They exist only in each lock's capabilities, so they need a new helper that intersects the ranges across locks. The slot card hint and the generator would both use it. Virtual locks report no limit, so the 255-character cap applies.
+
+**Bugs PR 3 would introduce if the plan doesn't handle them:**
+
+- **A long password would leak onto the screen.** The slot card writes through `text.set_value`. Home Assistant rejects anything over 255 characters with the value itself in the error, and the card shows `err.message` in its error banner (`slot-card.ts:1477`). The fix is `maxlength=255` on the input or a check before sending.
+- **The slot card trims what you type** (`slot-card.ts:73-76`). That has to stay for the PIN and be skipped for a password (spec decision 7).
+- **The lock card labels chips "Slot N".** On Z-Wave a password's position on the lock is not the slot number, so password chips should lead with the user's name.
+
+**The generator.** `generate_pin` takes no config entry, so it can't know any lock's range.
+- **Callers:**
+  - The add-user card (`add-user-card.ts:481-515`) and its test (`add-user-card.test.ts:300`).
+  - Three wiki pages with guest-automation examples that read `response.pin`: `Services-and-Actions`, `Custom-Cards`, `Managing-Guests-and-Rentals`.
+  - `TODO.md:15`.
+  - No blueprint, `README.md` or `BLUEPRINTS.md` mentions it.
+- **Recommendation:** user automations call it, so keep `generate_pin` unchanged with no deprecation, and add `generate_credential` with an optional config entry.
+- **One call for Raman:** I suggest generated passwords leave out the space character, which differs from the spec's "printable ASCII".
+
+**Blueprints and services:**
+- `slot_usage_limiter.yaml:198` counts only `event_type == 'pin'`. Since disabling a slot now removes the password too, a password use should spend one. Its test (`test_blueprint_behavior.py:772`) needs a password case.
+- `credential_used.yaml:38` should list `password`.
+- `services.yaml` already accepts password for `add_user`, `set_credential` and `clear_credential`.
+- In the old entities-card view, the password entity sorts above the name, because `KEY_ORDER` has no `'password'`.
+
+**Contracts:**
+- `CREDENTIAL_LABELS` already includes password on both the Python and TS sides. But no test compares them, even though the spec says one does, so I put one in the plan.
+- The add-user contract test parses the literal `callService('lock_code_manager', 'add_user'` and allows only certain top-level keys, so that call has to keep its shape.
+- One websocket shape test asserts the slot card's entity ids exactly (`test_websocket.py:1690-1696`), so it breaks as soon as `entities.password` is added.
+
+**TS tests:**
+- The tests can run in this worktree without installing anything. The main checkout's `node_modules` matches (identical `package.json` and `yarn.lock`), and running `vitest run` through it passed 18 files and 716 tests in 1.7 seconds.
+- Don't run `yarn build` as it stands, because it runs `yarn install` first.
+- The bundle `www/generated/lock-code-manager.js` is committed, and CI fails if the tree is dirty after a build. So every TS commit has to include the rebuilt bundle, and pre-commit skips the yarn build and lint steps.
+- The Bombadil leak check matches PINs with a digit-boundary pattern. It needs a separate plain substring check for passwords, which contain regex special characters.</result>
+<usage><subagent_tokens>284184</subagent_tokens><tool_uses>74</tool_uses><duration_ms>494259</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a422846c6c1935b13</task-id>
+<tool-use-id>toolu_015GqGx6wwxq9wjC2iuBbKo7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a422846c6c1935b13.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #1772 review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE_WITH_CONCERNS
+
+I made five commits on `feat/password-config` in `/Users/raman/projects/lock_code_manager/.worktrees/password-config`. Nothing is pushed and nothing is amended. The full suite and `prek run --all-files` pass.
+
+**What I implemented, one commit per item**
+
+1. **`d2603470`** `fix(text): act on a lock leaving the entry, not on an unload`
+   - `lock_removed` in `text.py` now returns early unless `config_entry.state is ConfigEntryState.LOADED`.
+   - The signal is right. A probe recorded the entry's state each time the lock-removed handlers ran:
+     - During a reload's unload it was `UNLOAD_IN_PROGRESS`. Home Assistant sets that state before it calls `async_unload_entry`.
+     - During an options-flow lock removal it was `LOADED`.
+   - The reauth save of a failed entry also calls `async_release_locks`. On such an entry the text platform never registered its handler, so the guard doesn't affect that path.
+   - New test `test_a_reload_leaves_the_password_entities_to_the_slot_teardown` spies on `EntityCallbackRegistry.async_remove_entity` during a reload of the Virtual entry. `test_the_password_entity_leaves_with_the_last_password_lock` still passes.
+
+2. **`89c2a55b`** `fix(credentials): refuse a password made only of spaces`
+   - `credential_value_error` now refuses a password that is empty after `strip()`, with "Password must not be blank". The password itself is still kept as typed.
+   - I checked each path that uses the validator:
+     - The coordinator, which the text entity and `set_credential` go through.
+     - `add_user`.
+     - The config flow form, which maps the error to `invalid_password`.
+     - The config flow YAML, which reports `invalid_config` like every other rule failure on that path.
+   - Tests:
+     - In `tests/test_credentials.py`, `"   "` and `" "` are refused and `" a "` is accepted.
+     - A coordinator path test.
+     - A subentry form test that expects `invalid_password`.
+
+3. **`0013ab5a`** `fix(repairs): keep the text of a leftover pin_required repair`
+   - The `issues.pin_required` block from `eca7020b` is back beside `credential_required`, and I copied `strings.json` to `translations/en.json`.
+   - No test checks that every issue translation is raised somewhere, so no exception was needed.
+   - New test `test_a_leftover_pin_required_issue_keeps_its_text` loads the translations through Home Assistant. It checks that each part exists and uses only the placeholders the older release raised the issue with.
+
+4. **`caa5be49`** `fix(services): let the flat add_user shape carry a password`
+   - Added `CONF_PASSWORD` to `_FLAT_USER_FIELDS`.
+   - New test: a flat `add_user` call with `name` and `password` adds the user, enabled, with that password.
+
+5. **`31cdae3c`** `refactor(credentials): read a user's credentials once per update`
+   - The comment in `services.py` now says "the credential".
+   - `async_request_credential_update` reads `credential_values` once and replaces the `remaining` dict with an any-other-type check. Behaviour is unchanged and the existing tests pass.
+
+**Tests**
+- The seven targeted files you listed: 652 passed, 2 xfailed.
+- Full suite with `-n auto`: 3539 passed, 3 skipped, 14 xfailed, 3 failed. The three failures were exactly the known paced flakes (`TestPacing::test_writes_at_startup_are_spaced`, `test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced`, `test_a_paced_test_keeps_the_real_delay_between_operations`). Re-run on their own: 4 passed.
+- `prek run --all-files`: all 21 hooks passed. Yarn lint passed too, so there was nothing to ignore.
+
+**Mutation checks** (script in `/tmp/lcm-pr2b-fix/mutate.py`, restores the file in `finally`; I checked with `git diff` after each run that the file was restored)
+1. Replaced the LOADED guard with `pass`: the new reload test failed.
+2. Changed `if not value.strip():` to `if False:`: all 4 new blank-password tests failed.
+3. Renamed `pin_required` in `en.json`: the new translation test failed.
+4. Removed `CONF_PASSWORD` from the flat fields: the new flat-shape test failed.
+5. Inverted the any-other-type predicate: 7 existing coordinator and password tests failed, so they do guard the refactor.
+
+**Where I went beyond or against the task text**
+- **An existing test's expected value changed.** `test_a_printable_password_is_accepted` listed `" "` as an accepted password. The new rule refuses it, so I moved `" "` into the refused test and put `" a "` in the accepted list. Item 2 requires this change.
+- **I reworded the `invalid_password` message** in both places in `strings.json`. It now starts "Password must not be blank, may only contain…". Without that, a user who typed only spaces would be told about allowed characters, which doesn't explain the refusal.
+- **I fixed the existing test `test_a_leftover_pin_required_issue_is_deleted_at_setup`.** It raised its leftover issue with `translation_key="credential_required"`, but the older release used `"pin_required"`. Its assertion is unchanged.
+- **I reworded the comment on `_FLAT_USER_FIELDS`**, because the flat shape now takes a field that didn't exist before 6.0.
+
+**Concern, not fixed (decision for you)**
+- `set_credential` refuses a blank PIN because "clearing is its own action". It has no such check for a password: `set_credential(password, "")` reaches the coordinator as an empty value and quietly clears the password, and disables the user if that was their only credential. The new blank rule doesn't reach this, because an empty value never goes through the validator. Making the PIN guard in `ha/services.py` (around line 243) cover every type would close it.
+
+Files changed:
+- `custom_components/lock_code_manager/text.py`
+- `custom_components/lock_code_manager/model/credentials.py`
+- `custom_components/lock_code_manager/strings.json`
+- `custom_components/lock_code_manager/translations/en.json`
+- `custom_components/lock_code_manager/__init__.py`
+- `custom_components/lock_code_manager/ha/services.py`
+- `custom_components/lock_code_manager/ha/slot_coordinator.py`
+- `tests/test_credentials.py`
+- `tests/test_slot_coordinator.py`
+- `tests/providers/virtual/test_password_config.py`</result>
+<usage><subagent_tokens>144607</subagent_tokens><tool_uses>56</tool_uses><duration_ms>495850</duration_ms></usage>
+</task-notification>
+
+---
+
+Do another review in parallel of 3b. I suspect this one needs a rethink
+
+---
+
+<task-notification>
+<task-id>acc37d18ed6f6521d</task-id>
+<tool-use-id>toolu_01LdjrPpGF84Aj7Yj5XC5vLS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/acc37d18ed6f6521d.output</output-file>
+<status>completed</status>
+<summary>Agent "Design review of 3b cards" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I recommend rethinking the card UI: drop tabs from all three cards. Most of the 3a backend direction holds, but trimmed. The review is in `/tmp/lcm-pr3/3b-design-review.md`, with file:line citations against `.worktrees/password-cards` at `31cdae3c`.
+
+- **Slot card: one row per credential type instead of tabs.** A PIN-only install gets one row with today's markup, so the existing tests stay as they are.
+  - **Why not tabs:** they hide a pending password and need a hand-built accessible tab widget, since no `ha-*` tab element is allowed. For two types they save about no height over two rows. They also assume every type is a typed value, which won't fit RFID/NFC credentials that are learned rather than typed.
+  - **What the rows need:** a status icon only when a type is out of sync and more than one type exists. A password row also needs smaller type, `white-space: pre`, no trim, `maxlength=255` (on the PIN input too), and mobile `autocapitalize`/`autocorrect` turned off.
+  - **Masking rule (required):** while one row is being edited, the other rows stay masked. The card-wide reveal used for editing would otherwise show the password while the PIN is edited (`slot-card.ts:551`, `:1379`).
+- **Lock card: no Password tab.** It can't list unmanaged passwords and passwords have no position, so a tab would just repeat the slot cards. Instead, each managed chip gets a one-line password status ("Set", "Not set", or a sync icon), with no value and no reveal.
+  - **A bug the spec missed:** on a password lock, the chip's PIN pending clock and its configured-PIN stand-in use the combined in-sync sensor (`websocket.py:664-667`, `lock-codes-card.ts:732-740`, `:779-781`). A pending password therefore marks the PIN, so "the PIN tab is today's card" is already untrue.
+  - **Why passwords can't be left off entirely:** a password-only user already shows up as an unexplained "—" chip.
+- **Add-user card:** two plain fields. The PIN field stays as today. A Password field with a generate button and no length box appears only when the entry offers passwords. The card learns the types from `get_config_entry_data`.
+- **3a payload changes:**
+  - Keep `available_types`, and add `credentials[type]` with `value | length` and `state`. Drop `in_sync` and `min_length`/`max_length`: no password lock has a length range before PR 4, since Virtual reports 0/0.
+  - Add `entities.password`, and add the password entity to the tracked set. Without that, password edits never push an update.
+  - Replace `subscribe_lock_codes`' separate `credentials.password` list with a per-slot `credentials: {pin: REDACTED}, password: REDACTED, configured}}`, sent only on locks that take more than PIN.
+  - Add an ordered `credential_types` list to `get_config_entry_data`, without ranges.
+- **Overbuilt, cut it:** the tab widget, the lock-card tab, length ranges and hints, the password length box, and the nightly Bombadil password property (a vitest DOM leak test covers it).
+- **Main risks:** the masking rule while editing, the 255-character leak, and whether the `generate_pin` deprecation repair fires when the card calls it. That last one needs deciding before 3b plans the generator.</result>
+<usage><subagent_tokens>172912</subagent_tokens><tool_uses>32</tool_uses><duration_ms>347502</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a229c7f3db5786f58</task-id>
+<tool-use-id>toolu_01RDuhxXKEj3CXbdukGP9eAb</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a229c7f3db5786f58.output</output-file>
+<status>completed</status>
+<summary>Agent "Draft PR 3a implementation plan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The 3a plan is written: `/Users/raman/projects/lock_code_manager/docs/superpowers/plans/2026-10-25-password-pr3a-card-backend.md`. Nothing in the repo was edited or committed. It follows the 2b plan's format, adds a "Payloads 3b reads" block as the hand-off contract, and checks fixtures, entity ids and line numbers against the worktree at `31cdae3c`.
+
+**Tasks** (9 to implement, plus a final whole-branch task; one commit each):
+1. **Generator:** rename `model/pin_generator.py` to `model/credential_generator.py` and add `generate_credential(type, length)`. Passwords use 0x21-0x7E, default 12; the PIN path is unchanged.
+2. **Length range:** add `credential_length_bounds` and `credential_length_range` in `ha/entry.py` (intersection, capped at 255) and `ordered_credential_types` (PIN first). The slot coordinator's length check now loops over the same bounds helper.
+3. **`generate_credential` action:** type, optional length, optional entry. With an entry it clamps into that entry's range, and errors name the range, never a value.
+4. **`generate_pin` deprecated:** it raises the `generate_pin_deprecated` repair on every call; its schema and `{"pin"}` response are unchanged.
+5. **Shared sync status (refactor, no behaviour change):** `SyncState`, `furthest_sync_state` and `slot_sync_state` move into `ha/runtime.py`, used by the in-sync sensors and the websocket. The existing tests are the oracle.
+6. **`subscribe_code_slot`:** adds `available_types`, `credentials`, and a tracked `entities.password`; keeps top-level `pin`/`pin_length`.
+7. **`subscribe_lock_codes`:** adds `credential_types` and `credentials.password` from the worker's password addresses with the owner check; `slots` is unchanged. `lock_codes` takes a type parameter instead of a second function.
+8. **`get_config_entry_data`:** adds `credential_types` with each type's range.
+9. **Blueprints and contracts:** the limiter counts a password use (with a test); `credential_used.yaml` and `BLUEPRINTS.md` list password; `KEY_ORDER` and `_BACKEND_KEYS` get password; a `CREDENTIAL_LABELS` contract test; the bundle is rebuilt.
+10. **Whole branch:** full suite, coverage, review, a local 3b carryover note, and the PR against `feat/password-config`.
+
+**Decisions beyond your four:**
+- **Range uses the length check's locks:** the same locks `_validate_credential_length` checks, not the research's `managed_credential_types` filter. Otherwise the generator could pick a length the coordinator refuses.
+- **Generator's own lengths:** PIN stays 4-12; password is 1-255 with no 8-64 floor. The entry's locks narrow it, and the default is 12.
+- **`generate_credential` response:** returns `{"value": ...}`; any kind other than pin or password is refused by name, as `set_credential` does.
+- **Deprecation repair is not fixable and not persistent:**
+  - The repo has no deprecated-action precedent; `number_of_uses` was a config field with an acknowledge flow.
+  - An acknowledge flow deletes the issue, so the next automation run would raise it again. An issue you ignore stays ignored when raised again.
+  - Not persistent means it clears after a restart once nothing calls `generate_pin`.
+  - No Breaking Change section, since `generate_pin` still works.
+- **Rename the generator module** (research Q4): it's internal, so no shim.
+- **Per-type key is `sync_status`, not the spec's `state`:** it reuses the slot card's existing words, plus `unknown`.
+- **Values come from the text entity states**, as `pin` does today, so `credentials.pin` always matches `pin`.
+- **`subscribe_lock_codes.credentials` shape:** one list per non-PIN type (`{}` on a PIN-only lock), with rows shaped like `slots` rows so 3b can reuse one chip type.
+- **Isolated tracking test:** it edits the password of a user who is off, with the lock-change signal patched out. An edit on an enabled user also pushes updates through that signal and the in-sync sensor, so it would pass even if the password entity weren't tracked.
+- **`KEY_ORDER` is 3a's only TypeScript change**, since you listed it; it needs a bundle rebuild.
+- **The add-user card keeps calling `generate_pin` until 3b**, so it raises the deprecation repair on this branch alone. Both PRs ship in the same release.
+
+**Where the research was wrong:**
+- **Branch and head:** it describes branch `feat/password-cards` at `0f728831`; the real branch is `feat/password-cards-backend` at `31cdae3c`.
+- **Range filter:** filtering by `managed_credential_types` would disagree with the length check, which uses every lock whose capabilities give a range.
+- **Imports from `model/`:** it says `model/` can't import Home Assistant. It can (`credentials.py` imports `homeassistant.const`); it only can't import `ha/` or `providers/`.
+- **Its proposed tracking test** (a password edit pushes an event) would pass with the entity untracked.
+- **`BLUEPRINTS.md`** also says only a PIN use spends one (lines 48, 299, 311-315); the research only flagged the YAML.
+- **`_BACKEND_KEYS`** is missing `password_in_sync` as well as `password`.
+- **The `const.py` comment** claims `test_frontend_contract` checks `CREDENTIAL_LABELS`; no test does, which the research correctly found. Task 9's test makes the comment true.</result>
+<usage><subagent_tokens>360091</subagent_tokens><tool_uses>75</tool_uses><duration_ms>1113715</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a229c7f3db5786f58</task-id>
+<tool-use-id>toolu_01Nw4mq8CopbEjx8CCkdd7jr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a229c7f3db5786f58.output</output-file>
+<status>completed</status>
+<summary>Agent "Draft PR 3a implementation plan" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I revised the plan in place for the no-tabs design: `/Users/raman/projects/lock_code_manager/docs/superpowers/plans/2026-10-25-password-pr3a-card-backend.md`. No repo code was edited and nothing was committed.
+
+**Revised task list:**
+1. **Generator:** rename to `model/credential_generator.py` and add `generate_credential` (passwords use 0x21-0x7E, default 12). Unchanged.
+2. **Length bounds and type order:** `credential_length_bounds` is shared by the coordinator's length check and the generator; `credential_length_range` now serves only the generator; `ordered_credential_types` puts PIN first.
+3. **`generate_credential` action:** clamps into the entry's locks' range. Unchanged.
+4. **`generate_pin` deprecated:** a repair that is neither fixable nor persistent. Unchanged.
+5. **Shared per-type sync helper:** a refactor with no behaviour change. Unchanged.
+6. **`subscribe_code_slot`:** adds `available_types`, `credentials[type] = {value | length, sync_status}`, and a tracked `entities.password`; keeps top-level `pin`/`pin_length`.
+7. **Lock card chips:** on a lock that takes more than PIN, each managed `slots` row gets `credentials: {pin: REDACTED}, password: REDACTED, configured}}`, and its `in_sync` becomes the PIN's own. This is the bug fix. PIN-only locks are unchanged.
+8. **`get_config_entry_data`:** adds `credential_types`, an ordered list with PIN first.
+9. **Blueprints and contracts:** limiter, docs, `KEY_ORDER`, the `CREDENTIAL_LABELS` test, and the bundle rebuild. Unchanged.
+10. **Whole branch:** leftovers check, leak-test checklist, 3b carryover, suite, coverage, review, PR.
+
+**What changed from the previous version:**
+- **Header and spec reference:** they now point to the adopted design review and revised decisions 8 and 9, and note the spec's "Cards" section is superseded.
+- **Lock-card leak rule:** the lock card carries no password value at all, so its leak test subscribes with `reveal: true` and checks first that the password really is on the lock.
+- **Decision 1:** no payload carries a length range. `credential_length_range` stays, but only the generator uses it; I kept it rather than inlining it so the intersection keeps its own tests.
+- **Decision 6:** I dropped the per-type `in_sync` and kept only `sync_status`, which includes `unknown` and is `null` when nothing tracks the type.
+  - The slot card falls back to `in_sync` today only because the sensor attribute leaves out `unknown`.
+  - Here `unknown` is sent explicitly, and the review's row icon shows exactly when a type isn't `in_sync`, so `in_sync` would only repeat `sync_status`.
+- **Decision 8, rewritten:**
+  - Per-chip credentials replace the password list.
+  - On multi-type locks the row's `in_sync` is the PIN's own.
+  - PIN-only rows still read the in-sync sensor and stay byte-identical.
+  - No top-level `credential_types` on the lock card.
+  - `lock_codes()` is unchanged.
+  - The owner check comes through `slot_sync_state`.
+- **Decision 11:** every Generate PIN click raises the repair on this branch alone. That's accepted because 3a and 3b ship in one release, and it's recorded for 3b.
+- **"Payloads 3b reads"** is rewritten to match all of the above.
+- **File map:** dropped `ATTR_MIN_LENGTH`, `ATTR_MAX_LENGTH` and the `runtime.py` `lock_codes` change; added `ATTR_CONFIGURED`.
+- **Task 2:** renamed. Its tests and code are unchanged, since the generator still uses both helpers.
+- **Task 6:**
+  - `min_length`, `max_length` and `in_sync` are removed from the code and tests.
+  - The tests now assert the exact key sets, so no dead field can sneak back.
+  - A `_credential_ranges` helper is replaced by `_offered_types`.
+  - A new `_hold_slot_1_password` helper is shared with Task 7.
+  - The isolated entity-tracking test is kept.
+- **Task 7, rewritten:**
+  - The password-list code, the owner test, the PIN-view test and the `lock_codes(credential_type)` change are gone.
+  - New `_chip_credential` helper and a per-type branch in `_serialize_lock_coordinator`.
+  - New Virtual test `test_a_held_password_leaves_the_pin_chip_in_sync`. It fails on today's code: it first checks the combined in-sync sensor reads off, then expects the chip's `in_sync` to be True.
+  - New Virtual test `test_the_lock_card_never_carries_a_password`, revealed.
+  - New mock-lock test `test_a_pin_only_lock_card_is_unchanged`: it sets the sensor's state apart from the worker to prove the PIN-only path still reads the sensor, and checks no `credentials` key and an unchanged top-level key set.
+  - Five mutations, each named to a specific test.
+  - The commit is titled as a `fix(...)` naming the condition the user sees.
+- **Task 8:** returns a list instead of ranges; the `_bound_passwords` dependency and its range assertions are gone; the mutation was rewritten.
+- **Task 10:**
+  - The leftovers grep now also checks no range fields remain.
+  - The leak checklist is updated.
+  - The carryover now covers:
+    - the `generate_pin` repair and the card switching to `generate_credential`;
+    - what `in_sync` means on the lock card now, including the name-row clock;
+    - `get_config_entry_data.credential_types` deciding whether the Password field shows;
+    - `maxlength="255"` replacing "cap at max_length".
+  - The PR title and body describe the lock-card fix.
+
+**One semantic consequence for 3b:** on a password lock, the lock card's name-row clock now means "PIN pending", because it reads the same `in_sync` field. 3b shows a pending password on the chip's password line, or computes "anything pending" from `credentials` if the name row should keep that meaning. This is in the carryover note.</result>
+<usage><subagent_tokens>423889</subagent_tokens><tool_uses>16</tool_uses><duration_ms>324003</duration_ms></usage>
+</task-notification>
+
+---
+
+Yes but is there not concern that we've done multiple rounds on 2b woth fixrs each time?
+
+---
+
+Keep it as is run code review again to test the convergence theoru
+
+---
+
+<task-notification>
+<task-id>a0433cdd9906bb730</task-id>
+<tool-use-id>toolu_01P2jTJKfFZxiVRBAx7ohHBv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a0433cdd9906bb730.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 1: generator" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status: DONE**
+
+**What I implemented**
+- I renamed `model/pin_generator.py` to `model/credential_generator.py` and moved its two test files with it. The rename went through the import in `__init__.py`, the import in `tests/test_services.py` and `AGENTS.md`. A search for `pin_generator` now finds nothing outside `docs/`.
+- I added `DEFAULT_PASSWORD_LENGTH = 12`, `_GENERATED_PASSWORD_CHARACTERS` (characters 0x21 to 0x7E), the `GeneratedLengths` NamedTuple, the read-only `GENERATED_LENGTHS` mapping (PIN 4-12, default 4; password 1 to `MAX_LENGTH_STATE_STATE`, default 12), and `generate_credential(type, length)`.
+  - A type the generator doesn't make, or a length outside its range, raises `ValueError`. The message names the type or the range and never a value.
+  - A PIN request is handed to `generate_pin`.
+- Tests: I added the `TestGenerateCredential` class to `tests/test_credential_generator.py` and the property `test_a_generated_password_is_one_lock_code_manager_accepts` to `tests/properties/test_credential_generator.py`, exactly as the task text gives them.
+
+**Test commands and results**
+- Step 1, the pure move: `pytest tests/test_credential_generator.py tests/properties/test_credential_generator.py tests/test_services.py -k "pin or unsafe or generate"` gave 40 passed, 74 deselected.
+- Step 3, before the implementation: both test files failed to collect with `ImportError: cannot import name 'generate_credential'`, as the task expects.
+- Step 5: `pytest tests/test_credential_generator.py tests/properties/test_credential_generator.py tests/test_services.py tests/test_architecture.py` gave 129 passed. I ran it again after the formatter and got the same result.
+- `prek run --files &lt;changed files&gt;` was clean once ruff had fixed import order and formatting, and the commit's own hooks passed. `prek run mypy --all-files` passed.
+
+**Mutation checks** (a script at `/tmp/lcm-pr3a-t1/mutate.py` that restores the file in `finally`; it printed `restored: True`, and `git status` showed only the intended changes before the commit)
+- (a) `range(0x21, 0x7F)` → `range(0x20, 0x7F)`: `test_a_password_draws_from_both_ends_of_the_set[min-!]` failed, along with the printable-ASCII test and the property test.
+- (b) `range(0x21, 0x7F)` → `range(0x21, 0x7E)`: `test_a_password_draws_from_both_ends_of_the_set[max-~]` failed.
+- (c) Removing the `generate_pin` branch: `test_a_pin_is_generated_by_generate_pin` failed.
+
+**Files changed** (commit `9cb9a2fc` on `feat/password-cards-backend`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/model/credential_generator.py` (renamed from `pin_generator.py`)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/__init__.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_credential_generator.py` (renamed)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/properties/test_credential_generator.py` (renamed)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_services.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/AGENTS.md`
+
+**Where I differed from the task text**
+- I changed the two test modules' docstrings from "PIN" to "credential" generator/generation to match the rename. The task didn't ask for this.
+- `git add -A` with the old paths fails, because `git mv` had already staged the renames, so I staged only the current paths.
+- I committed after `prek run --files` on the changed files plus `prek run mypy --all-files`, as context.md says, rather than `prek run --all-files`.
+- `.entire/.gitignore` was already modified before I started and is left unstaged.
+
+No concerns.</result>
+<usage><subagent_tokens>102535</subagent_tokens><tool_uses>13</tool_uses><duration_ms>113564</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a262b6ed3ee356f42</task-id>
+<tool-use-id>toolu_0146smfQcDixJ4CgbUycW8fT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a262b6ed3ee356f42.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 2: length bounds" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**What I implemented**
+- `ordered_credential_types(types)` in `model/credentials.py`. It sorts PIN first, then by value. I added `Iterable` to the `collections.abc` import.
+- Two helpers in `ha/entry.py`:
+  - `credential_length_bounds(entry, type)` returns `(lock, min, max|None)` for each lock whose cached capabilities give bounds for the type.
+  - `credential_length_range(entry, type)` returns `None` when the entry doesn't offer the type. Otherwise it returns (largest min, default 0) and (smallest max, capped at `MAX_LENGTH_STATE_STATE`).
+- `SlotEntityCoordinator._validate_credential_length` now loops over `credential_length_bounds`. Its docstring and the `raise` are unchanged.
+- The tests are the ones the task gives: five in `tests/test_slot_coordinator.py`, one in `tests/test_credentials.py`, and the new `tests/providers/virtual/test_password_cards.py`.
+
+**Tests**
+- Step 2: all three files failed at collection with `ImportError`, as the task expected.
+- Step 4, after the change: I ran `tests/test_slot_coordinator.py`, `tests/test_credentials.py`, `tests/providers/virtual`, `tests/test_text.py`, `tests/test_services.py` and `tests/test_architecture.py`. 383 passed, 1 xfailed, nothing failed.
+- `prek run --files &lt;changed&gt;` passes, and so does `prek run mypy --all-files`. On the first run ruff-format reformatted three files (spacing only), and I re-staged them.
+
+**Mutation checks** (`/tmp/lcm-pr3a-t2/mutate.py`, each restored in `finally`; `git diff` showed only my intended changes before the commit). The named test failed for all five:
+- (a) Drop the 255 cap (`min(highs, default=...)`): `test_an_entrys_range_never_passes_a_state` failed.
+- (b) Remove the `available_credential_types` check: `test_no_range_for_a_type_the_entry_does_not_offer` failed.
+- (c) Change `max(low…)` to `min(low…)`: `test_an_entrys_range_is_what_every_lock_takes` failed.
+- (d) Stop skipping a lock whose `length_bounds` is None: `test_request_pin_update_skips_lock_advertising_no_pin_type` failed.
+- (e) Replace `ordered_credential_types` with plain `sorted(types)`: `test_the_views_list_the_pin_first` failed.
+
+**Files changed**, commit `e2dc39f8` (`feat(entry): the lengths every lock in an entry takes`):
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/ha/entry.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/ha/slot_coordinator.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/model/credentials.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_slot_coordinator.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_credentials.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/providers/virtual/test_password_cards.py` (new)
+
+**Differences from the task text**
+- `slot_coordinator.py` used to import `LockCodeManagerConfigEntry` from `.entry` only under `if TYPE_CHECKING:`. Since `.entry` is now imported normally, I put both names on one line (`from .entry import LockCodeManagerConfigEntry, credential_length_bounds`) and removed the `TYPE_CHECKING` block and import. `entry.py` still imports `slot_coordinator` only under `TYPE_CHECKING`, so there is no import cycle.
+- ruff-format rewrapped the assert in `test_the_views_list_the_pin_first` and changed some blank lines.
+- I did not stage the `.entire/.gitignore` change; it was already there before I started.
+
+No concerns.</result>
+<usage><subagent_tokens>102867</subagent_tokens><tool_uses>12</tool_uses><duration_ms>125953</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a44ea36e4dc3423ef</task-id>
+<tool-use-id>toolu_01B7TPUPBpDMAEaVFZ2m6tJ3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a44ea36e4dc3423ef.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 3: generate_credential" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+I added the `generate_credential` action, with the tests written first. It is committed as `13d845aa` on `feat/password-cards-backend`. Every new error names the range or the rule, never a value, and the action never logs what it generates.
+
+**What I implemented**
+- **Constant:** `SERVICE_GENERATE_CREDENTIAL = "generate_credential"` in `const.py`.
+- **Handler:** `generate_credential_for(...)` in `ha/services.py`, placed after `_managed_credential_type`. It refuses, each with its own error:
+  - a type the generator can't make (e.g. "cannot generate a rfid credential");
+  - an entry with no lock that takes the type;
+  - an entry whose locks and the generator share no length;
+  - an explicit length outside the allowed range.
+  
+  The allowed range is the generator's own, narrowed by the entry's `credential_length_range` when an entry is named. With no length given, the default is clamped into that range.
+- **Registration:** `__init__.py` registers the action after `generate_pin`, with `SupportsResponse.ONLY`. It takes either entry identifier (optional), `credential_type` coerced to `CredentialType`, and `length` from 1 to `MAX_LENGTH_STATE_STATE`. It returns `{"value": ...}`.
+- **Metadata:** `services.yaml`, `icons.json` and `strings.json` gained `generate_credential`, and I copied `strings.json` over `translations/en.json`.
+- **Tests:** five new tests in `tests/test_services.py` and three in `tests/providers/virtual/test_password_cards.py`. One of the three is the leak check: it captures the integration's DEBUG logs and asserts the generated password is not in them.
+
+**Test results**
+- Before implementing, the new tests failed at collection with `ImportError: cannot import name 'SERVICE_GENERATE_CREDENTIAL'`, as the task expected.
+- `tests/test_services.py`, `tests/test_service_catalog.py`, `tests/test_frontend_contract.py` and `tests/providers/virtual/test_password_cards.py`: 173 passed.
+- Files that grep as dependents (`tests/test_blueprints.py`, `tests/test_credential_generator.py`, `tests/properties/test_credential_generator.py`, `tests/test_init.py`, `tests/test_architecture.py`): 206 passed.
+- `prek run --files &lt;changed files&gt;` passed, and so did `prek run mypy --all-files`.
+
+**Mutation checks** (script at `/tmp/lcm-pr3a-t3/mutate.py`, restores in `finally`). Each mutation made its named test fail, and each failure was the intended assertion rather than an incidental error:
+
+| Mutation | Test that failed | How it failed |
+|---|---|---|
+| (a) entry narrowing skipped | `test_generate_credential_suits_the_entrys_pin_locks` | DID NOT RAISE for length 9 |
+| (b) default not clamped | `test_a_generated_password_fits_the_entrys_locks` | `assert 12 == 8` |
+| (c) "No lock … takes" raise replaced by a full range | `test_generate_credential_refuses_a_type_no_lock_in_the_entry_takes` | DID NOT RAISE |
+| (d) generated value logged at debug | `test_a_generated_password_never_reaches_the_logs` | the value was found in the captured logs |
+
+The script reported `restored: True`, and `git diff` showed none of the mutations before the commit.
+
+**Files changed** (all under `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/`):
+- `custom_components/lock_code_manager/const.py`
+- `custom_components/lock_code_manager/ha/services.py`
+- `custom_components/lock_code_manager/__init__.py`
+- `custom_components/lock_code_manager/services.yaml`
+- `custom_components/lock_code_manager/strings.json`
+- `custom_components/lock_code_manager/translations/en.json`
+- `custom_components/lock_code_manager/icons.json`
+- `tests/test_services.py`
+- `tests/providers/virtual/test_password_cards.py`
+
+**Differences from the task text**
+- In `strings.json` I ordered the new entry's keys `description`, `name`, `fields`, matching the entries around it; the task's snippet put `name` first. The text is the task's, word for word.
+- For mutation (c) I used the literal `(0, 255)`, because `ha/services.py` doesn't import `MAX_LENGTH_STATE_STATE`. The mutated path is the same.
+- `.entire/.gitignore` was already modified before I started; I left it unstaged and committed nothing under it or `docs/`.
+
+No concerns.</result>
+<usage><subagent_tokens>121346</subagent_tokens><tool_uses>22</tool_uses><duration_ms>181425</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ace2a956fac10aea7</task-id>
+<tool-use-id>toolu_01BMSNPCsmryuT5nhENJjsgV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/ace2a956fac10aea7.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 4: deprecate generate_pin" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**What I implemented**
+- Every call to `generate_pin` now raises the repair issue `generate_pin_deprecated`. It is a warning, not fixable and not persistent, and the handler never deletes it.
+- `generate_pin` still answers `{"pin": ...}` with the same schema. It now gets the PIN through `generate_credential(CredentialType.PIN, length)`.
+- `__init__.py` no longer imports `generate_pin`. The function itself stays in `credential_generator.py`, because `generate_credential` uses it for the PIN case.
+- `strings.json`: the `generate_pin` description now opens with the deprecation notice, and the `generate_pin_deprecated` issue (title and description) sits after `lock_re_paired_reload`. I copied the file over `translations/en.json`, and the two are identical.
+- I added the two tests from the task to `tests/test_services.py`.
+
+**Tests**
+- Before the change: the `-k deprecat` run failed at collection with `ImportError: cannot import name 'ISSUE_GENERATE_PIN_DEPRECATED'`, as the task expected.
+- `tests/test_services.py`, `tests/test_service_catalog.py` and `tests/test_frontend_contract.py`: 171 passed, including the three existing `test_generate_pin_service_*` tests.
+- I also ran the other tests that mention `generate_pin` or the strings files: `tests/test_open_bugs.py`, `tests/test_credential_generator.py`, `tests/test_packaging.py`, `tests/properties/test_credential_generator.py` and `tests/test_init.py`. Result: 200 passed, 1 skipped, 4 xfailed.
+- `prek` passed on the changed files (ruff only reformatted the new test import), and `prek run mypy --all-files` passed.
+
+**Mutation checks** (script `/tmp/lcm-pr3a-t4/mutate.py`, which restores the file in `finally`)
+- (a) Removing the `async_create_issue` call made `test_generate_pin_still_answers_and_says_it_is_deprecated` fail.
+- (b) Setting `is_fixable=True` made the same test fail.
+- (c) Raising the same issue in `_generate_credential` made `test_generate_credential_raises_no_deprecation` fail.
+- After the runs, `git diff` on `__init__.py` showed only the intended change.
+
+**Files changed, in commit `d4130d76`** (on `feat/password-cards-backend`, after 13d845aa)
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/const.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/__init__.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/strings.json`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/translations/en.json`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_services.py`
+
+**Differences from the task text**
+- The task puts `ISSUE_GENERATE_PIN_DEPRECATED` directly after `SERVICE_GENERATE_CREDENTIAL`. I put it, with its comment, just after the end of the `SERVICE_*` block in `const.py`, so the block isn't split. `const.py` has no other issue constants.
+- I left the card alone, as you asked.
+- `.entire/.gitignore` was already modified before I started; I didn't stage it.</result>
+<usage><subagent_tokens>100444</subagent_tokens><tool_uses>17</tool_uses><duration_ms>148432</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7fd2fda2c1383efd</task-id>
+<tool-use-id>toolu_01EHKTAHZhmFKsbuEVqukd7U</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a7fd2fda2c1383efd.output</output-file>
+<status>completed</status>
+<summary>Agent "Rework two #1772 designs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE_WITH_CONCERNS
+
+I did both reworks and the fix as three new commits on `feat/password-config`, nothing amended or pushed. The whole suite passes and `prek run --all-files` is clean. There is one open question at the end about re-enabling a user from the edit form.
+
+## Rework 1: Password entities are reconciled (1f3b8505)
+
+**Removed** (`text.py`):
+- The `locks_added` and `lock_removed` handlers and their registrations.
+- The `with_password` set, the `add_password_entity` helper and the `discard` on slot add.
+- The `ConfigEntryState.LOADED` guard and the "exclude the removed lock" logic.
+- The fire-and-forget `config_entry.async_create_task(... async_remove_entity ...)` removal.
+- The now-unused imports `ConfigEntryState` and `BaseLock`.
+- The standard adder no longer adds the Password entity; it adds only name and PIN.
+
+**Added:**
+- `ha/callbacks.py`: `register_entity_reconciler` and `async_reconcile_entities()`. It awaits each registered reconciler in turn and logs one that raises. Its docstring says a capability refresh after setup calls it too, which is the hook for PR 4.
+- `text.py`: `reconcile_password_entities()`. It compares the slots that have a Password entity with whether `available_credential_types(entry)` includes passwords. It awaits each removal, then adds the missing entities through the platform's awaitable `async_add_entities` (taken from `entity_platform.async_get_current_platform()`), so an add in the same pass can't race a removal. The stored password stays (decision 10).
+- `__init__.py`: one `await callbacks.async_reconcile_entities()` at the end of the update pass, after the locks are released and set up and the new slots have their standard entities. Unload never calls it.
+
+**Tests:**
+- New: two Virtual password locks plus the PIN-only mock lock, both password locks removed in one submit. Afterwards no slot has a Password entity and the stored password remains. It failed before the change. A second Virtual lock was easy to build: one more registry entry on the provider entry.
+- New: a swap in one submit leaves one live Password entity per slot, with no duplicate unique-id error in `caplog`. It already passed before the change; the race didn't show up in the test harness.
+- New: a unit test of the reconciler registry in `tests/test_callbacks.py`.
+- Changed: `test_a_second_password_lock_adds_no_second_entity` called the lock-added handler directly, which no longer does anything for text. It is now `test_reconciling_again_adds_no_second_entity` and calls the reconcile twice. Its assertions are unchanged.
+
+**Mutation:** I moved the reconcile from the end of the pass to each lock's removal and arrival. The multi-removal test and `test_the_password_entity_leaves_with_the_last_password_lock` failed. File restored.
+
+## Rework 2: the refusal rule asks the lock's worker (681bf677)
+
+**Removed:**
+- `_keeps_another_credential` in `ha/runtime.py`: the configuration read through `coordinator.wants` and the exception for credentials the same lock refused.
+- The in-sync `slot_disabled` deletion in `async_reconcile_issues` (the `wanted` predicate). Nothing else needed it.
+- `test_a_refusal_is_answered_while_another_types_clear_is_held`, added earlier in this PR.
+- `TestSlotRepairs::test_a_refusals_repair_is_answered_beside_a_password_that_wants_nothing` in `tests/providers/virtual/test_e2e.py`. This test is on main (from #1770). Both tests checked that the reconcile answers `slot_disabled`, which no longer happens, so I removed them as scenarios that no longer make sense rather than forcing them.
+
+**Added:**
+- `_another_credential_works(worker, address)`: true only if another address of the same slot on that lock's worker has a non-None want and status `IN_SYNC`.
+- The coordinator's successful enable (`async_request_active_toggle(True)`) now deletes `slot_disabled_{entry}_{slot}` beside `credential_required`, in one loop that logs a registry failure for either.
+- Comments updated in `runtime.py` and `sync/slot.py`.
+
+**Tests** (in `test_password_config.py`; the first three new ones failed before the change):
+- A suspended password is no fallback. The password write raises `LockOperationUnsupported`, so it is held `CANT_SET` at once; then the PIN is refused and the user is turned off.
+- A credential the refusing lock doesn't take is no fallback. On an entry with Virtual and the PIN-only mock lock, the password is in sync on Virtual and absent from the mock lock's worker; the mock lock refuses the PIN and the user is turned off.
+- Re-enable answers `slot_disabled`. Refused PIN: the user is off with the issue. Re-enable: the user is on and the issue is gone. Refused again: the user is off with a fresh issue. I assert after each step.
+- The existing "refused password while the PIN works" test still passes.
+
+**Mutations** (files restored after each):
+
+| Mutation | Test that failed |
+|---|---|
+| Count a non-`IN_SYNC` address as a fallback | the suspended test |
+| Read the configuration instead of the worker | the doesn't-take test (and the suspended test) |
+| Drop the enable-time deletion | the re-enable test |
+
+## Fix 3: the edit form decides "offered" once per dialog (d14d5398)
+
+**Changed:** `_password_offered` is now `bool | None = None` (it was `bool = False`). `_async_show_reconfigure` computes it only while it is `None`, so a re-show after an error keeps the first answer. A submit with no form drawn still keeps the stored password.
+
+**Test:** `test_a_password_cleared_before_an_error_stays_cleared` in `tests/test_config_flow.py` patches `_offers_password` to answer True then False. The user clears the password and submits a clashing name; the re-shown form still has the field; the corrected submit leaves the password cleared.
+
+**Mutation:** recomputing on every show makes that test fail. File restored.
+
+## Test runs
+- Full suite with `-n auto`: 3544 passed, 3 skipped, 14 xfailed. The only failures were the three known paced tests (`TestPacing`, `test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced`, `test_a_paced_test_keeps_the_real_delay_between_operations`); re-run on their own, all 4 passed.
+- `prek run --all-files` passes. Every commit passed prek, including mypy.
+
+## Concerns
+- **Re-enabling from the edit form leaves `slot_disabled` behind.** The edit (reconfigure) form writes `enabled: True` without going through `async_request_active_toggle`, so re-enabling there no longer deletes the issue. Before this change the reconcile deletion covered that path. `credential_required` already had the same gap. A single spot that would catch every way of re-enabling is `notify_config_changed` seeing enabled go from off to on; that's a design choice for you to make.
+- **A Password entity the user disabled in the registry is never added**, so it never registers for removal, and the reconcile can't remove its registry entry later. The old handlers had the same limit.
+- **Later reconcile callers should hold the entry's pass lock.** The update pass calls the reconcile under it; PR 4 calling it on a capability refresh should take it too, to stay serialized with passes.
+
+Mutation scripts are in `/tmp/lcm-rework-mut/`. The main checkout was not touched, and the pre-existing `.entire/.gitignore` change is still unstaged.</result>
+<usage><subagent_tokens>221670</subagent_tokens><tool_uses>71</tool_uses><duration_ms>679350</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a0833e6cfff008140</task-id>
+<tool-use-id>toolu_01P8UK5MaHiY1PZ1k5yZ1oA7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a0833e6cfff008140.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 5: shared sync status" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+**What I implemented** (a refactor that changes no behavior; I followed the task's code as written)
+- `ha/runtime.py`: added `SYNCING`, `_BY_DISTANCE`, the frozen `SyncState` dataclass with its `word` property, `furthest_sync_state`, `slot_worker`, `slot_addresses` and `slot_sync_state`, all placed after `lock_registry`. They are self-contained: `_keeps_another_credential` and `async_reconcile_issues` are untouched.
+- `entity.py`: removed `_BY_DISTANCE`. `LockWorkerView._core_worker`, `_addresses` and the new `_sync_state` now call the runtime helpers, and `_core_status` comes from `_sync_state`. I removed `_core_syncing`, since nothing else used it. `lock_registry` is no longer imported, because nothing else in the file used it.
+- `binary_sensor.py`: removed the module-level `SYNCING`. `extra_state_attributes` now reads `self._sync_state().word` and returns `{}` when the state is `None` or `unknown`. `is_on` still calls `_core_status()`.
+
+**Tests**
+- Oracle before the change: `tests/test_binary_sensor.py tests/test_sensor.py tests/test_websocket.py tests/providers/virtual tests/test_architecture.py tests/test_lock_runtime.py` gave **417 passed, 1 xfailed**.
+- After the change, the same command gave **417 passed, 1 xfailed**. No expected values changed.
+- `prek run mypy --all-files` passed, and the commit hooks (ruff, flake8, mypy) passed.
+
+**Mutation checks** (script at `/tmp/lcm-pr3a/t5mut/mutate.py`, which restores the file in `finally`; each mutant failed on an assertion, not a collection error)
+- (a) Dropping `Status.SUSPENDED` from `_BY_DISTANCE` made `test_sync_attempts_exceeded_suspends_slot` fail with `assert 'on' == 'off'`.
+- (b) Removing the owner check in `slot_worker` made `test_a_slot_left_to_another_entry_does_not_show_that_entry_s_code` fail with `assert 'on' != 'on'`.
+- (c) Setting `syncing=False` in `furthest_sync_state` made `test_a_condition_change_shows_the_slot_syncing` fail with `assert 'out_of_sync' == 'syncing'`.
+- After the runs, the script checked the file matched the original byte for byte, and `git diff` showed only the intended change.
+
+**Files changed and commit**
+- Files:
+  - `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/ha/runtime.py`
+  - `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/entity.py`
+  - `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/binary_sensor.py`
+- Commit: `82b9b054` refactor(sync): read a slot's per-type sync status in one place
+
+**Differences and concerns**
+- I didn't keep a separate count for the Step 1 files alone. I ran the Step 1 files together with `test_architecture.py` and `test_lock_runtime.py` both times, so the before and after counts compare the same set.
+- `prek run --all-files` fails on the `yarn-lint` hook with `eslint: command not found`, because the worktree has no `node_modules`. This has nothing to do with this change, and every Python hook passed. Task 9's bundle rebuild will hit the same thing and should use the main checkout's `node_modules/.bin`, as context.md says.
+- `.entire/.gitignore` was already modified before I started, and I left it unstaged.</result>
+<usage><subagent_tokens>102558</subagent_tokens><tool_uses>14</tool_uses><duration_ms>221447</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a7fd2fda2c1383efd</task-id>
+<tool-use-id>toolu_017sTz7a7Y1rsQF7WmfueNdN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a7fd2fda2c1383efd.output</output-file>
+<status>completed</status>
+<summary>Agent "Rework two #1772 designs" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Re-enabling a user by any route, the edit form included, now deletes both `slot_disabled` and `credential_required`. That is one more commit, **e4fd1159**, on top of 31cdae3c: nothing amended or pushed. The full suite passes, apart from the known paced flakes, which pass on their own.
+
+## What changed (`ha/slot_coordinator.py`)
+- **Added:** the coordinator remembers the enabled flag its last compute saw. `_recompute_active` is the one place every change passes through: `async_start`, `notify_config_changed`, `_write_config_fields` and condition changes all call it.
+  - When the flag goes from off to on, it calls a new `_answer_enable_repairs()`, which deletes both issues. A registry failure is logged and doesn't undo the enable.
+  - The check runs before the method's "nothing changed" early return, because enabled can flip while the active state stays the same.
+  - The remembered flag starts empty and is cleared again in `async_start`, so a coordinator starting up deletes nothing.
+- **Removed:** both deletions in `async_request_active_toggle(True)`, the existing `credential_required` one and the `slot_disabled` one I added in 681bf677.
+
+## Tests
+- **New:** `test_re_enabling_in_the_edit_form_answers_slot_disabled`. A refused PIN turns the user off and raises `slot_disabled`. Re-enabling through the edit form deletes the issue at once; once the PIN reaches the lock, the issue stays gone. It failed before the change.
+- **Existing tests run explicitly, all passing:**
+  - switch: `test_switch_entity`, which asserts `credential_required` is deleted on turn-on;
+  - coordinator: `test_request_active_toggle_clears_credential_required_issue`, `test_request_active_toggle_blocks_when_no_pin`, `test_active_toggle_enable_survives_repair_issue_delete_failure`;
+  - `test_re_enabling_answers_slot_disabled`;
+  - the `enable_user` tests.
+- **Coverage gap:** no existing `enable_user` test asserts either issue, and no switch test asserts `slot_disabled`. I added none.
+- **Full suite with `-n auto`:** 3545 passed, 3 skipped, 14 xfailed. The three paced flakes were the only failures and passed when re-run on their own. `prek run --all-files` is clean.
+
+## Mutation
+I dropped the transition check from `_recompute_active`. Four tests failed: the new edit-form test, `test_re_enabling_answers_slot_disabled`, `test_request_active_toggle_clears_credential_required_issue` and `test_switch_entity`. So the switch path no longer deletes anything on its own. The file is restored (the script restores it in `finally`).
+
+## Carryover notes
+I appended concerns 2 and 3 under "From the 2b rework (2026-10-25)" in `/Users/raman/projects/lock_code_manager/docs/superpowers/plans/2026-10-23-password-pr2-carryover.md`. That file is gitignored and not committed.
+
+The mutation scripts are in `/tmp/lcm-rework-mut/`. The pre-existing `.entire/.gitignore` change is still unstaged.</result>
+<usage><subagent_tokens>242111</subagent_tokens><tool_uses>86</tool_uses><duration_ms>972581</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a83a39e41d57cf3c2</task-id>
+<tool-use-id>toolu_01BfVe5JZ8y2deBKhLpfhu5C</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a83a39e41d57cf3c2.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 6: slot card payload" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Task 6 is committed as `92b31864` on `feat/password-cards-backend`.
+
+**What I implemented**
+- **`const.py`:** added `ATTR_AVAILABLE_TYPES = "available_types"` and `ATTR_CREDENTIALS = "credentials"` beside `ATTR_LENGTH`.
+- **`websocket.py`:**
+  - `SlotEntities` has a `password_entity_id` field, includes it in `all_entity_ids()`, and gains `credential_entity_id(type)`.
+  - `_build_slot_entities` fills `password_entity_id` in.
+  - New `_offered_types` lists the entry's types with the PIN first (`ordered_credential_types` over `available_credential_types`).
+  - New `_slot_credentials` gives each type its masked or revealed value through `_slot_code_payload` with `value`/`length` keys, and its `sync_status`. That status is the furthest from in sync across the entry's locks, from `slot_sync_state` for that type, and `null` when no lock tracks it.
+  - `_serialize_slot_card_data` now sends `available_types`, `credentials` and `entities.password`. The top-level `pin`/`pin_length` are unchanged.
+  - Both docstrings were updated as the task says.
+- **Tests:**
+  - `test_subscribe_code_slot_response_shape` is extended for the PIN-only entry. Its exact entity-key set now includes `password`, as the task expects.
+  - Added `test_the_slot_cards_masked_pin_is_masked_under_credentials_too`.
+  - Added four end-to-end tests in `tests/providers/virtual/test_password_cards.py`, with their helpers:
+    - types listed PIN first;
+    - the masked-password leak test (it checks the revealed payload does carry the marker, then that the masked one does not);
+    - each type's own sync status;
+    - the isolated entity-tracking test.
+
+**Tests**
+- Before the change, collection failed with `ImportError: cannot import name 'ATTR_AVAILABLE_TYPES'`, as the task expected.
+- `tests/test_websocket.py` and `tests/providers/virtual`: 295 passed, 1 xfailed.
+- `tests/test_frontend_contract.py`, `tests/test_architecture.py`, `tests/test_websocket.py` and `tests/providers`: 2049 passed, 2 skipped, 9 xfailed.
+- `prek run --files &lt;changed files&gt;` passed, and `prek run mypy --all-files` passed.
+- No existing test's expected value changed apart from the entity-key set the task names. The PIN-only fields keep the same values.
+
+**Mutation checks** (script at `/tmp/lcm-pr3a/t6/mutate.py`, which restores the file in `finally`)
+
+| Mutation | Test that failed | How it failed |
+|---|---|---|
+| (a) `slot_sync_state(..., None)` | `test_each_type_reports_its_own_sync` | `'suspended' == 'in_sync'` (the PIN read the password's hold) |
+| (b) password dropped from `all_entity_ids` | `test_a_password_edit_reaches_a_subscribed_card` | no event carried the new length, so the isolation holds |
+| (c) `reveal=True` in `_slot_credentials` | `test_a_masked_slot_card_never_carries_the_password` | the marker appeared in the masked payload |
+| (d) `sorted(...)` in `_offered_types` | `test_the_slot_card_is_told_both_types_pin_first` | `['password', 'pin']` instead of `['pin', 'password']` |
+
+No mutation survived. Before committing, `git diff` showed only the intended changes.
+
+**Files changed**
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/const.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/websocket.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_websocket.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/providers/virtual/test_password_cards.py`
+
+The existing change to `.entire/.gitignore` was left unstaged.
+
+**Differences and concerns**
+- **Line numbers:** some had moved slightly from the task text (for example, the entity-key assertion is at about :1688). The code itself matched the task.
+- **Imports:** in the virtual test file I merged the task's imports into the existing blocks. The file also needed `ATTR_SYNC_STATUS`, which was already in the task's list.
+- **Side effect on the lock card:** because `all_entity_ids()` also feeds `_get_slot_state_entity_ids`, the `subscribe_lock_codes` subscription now tracks the password entity too. A password edit will re-send the lock card's payload, but the payload itself is unchanged. This seems to be what Task 7's `configured` flag needs.</result>
+<usage><subagent_tokens>133582</subagent_tokens><tool_uses>24</tool_uses><duration_ms>895903</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aca2f15c302d58931</task-id>
+<tool-use-id>toolu_01Jybax72HMGCFcLrK7AVs1o</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/aca2f15c302d58931.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 7: lock card chips" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE_WITH_CONCERNS. The concern is only that I changed a Task 6 test helper (see the last section).
+
+**What I implemented**
+- `const.py`: added `ATTR_CONFIGURED = "configured"`, next to `ATTR_CREDENTIALS`.
+- `websocket.py`:
+  - New `_chip_credential(hass, type, state, entity_id)`. It returns `REDACTED}`, and adds `configured` for any type other than the PIN. It never returns a value or a length.
+  - `_serialize_lock_coordinator` now checks whether the lock keeps more than PIN. If it does, each managed row gets `credentials` (one entry per type the lock keeps, PIN first), and the row's `in_sync` becomes the PIN's own status from `slot_sync_state(..., CredentialType.PIN)`.
+  - A PIN-only lock takes the old path: `in_sync` still comes from the in-sync sensor, and no row gets `credentials`.
+  - `lock.lock.entity_id` reads in that function are now `lock_entity_id`, and I made the docstring change the task names.
+- Tests added: `test_a_pin_only_lock_card_is_unchanged` in `test_websocket.py`, plus `test_a_held_password_leaves_the_pin_chip_in_sync` and `test_the_lock_card_never_carries_a_password` in `test_password_cards.py`, as the task wrote them.
+
+**Test results**
+- **Before the fix**, with only the constant added: `test_a_held_password_leaves_the_pin_chip_in_sync` failed with `assert False is True`, which is the bug. `test_the_lock_card_never_carries_a_password` failed with `KeyError: 'credentials'`. `test_a_pin_only_lock_card_is_unchanged` passed. The bug test still failed the same way after I switched the hold to a suspended write.
+- **After the fix:** `pytest tests/test_websocket.py tests/providers/virtual` gave 298 passed, 1 xfailed. That covers every existing `subscribe_lock_codes` test, which all run on the PIN-only mock lock.
+- `tests/test_architecture.py` and `tests/test_frontend_contract.py`: 17 passed.
+- `prek run --files &lt;changed&gt;` and `prek run mypy --all-files` both passed.
+
+**Mutation checks** (a script restored the file in `finally`; `git diff --stat` afterwards showed only the intended change)
+- (a) `per_type` branch reads the in-sync sensor: `test_a_held_password_leaves_the_pin_chip_in_sync` fails.
+- (b) `per_type = True`: `test_a_pin_only_lock_card_is_unchanged` fails on `in_sync`. With that assert taken out, it also fails on `credentials`, so both halves are covered.
+- (c) `None` passed as the type to `slot_sync_state`: `test_a_held_password_leaves_the_pin_chip_in_sync` fails.
+- (d) `chip[ATTR_VALUE] = _get_text_state(...)` added: `test_the_lock_card_never_carries_a_password` fails, and so does the held-password test.
+- (e) `configured` always True: `test_a_held_password_leaves_the_pin_chip_in_sync` fails.
+
+**Files and commit**
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/const.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/websocket.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_websocket.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/providers/virtual/test_password_cards.py`
+- Commit `d6ebe358`: "fix(websocket): on a password lock, show a PIN in sync while its password is pending".
+
+**Differences from the task text, and the concern**
+- **The hold helper from Task 6 now uses a suspended write, not a refusal.** `_hold_slot_1_password` in `test_password_cards.py` used `CodeRejectedError`. I renamed `_refuse_passwords` to `_cannot_set_passwords` and made it raise `LockOperationUnsupported`. In `ha/adapter.py` that is classified as `SLOT_REFUSED`, which suspends the password with `CANT_SET`. This follows your note about 2b's refusal rule turning the whole user off.
+  - The helper still asserts the password is `SUSPENDED` and the PIN is `IN_SYNC`, and the aggregate sensor still reads off.
+  - Task 6's `test_each_type_reports_its_own_sync` uses the same helper and still passes; I updated its docstring to match.
+  - This is a change to a Task 6 test helper that the task did not name, so please confirm it is acceptable.
+- **The ImportError step was skipped.** I added `ATTR_CONFIGURED` before the first test run, so I never saw the `ImportError` the task predicts. The failure that matters, `assert False is True`, was seen as expected.
+- **The leak test checks the lock first.** As required, `test_the_lock_card_never_carries_a_password` confirms `_data["1"]["password"] == MARKER` on the Virtual lock before subscribing with `reveal: true`.</result>
+<usage><subagent_tokens>121506</subagent_tokens><tool_uses>19</tool_uses><duration_ms>175516</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2da15869e3688f6b</task-id>
+<tool-use-id>toolu_017XCt6439ZJj5tHTD9ww77t</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a2da15869e3688f6b.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 8: entry types" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Task 8 is committed as `11447b79` on `feat/password-cards-backend`. `get_config_entry_data` now also returns `credential_types`: the entry's credential types with PIN first, for the add-user card.
+
+**What I implemented**
+- Added `ATTR_CREDENTIAL_TYPES = "credential_types"` to `const.py`, next to `ATTR_CREDENTIALS`.
+- In `websocket.py`, `get_config_entry_data`'s result gains `ATTR_CREDENTIAL_TYPES`, built from the existing `_offered_types(config_entry)` as a list of `.value`s. The docstring now mentions the credential types.
+- Tests:
+  - `test_get_config_entry_data` in `tests/test_websocket.py` now checks that a PIN-only entry returns `[CONF_PIN]`.
+  - New test `test_the_add_user_card_is_told_the_entrys_types_pin_first` in `tests/providers/virtual/test_password_cards.py` checks that a password entry returns `[CONF_PIN, CONF_PASSWORD]`.
+
+**Tests**
+- Before the code change, both test files failed to import `ATTR_CREDENTIAL_TYPES`, as the task expected.
+- After it: `tests/test_websocket.py tests/providers/virtual tests/test_frontend_contract.py` gave 311 passed, 1 xfailed. Only those two test files call `get_config_entry_data`.
+- `prek run --files` on the changed files passes. `prek run mypy --all-files` passes, and the commit hooks passed.
+
+**Mutation check**
+- I made `ATTR_CREDENTIAL_TYPES` always `[CredentialType.PIN.value]`, using a script (`/tmp/lcm-pr3a/mut8.py`) that restores the file in `finally`.
+- `test_the_add_user_card_is_told_the_entrys_types_pin_first` failed (1 failed, 3 passed). The file was restored, and `git diff` showed only the intended change before I committed.
+
+**Files changed**
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/const.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/custom_components/lock_code_manager/websocket.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/test_websocket.py`
+- `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/tests/providers/virtual/test_password_cards.py`
+
+**Differences from the task text**
+- The task's one-line docstring is 136 characters and failed flake8's 120-character limit (E501). I split it into a summary line and a body in the file's multi-line docstring style, keeping the same wording.
+- `get_config_entry_data` is at line 433, not 409 as the task says, and `test_get_config_entry_data` is at line 206, not 199. Neither changes anything.
+- `.entire/.gitignore` was already modified before I started. I left it alone and did not commit it.</result>
+<usage><subagent_tokens>94136</subagent_tokens><tool_uses>13</tool_uses><duration_ms>100590</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e596dd928d1ff7c</task-id>
+<tool-use-id>toolu_01F79w9Wf6EqJY4XX9hsDatB</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a6e596dd928d1ff7c.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify refusal rule on #1772" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Any refused value now turns the user off, the same as on `origin/main`. The only change from main is that `slot_disabled` names the credential the lock refused (for example "Password"). The four small fixes are each in their own commit, and the full suite and `prek run --all-files` pass. Nothing was pushed or amended. `.entire/.gitignore` is still unstaged, as it was when I started.
+
+### Main change: 1c5c7b01 `fix(repairs): turn the user off for any refused value`
+
+**Removed**
+- From `ha/runtime.py`:
+  - `_another_credential_works` and its early return in `_on_disable`, so `_on_disable` always turns the slot off and raises `slot_disabled`.
+  - `Repair.SLOT_DISABLED` from `_HOLD_ISSUES`.
+  - `Repair.SLOT_DISABLED` from the reason condition in `async_reconcile_issues`, which is back to `is Repair.CANT_SET`, as on main.
+  - The docstring text describing the hold-only rule.
+- The `credential_refused` repair text from `strings.json` and `translations/en.json`. Nothing else referenced it apart from the tests below.
+- The hold-only comment on `SLOT_DISABLED` in `sync/slot.py`.
+- From `tests/providers/virtual/test_password_config.py`, these tests:
+  - a refused password leaving the PIN working
+  - a lock refusing every credential (and its helper)
+  - a refused password staying reported once the PIN is cleared
+  - a new password lifting the refusal. Under the new rule the user is off, so no hold repair is ever raised and the test checked nothing.
+  - a suspended password being no fallback
+  - a credential the refusing lock doesn't take being no fallback
+- From the same file, two helpers:
+  - `_hold_issue_id`
+  - `_suspend_passwords_and_refuse_pin`, replaced by a smaller `_refuse_pin`.
+- Unused test imports.
+
+**Added**
+- The reconcile-time deletion of `slot_disabled`, using the predicate from 31cdae3c: the slot has an owner, at least one of its credentials wants a value, and every credential that wants one is IN_SYNC.
+- Restored `test_a_refusals_repair_is_answered_beside_a_password_that_wants_nothing`. `tests/providers/virtual/test_e2e.py` is now identical to `origin/main`.
+- New tests:
+  - `test_a_refused_password_turns_the_user_off_beside_a_working_pin`
+  - `test_a_new_user_with_a_refused_password_is_turned_off` (added through the `add_user` service)
+  - `test_slot_disabled_is_answered_once_the_slot_is_in_sync` (the issue is created directly on a slot that stays on)
+- Kept, with a reworded docstring: `test_a_refused_only_credential_turns_the_slot_off`, which still holds under the new rule.
+- Kept, as you asked: the coordinator's off-to-on deletion from e4fd1159, the `credential` placeholder on hold repairs, and the `DuplicateCodeError` label.
+
+**Mutations**, each run by a script that restores the file in `finally`; `git diff` confirmed the file was restored each time:
+- Restoring an early return in `_on_disable` when the PIN is in sync: `test_a_refused_password_turns_the_user_off_beside_a_working_pin` failed.
+- Dropping the reconcile deletion: `test_slot_disabled_is_answered_once_the_slot_is_in_sync` and the restored e2e test both failed.
+
+### Small fixes
+1. **edd0536a** `fix(config_flow)`: `async_step_one` now decides `_password_offered` once per flow, and the attribute's comment covers both the add and edit dialogs.
+   - Test: `test_the_add_dialog_keeps_the_password_field_it_first_drew` in `tests/test_config_flow.py`. It fails without the fix.
+   - Mutation (deciding again on every render) makes it fail.
+2. **63f2e7c2** `fix(credentials)`: `_refuse_duplicate` now checks `config.users` minus `config.name_for(self._slot_num)`, using `credential_holder`.
+   - Test: `test_a_pin_held_by_a_user_with_no_slot_number_is_refused` in `tests/test_slot_coordinator.py`. It failed before the fix with DID NOT RAISE.
+3. **d137af67** `perf(text)`: the Password entity adds run concurrently in an `asyncio.TaskGroup`, after the removals are awaited. The existing tests pass.
+4. **21ed9883** `refactor(entity)`: a module-level `removal_uid(slot_num, key)` in `entity.py` is used by `BaseLockCodeManagerEntity._get_removal_uid` and by `text.py`. `_password_uid` is removed.
+
+### Verification
+- **Full suite** (`-n auto`): 3545 passed, 3 skipped, 14 xfailed. The only failures were the three known paced tests:
+  - `TestPacing::test_writes_at_startup_are_spaced`
+  - `test_pins_changed_while_the_lock_is_offline_reach_it_once_each_paced`
+  - `test_a_paced_test_keeps_the_real_delay_between_operations`
+
+  Re-run on their own, all 4 tests passed.
+- **`prek run --all-files`:** clean. Every commit also passed `prek` with mypy.
+
+### Where the code differed from your brief
+- The new-user test adds the user through `SERVICE_ADD_USER` and finds the slot with `get_entry_config(...).assignment.slot("Guest")`.
+- The unnumbered-user test builds its own `MockConfigEntry` (version 5), following the pattern in `test_services.py`.</result>
+<usage><subagent_tokens>178502</subagent_tokens><tool_uses>59</tool_uses><duration_ms>487787</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>aea8726e970f8b58a</task-id>
+<tool-use-id>toolu_012qypjVkeDjYt3HpFTGt6Tq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/aea8726e970f8b58a.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement 3a Task 9: blueprints and contracts" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE
+
+Task 9 is committed as **`cc3442b9`** on `feat/password-cards-backend`, including the controller's amendment. The add-user card now generates its PIN through `generate_credential`, so no dashboard click raises the `generate_pin` deprecation repair.
+
+**What I implemented**
+- **Blueprints:** the limiter's condition is now `event_type in ['pin', 'password']`, so a password use spends one. I updated the limiter's "What spends a use" text, the `credential_type` line in `credential_used.yaml`, and the three passages in `BLUEPRINTS.md`, using the task's wording.
+- **`ts/const.ts`:** `'password'` now comes right after `'pin'` in `KEY_ORDER`.
+- **Contract tests:** the limiter test is renamed to `test_limiter_spends_a_use_only_on_a_credential_it_manages` and has a `password` case. `_BACKEND_KEYS` gains `CONF_PASSWORD` and `credential_in_sync_key("password")`. Two new tests check that the cards' `CREDENTIAL_LABELS` match the backend's and that the password row sits after the PIN in `KEY_ORDER`.
+- **Amendment:** `_generatePin` in `ts/add-user-card.ts` now calls `generate_credential` with `credential_type: 'pin'`, the card's length and the card's entry, and reads `response.value`.
+  - The entry is named by id or by title, never both. That logic moved into a module-level `entryTarget(config)`, which `add_user` now uses too.
+  - Tests in `ts/add-user-card.test.ts`: the old call expectation is updated, and there are new cases for addressing the entry by title, sending the id when both are set, and ignoring an old-style `{pin}` response.
+  - I also updated a stale `generate_pin` comment in `ts/ha_type_stubs.ts`.
+- **Bundle:** rebuilt with the main checkout's `rollup -c` and committed. It contains `generate_credential` and no `'generate_pin'`.
+
+**Tests**
+- Step 2, before the change: 2 failed as the task predicted (the `password` limiter case left the counter at 3, and `KEY_ORDER` raised `ValueError`), 5 passed. The new add-user tests also failed first (5 failed).
+- Python after the change: blueprint behavior, blueprint docs, blueprints, frontend contract and services tests gave 181 passed.
+- Vitest: 18 files, 719 passed.
+- Eslint on `./ts`: 0 errors. Its 12 warnings were all there before; one is `no-shadow` in the add-user card's entity picker, which I didn't change.
+- `prek run --all-files`: all hooks passed, including eslint, the yarn build and mypy. The commit's own hook run passed too.
+
+**Mutation checks** (a script restored each file in `finally`; `git diff` afterwards showed only my intended changes)
+
+| Mutation | Test(s) that failed |
+|---|---|
+| (a) limiter condition back to `== 'pin'` | `test_limiter_spends_a_use_only_on_a_credential_it_manages[password]` |
+| (b) `password: 'Passcode'` in `ts/const.ts` | `test_the_frontend_and_backend_agree_on_the_credential_labels` |
+| (c) `'password'` before `'pin'` in `KEY_ORDER` | `test_the_password_entity_is_ordered_after_the_pin` |
+| (d) card calls `'generate_pin'` | "asks the action for the PIN rather than inventing one" |
+| (e) card stops passing the entry | 3 tests: the call-shape test, by-title, and one-way-only |
+| (f) card reads `.pin` instead of `.value` | 3 tests, including "reads the value, not the pin the deprecated action sent" |
+
+**Files changed:** all under `/Users/raman/projects/lock_code_manager/.worktrees/password-cards/`:
+- `blueprints/automation/lock_code_manager/slot_usage_limiter.yaml`
+- `blueprints/automation/lock_code_manager/credential_used.yaml`
+- `BLUEPRINTS.md`
+- `ts/const.ts`
+- `ts/add-user-card.ts`
+- `ts/add-user-card.test.ts`
+- `ts/ha_type_stubs.ts`
+- `custom_components/lock_code_manager/www/generated/lock-code-manager.js`
+- `tests/test_blueprint_behavior.py`
+- `tests/test_frontend_contract.py`
+
+**Differences from the task text, and concerns**
+- **Card behaviour change:** because the card now passes its entry, a length the entry's locks can't take is refused, and the card shows the action's error naming the range. Before, the card generated any length from 4 to 12 regardless of the locks.
+- **Existing test loosened:** in the "generates at the length asked for" test, `toEqual({ length: 8 })` became `toMatchObject({ length: 8 })`, since the call now also carries the entry and the type.
+- **3b carryover:** I updated the staging file `/tmp/lcm-pr3a/for3b.md` that Task 10 copies. It now says decision 11 (a repair per click on this branch) no longer applies, and the PR-body line saying the card raises the repair until 3b is reworded.
+- **`node_modules` and the build hook:** the prek "Build with yarn" hook runs `yarn build`, which does a `yarn install`. The worktree already had a git-ignored `node_modules` from 07:45, before this task, so nothing new was installed and `yarn.lock` is unchanged.
+- **Preexisting type errors:** `tsc --noEmit` and rollup's TypeScript plugin report errors in test files and in `_manage` at `ts/add-user-card.ts:326-327`. None are in lines I changed.
+- **Not touched:** the `BLUEPRINTS.md` `event_types` row still reads "`pin`, plus every kind…". The task didn't name it; whether it should mention `password` is for the controller to decide.</result>
+<usage><subagent_tokens>138733</subagent_tokens><tool_uses>36</tool_uses><duration_ms>298883</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e596dd928d1ff7c</task-id>
+<tool-use-id>toolu_012PLtn6xP932hiNy5GSuM7e</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/46f3e473-83f4-4d86-9c12-113a5fbf6ca4/tasks/a6e596dd928d1ff7c.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify refusal rule on #1772" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Status:** DONE_WITH_CONCERNS. The concern is item 6: I left "Password length N is not accepted…" capitalised because it opens the message (details below).
+
+All nine review items are fixed, one commit each. Nothing was amended or pushed, and `.entire/.gitignore` is still unstaged. Every commit passed `prek` including mypy. Each mutation script restored the file in `finally`, and `git diff` confirmed it.
+
+### Commits after 21ed9883
+1. **89947942** `fix(config_flow)`: when a user is edited, the "unchanged credential isn't re-checked" comparison now uses the stored user as the configuration reads it, so the PIN is stripped. It falls back to the raw subentry data if that user can't be found.
+   - New test: `test_editing_a_user_leaves_a_padded_shared_pin_alone`. Ann has `' 1234'`, Bob has `1234`, and renaming Ann succeeds. It failed before the fix.
+2. **51dab1bc** `fix(config_flow)`: a pasted block of users now has its own duplicate messages, `pin_not_unique_in_block` and `password_not_unique_in_block`, which name the user ("{name} has a PIN another user already has."). They are in both the `config` and `config_subentries.user` error sections, and the two string files are identical. The form's per-field `*_not_unique` errors are unchanged.
+   - Three existing tests now expect the new keys; one of them also checks which user is named.
+   - New parametrized test: each new message's only placeholder is `{name}`.
+3. **ebad1264** `fix(config_flow)`: in pasted users, an empty password now means no password, the same as an empty PIN. Both are kept as empty values. A password of spaces alone is still refused.
+   - New tests: one for the empty password, one for the spaces-only password.
+   - Mutation (always applying the password rule) makes the empty-password test fail.
+4. **02ac4066** `fix(credentials)`: clearing a credential the user doesn't hold now returns without writing anything, unless it would turn the user off.
+   - New test: `test_clearing_a_password_the_user_does_not_hold_writes_nothing`. It failed before the fix because a `password` key was added.
+5. **c2d3ac99** `refactor(repairs)`: removed the `credential` placeholder from the hold repairs and reverted `address, slot` back to `_, slot`.
+6. **c7977b8b** `refactor(repairs)`: `async_reconcile_issues` now reads each credential's want and status once, and both repair-answer checks use that one list.
+   - Mutation (forcing the "every wanted credential in sync" check false) still makes the sync test and the restored e2e test fail.
+7. **61ec2852** `fix(credentials)`: new `credential_noun()` in `const.py`. It returns the label lower-cased unless the label is an acronym, so "PIN" stays "PIN". It is used in three messages:
+   - `services.py`: "cannot have the password …"
+   - `slot_coordinator.py`: "already has this password"
+   - `runtime.py`: "refused the password for slot"
+
+   I updated the three "refused the password" assertions and added message matches for the password and PIN duplicate errors; each failed before the change.
+8. **b9cecfd1** `refactor(diagnostics)`: one loop over the managed credential types, sorted so the key order is fixed. The keys are still `pin` and `password`, and the existing diagnostics tests pass.
+9. **dc3374e1** `docs(entities)`: the `async_reconcile_entities` and `available_credential_types` docstrings now say only the update pass reconciles today, and that PR 4 (Z-Wave passwords) adds the reconcile when a lock's capabilities change.
+
+### Test results
+- **Full suite** (`-n auto`): 3553 passed, 3 skipped, 14 xfailed. The only failures were the three known paced tests, plus one teardown error on `TestPacing::test_writes_at_startup_are_spaced`. Re-run on their own, all 4 passed.
+- **`prek run --all-files`:** clean.
+
+### Concerns
+- **Item 6, the length message:** "Password length N is not accepted by all locks: …" starts the message, so under "keep the label where it starts a sentence" I left it capitalised, even though the review listed it. For the same reason I left the `DuplicateCodeError` reason ("Password duplicates … slot N") and `credential_value_error`'s "Password may be at most …" as they are. If you want the length message lower-cased anyway, it's a one-line change.
+- **Item 9:** as you asked, the docstrings name "PR 4". That is a forward reference in code, which sits a little against the "comments state intent, not history" rule.</result>
+<usage><subagent_tokens>232547</subagent_tokens><tool_uses>49</tool_uses><duration_ms>713965</duration_ms></usage>
+</task-notification>
