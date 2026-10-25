@@ -248,8 +248,8 @@ async def async_set_credential(
     await coordinator.async_request_credential_update(kind, value)
     if enable_if_disabled:
         # Safe in this order, and only in this order: the write above refreshes
-        # the entry's cached config before returning, so the PIN this checks
-        # for is the one just set.
+        # the entry's cached config before returning, so the credential this
+        # checks for is the one just set.
         await coordinator.async_request_active_toggle(True)
 
 

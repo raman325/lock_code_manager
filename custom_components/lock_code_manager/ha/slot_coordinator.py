@@ -306,18 +306,16 @@ class SlotEntityCoordinator:
             if error := credential_value_error(credential_type, value):
                 raise ServiceValidationError(error)
             self._validate_credential_length(value, credential_type)
-        if value and value != credential_values(self._slot_config()).get(
-            credential_type
-        ):
+        held = credential_values(self._slot_config())
+        if value and value != held.get(credential_type):
             self._refuse_duplicate(credential_type, value)
 
         updates: dict[str, Any] = {credential_type.value: value}
-        remaining = {
-            other: held
-            for other, held in credential_values(self._slot_config()).items()
-            if other is not credential_type
-        }
-        if not value and not remaining and self.is_enabled:
+        if (
+            not value
+            and not any(other is not credential_type for other in held)
+            and self.is_enabled
+        ):
             _LOGGER.debug(
                 "%s: last credential cleared on enabled slot, auto-disabling",
                 self._log_prefix,
