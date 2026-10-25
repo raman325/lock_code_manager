@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "cedd781c997f",
+  "strategy": "manual-commit",
+  "branch": "feat/password-config",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/ha/services.py",
+    "custom_components/lock_code_manager/ha/slot_coordinator.py",
+    "custom_components/lock_code_manager/repairs.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/switch.py",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/providers/virtual/test_password_config.py",
+    "tests/test_init.py",
+    "tests/test_slot_coordinator.py",
+    "tests/test_switch.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ce/dd781c997f/0/metadata.json",
+      "transcript": "/ce/dd781c997f/0/full.jsonl",
+      "compact_transcript": "/ce/dd781c997f/0/transcript.jsonl",
+      "content_hash": "/ce/dd781c997f/0/content_hash.txt",
+      "prompt": "/ce/dd781c997f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 6517,
+    "cache_read_tokens": 734439,
+    "output_tokens": 1205,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 48,
+      "cache_creation_tokens": 214605,
+      "cache_read_tokens": 2229467,
+      "output_tokens": 13144,
+      "api_call_count": 24
+    }
+  }
+}
