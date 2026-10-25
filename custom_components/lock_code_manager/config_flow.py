@@ -505,6 +505,7 @@ def _validate_user_form(
     user_input: dict[str, Any],
     taken: Mapping[str, Mapping[str, Any]],
     previous: Mapping[str, Any] = MappingProxyType({}),
+    carried: Mapping[str, Any] = MappingProxyType({}),
 ) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
     """
     Validate one user's submitted form against the users already there.
@@ -516,13 +517,19 @@ def _validate_user_form(
     ``taken`` is whichever users this submission must not collide with, by
     name or by credential -- for an edit, everybody except the user being
     edited, whose stored fields are ``previous``.
+
+    ``carried`` is stored fields the form did not show, kept as they are.
+    They are not a submission, so neither a value rule nor the duplicate
+    check applies to them: the user could not change them, and an error on a
+    field the form does not draw leaves a dialog that can never be
+    submitted. They still count as the credential an enabled user needs.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, Any] = {}
     # Compared as it will be stored: a PIN is stripped where it enters.
     submitted = {**user_input, CONF_PIN: (user_input.get(CONF_PIN) or "").strip()}
 
-    if _slot_enabled_without_credential(submitted):
+    if _slot_enabled_without_credential({**submitted, **carried}):
         errors["base"] = "missing_credential_if_enabled"
     invalid = _credential_errors(submitted)
     errors.update(invalid)
@@ -561,7 +568,9 @@ def _validate_user_form(
         return None, {}, errors, placeholders
 
     # The widest form, so a password the caller carried or offered is kept.
-    fields = _code_slot_schema(password=True)({**user_input, CONF_NAME: name})
+    fields = _code_slot_schema(password=True)(
+        {**user_input, **carried, CONF_NAME: name}
+    )
     del fields[CONF_NAME]
     return name, fields, errors, placeholders
 
@@ -1360,17 +1369,23 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         others = {other: user for other, user in config.users.items() if other != held}
 
         if user_input is not None:
-            if not self._password_offered and (
-                kept := subentry.data.get(CONF_PASSWORD)
-            ):
-                # Not offered by this entry's locks, still the user's (spec
-                # decision 10): the form did not show it, so it cannot have
-                # cleared it.
-                user_input = {**user_input, CONF_PASSWORD: kept}
+            # Not offered by this entry's locks, still the user's (spec
+            # decision 10): the form did not show it, so it cannot have
+            # cleared it.
+            carried = (
+                {CONF_PASSWORD: kept}
+                if not self._password_offered
+                and (kept := subentry.data.get(CONF_PASSWORD))
+                else {}
+            )
             # Compared with the user as read, PIN stripped: one stored with
             # padding is the same PIN submitted without it.
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, others, config.users.get(held, subentry.data)
+                self.hass,
+                user_input,
+                others,
+                config.users.get(held, subentry.data),
+                carried,
             )
             description_placeholders.update(placeholders)
 

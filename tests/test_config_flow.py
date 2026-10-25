@@ -4076,6 +4076,55 @@ async def test_editing_a_user_keeps_a_password_the_form_does_not_offer(
     assert entry.subentries[subentry.subentry_id].data["password"] == "kept"
 
 
+@pytest.mark.parametrize(
+    ("stored", "submitted"),
+    [
+        # Only hand-edited storage holds one: no write path accepts it.
+        pytest.param(
+            {CONF_PIN: "1234", "password": "café"},
+            {CONF_PIN: "1234"},
+            id="a-password-its-rule-refuses",
+        ),
+        pytest.param({"password": "kept"}, {}, id="the-only-credential-the-user-has"),
+    ],
+)
+async def test_editing_a_user_takes_a_password_the_form_does_not_offer_as_stored(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    stored: dict[str, str],
+    submitted: dict[str, str],
+):
+    """
+    A carried password is the user's stored value, not a submission.
+
+    No rule is applied to a field the form does not draw, since an error on
+    it could never be cleared; it still is the credential an enabled user
+    needs.
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {"Ann": {CONF_ENABLED: True, **stored}},
+        unique_id="carries-password-as-stored",
+    )
+    subentry = next(iter(entry.subentries.values()))
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+    assert "password" not in {str(key) for key in result["data_schema"].schema}
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {CONF_NAME: "Annie", CONF_ENABLED: True, **submitted}
+        )
+
+    assert result["type"] == "abort"
+    edited = entry.subentries[subentry.subentry_id]
+    assert edited.title == "Annie"
+    assert edited.data["password"] == stored["password"]
+
+
 async def test_editing_a_user_leaves_a_shared_pin_alone(
     hass: HomeAssistant, mock_lock_config_entry
 ):
