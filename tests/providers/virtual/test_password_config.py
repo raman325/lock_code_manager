@@ -194,7 +194,7 @@ async def test_another_users_password_is_refused(
         CredentialType.PASSWORD, "shared"
     )
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError, match="already has this password$"):
         await slot_coordinators[1].async_request_credential_update(
             CredentialType.PASSWORD, "shared"
         )
@@ -641,7 +641,7 @@ async def test_add_user_refuses_a_password_another_user_holds(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
     """Duplicates are refused within the batch and against the entry."""
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError, match="cannot have the password "):
         await hass.services.async_call(
             DOMAIN,
             SERVICE_ADD_USER,
@@ -1007,7 +1007,7 @@ async def test_a_refused_password_turns_the_user_off_beside_a_working_pin(
     issue = _disabled_issue(hass, lcm_config_entry)
     assert issue is not None
     assert issue.translation_placeholders is not None
-    assert "refused the Password for slot" in issue.translation_placeholders["reason"]
+    assert "refused the password for slot" in issue.translation_placeholders["reason"]
     assert "too simple" in issue.translation_placeholders["reason"]
 
 
@@ -1032,7 +1032,7 @@ async def test_a_refused_only_credential_turns_the_slot_off(
     issue = _disabled_issue(hass, lcm_config_entry)
     assert issue is not None
     assert issue.translation_placeholders is not None
-    assert "refused the Password for slot" in issue.translation_placeholders["reason"]
+    assert "refused the password for slot" in issue.translation_placeholders["reason"]
 
 
 async def test_a_new_user_with_a_refused_password_is_turned_off(
@@ -1067,7 +1067,7 @@ async def test_a_new_user_with_a_refused_password_is_turned_off(
     issue = _disabled_issue(hass, lcm_config_entry, slot)
     assert issue is not None
     assert issue.translation_placeholders is not None
-    assert "refused the Password for slot" in issue.translation_placeholders["reason"]
+    assert "refused the password for slot" in issue.translation_placeholders["reason"]
 
 
 async def test_slot_disabled_is_answered_once_the_slot_is_in_sync(

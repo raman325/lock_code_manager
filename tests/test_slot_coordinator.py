@@ -1240,7 +1240,9 @@ async def test_another_users_pin_is_refused(
     """Two users sharing a PIN: whoever types it opens the door as either."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
 
-    with pytest.raises(ServiceValidationError) as refused:
+    with pytest.raises(
+        ServiceValidationError, match="already has this PIN$"
+    ) as refused:
         await coordinator.async_request_credential_update(CredentialType.PIN, "5678")
 
     assert "5678" not in str(refused.value)

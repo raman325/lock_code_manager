@@ -209,6 +209,13 @@ def credential_in_sync_key(credential_type: str) -> str:
 # holds the two together and to the managed credential types.
 CREDENTIAL_LABELS = {"pin": "PIN", "password": "Password"}
 
+
+def credential_noun(credential_type: str) -> str:
+    """Return how a credential type is named mid-sentence; an acronym stays."""
+    label = CREDENTIAL_LABELS[credential_type]
+    return label if label.isupper() else label.lower()
+
+
 ATTR_PIN_IN_SYNC = credential_in_sync_key("pin")
 
 # What a per-lock entity is called after the lock's name. Mirrors the

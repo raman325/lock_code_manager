@@ -14,9 +14,9 @@ from ..const import (
     ATTR_REASON,
     ATTR_USER,
     ATTR_VALID,
-    CREDENTIAL_LABELS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
+    credential_noun,
 )
 from ..model.config import (
     EntryConfig,
@@ -540,9 +540,9 @@ async def async_add_users(
                     {**config.users, **additions}, credential_type, value
                 )
             ) is not None:
-                label = CREDENTIAL_LABELS[credential_type.value]
+                noun = credential_noun(credential_type.value)
                 raise ServiceValidationError(
-                    f"{name!r} cannot have the {label} {holder!r} already has"
+                    f"{name!r} cannot have the {noun} {holder!r} already has"
                 )
         if condition:
             _async_validate_condition(hass, condition)

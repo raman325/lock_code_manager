@@ -33,11 +33,11 @@ from homeassistant.helpers.issue_registry import (
 from homeassistant.helpers.start import async_at_started
 
 from ..const import (
-    CREDENTIAL_LABELS,
     DATA,
     DOMAIN,
     MAX_SEARCHED_SLOT,
     LockCodeManagerData,
+    credential_noun,
 )
 from ..model.credentials import (
     CredentialAddress,
@@ -267,7 +267,7 @@ def async_setup_lock_registry(
                     "slot_num": str(slot),
                     "reason": (
                         f"Lock **{lock_entity_id}** refused the "
-                        f"{CREDENTIAL_LABELS[address.credential_type.value]} for "
+                        f"{credential_noun(address.credential_type.value)} for "
                         f"slot **{slot}**.{why}\n\nFix the issue and re-enable "
                         "the slot."
                     ),
