@@ -37,6 +37,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_SET_CREDENTIAL,
     SUBENTRY_TYPE_USER,
 )
+from custom_components.lock_code_manager.ha.callbacks import EntityCallbackRegistry
 from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
@@ -318,6 +319,26 @@ async def test_the_password_entity_leaves_with_the_last_password_lock(
     assert _password_entity(hass, lcm_config_entry, 1) is None
     assert _password_entity(hass, lcm_config_entry, 2) is None
     assert get_entry_config(lcm_config_entry).slot(1)["password"] == "pw"
+
+
+async def test_a_reload_leaves_the_password_entities_to_the_slot_teardown(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """An unload is no lock leaving the entry: the lock-removed handler stands aside."""
+    original = EntityCallbackRegistry.async_remove_entity
+    with patch.object(
+        EntityCallbackRegistry,
+        "async_remove_entity",
+        autospec=True,
+        side_effect=original,
+    ) as remove_entity:
+        assert await hass.config_entries.async_reload(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+
+    assert not [
+        call for call in remove_entity.call_args_list if "password" in call.args[1]
+    ]
+    assert _password_entity(hass, lcm_config_entry, 1) is not None
 
 
 async def test_the_password_entity_stays_while_a_password_lock_remains(

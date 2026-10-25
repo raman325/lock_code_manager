@@ -4,6 +4,7 @@ import logging
 from typing import override
 
 from homeassistant.components.text import TextEntity, TextMode
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
@@ -78,6 +79,10 @@ async def async_setup_entry(
 
     @callback
     def lock_removed(lock_entity_id: str) -> None:
+        # Unloading runs these handlers too, but its slot teardown has already
+        # removed every slot entity; only a lock leaving a loaded entry acts.
+        if config_entry.state is not ConfigEntryState.LOADED:
+            return
         # The removed lock is still held while its handlers run.
         remaining = (
             lock
