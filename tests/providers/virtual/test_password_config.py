@@ -106,6 +106,20 @@ async def test_a_password_is_kept_as_typed(
     assert get_virtual_lock(hass, lcm_config_entry)._data["1"]["password"] == " pw "
 
 
+async def test_a_blank_password_is_refused(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Spaces alone are refused, not kept as typed, and nothing is stored."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError, match="Password must not be blank"):
+        await coordinator.async_request_credential_update(
+            CredentialType.PASSWORD, "   "
+        )
+
+    assert "password" not in get_entry_config(lcm_config_entry).slot(1)
+
+
 async def test_clearing_the_password_leaves_the_slot_on(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
@@ -628,6 +642,21 @@ async def test_a_password_outside_printable_ascii_is_refused_in_the_form(
 
     assert result["errors"] == {"password": "invalid_password"}
     assert "café-marker" not in str(result.get("description_placeholders"))
+
+
+async def test_a_blank_password_is_refused_in_the_form(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Spaces alone are refused on the password field."""
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "Guest", CONF_ENABLED: True, "password": "   "},
+    )
+
+    assert result["errors"] == {"password": "invalid_password"}
 
 
 async def test_another_users_password_is_refused_in_the_form(

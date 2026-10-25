@@ -504,11 +504,20 @@ def test_credential_address_distinguishes_types_at_the_same_user_ref() -> None:
 
 
 @pytest.mark.parametrize(
-    "value", ["open sesame", "P@ss w0rd!", "~`{}|\\", " ", "a" * 64]
+    "value", ["open sesame", "P@ss w0rd!", "~`{}|\\", " a ", "a" * 64]
 )
 def test_a_printable_password_is_accepted(value: str) -> None:
     """Printable ASCII, space included, is a password (spec decision 1)."""
     assert credential_value_error(CredentialType.PASSWORD, value) is None
+
+
+@pytest.mark.parametrize("value", ["   ", " "])
+def test_a_blank_password_is_refused(value: str) -> None:
+    """Spaces alone are nothing to present, though they would count as held."""
+    assert (
+        credential_value_error(CredentialType.PASSWORD, value)
+        == "Password must not be blank"
+    )
 
 
 @pytest.mark.parametrize("value", ["café", "tab\there", "new\nline", "\x7f", "emoji😀"])

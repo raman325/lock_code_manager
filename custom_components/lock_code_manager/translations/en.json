@@ -11,7 +11,7 @@
       "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
       "missing_credential_if_enabled": "A PIN or password must be set for any user who is enabled.",
       "invalid_pin": "PIN may be at most 255 characters.",
-      "invalid_password": "Password may only contain letters, digits, symbols and spaces, and may be at most 255 characters.",
+      "invalid_password": "Password must not be blank, may only contain letters, digits, symbols and spaces, and may be at most 255 characters.",
       "pin_not_unique": "Another user already has this PIN.",
       "password_not_unique": "Another user already has this password.",
       "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",
@@ -625,7 +625,7 @@
       "error": {
         "missing_credential_if_enabled": "A PIN or password must be set for any user who is enabled.",
         "invalid_pin": "PIN may be at most 255 characters.",
-        "invalid_password": "Password may only contain letters, digits, symbols and spaces, and may be at most 255 characters.",
+        "invalid_password": "Password must not be blank, may only contain letters, digits, symbols and spaces, and may be at most 255 characters.",
         "pin_not_unique": "Another user already has this PIN.",
         "password_not_unique": "Another user already has this password.",
         "name_not_unique": "That name is already used by another user in this configuration. Names must be unique.",

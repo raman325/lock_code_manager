@@ -177,10 +177,13 @@ def credential_value_error(credential_type: CredentialType, value: str) -> str |
             f"{CREDENTIAL_LABELS[credential_type]} may be at most "
             f"{MAX_LENGTH_STATE_STATE} characters"
         )
-    if (
-        credential_type is CredentialType.PASSWORD
-        and not set(value) <= _PASSWORD_CHARACTERS
-    ):
+    if credential_type is not CredentialType.PASSWORD:
+        return None
+    # Spaces alone would count as a credential held while being nothing to
+    # present. Checked on a stripped copy: the password itself is kept as typed.
+    if not value.strip():
+        return "Password must not be blank"
+    if not set(value) <= _PASSWORD_CHARACTERS:
         return "Password may only contain letters, digits, symbols and spaces"
     return None
 
