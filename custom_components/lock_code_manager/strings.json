@@ -478,17 +478,6 @@
         }
       }
     },
-    "credential_refused": {
-      "title": "Lock Code Manager: {lock_name} refused the {credential} for slot {slot_num}",
-      "fix_flow": {
-        "step": {
-          "init": {
-            "title": "{lock_name} refused the {credential} for slot {slot_num}",
-            "description": "Lock `{lock_entity_id}` refused the {credential} for slot {slot_num}.\n\n**Reason:** {reason}\n\nChange the {credential}, or click **Submit** to try it again."
-          }
-        }
-      }
-    },
     "slot_clear_failed": {
       "title": "Lock Code Manager: Code not removed from slot {slot_num} on {lock_name}",
       "fix_flow": {
