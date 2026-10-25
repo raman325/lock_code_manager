@@ -468,6 +468,52 @@ async def test_config_flow_yaml_rejects_a_whitespace_only_pin(
     assert result["errors"] == {"base": "invalid_config"}
 
 
+async def test_config_flow_yaml_takes_an_empty_password_as_none(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """An empty password means none, as an empty PIN does, and both are kept so."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await async_configure_flow(
+            hass,
+            flow_id,
+            {
+                CONF_USERS: {
+                    "User 1": {CONF_ENABLED: True, CONF_PIN: "1234", "password": ""},
+                    "User 2": {CONF_ENABLED: False, CONF_PIN: "", "password": ""},
+                }
+            },
+        )
+
+    assert result["type"] == "create_entry"
+    assert flow_users(result) == {
+        "User 1": {CONF_ENABLED: True, CONF_PIN: "1234", "password": ""},
+        "User 2": {CONF_ENABLED: False, CONF_PIN: "", "password": ""},
+    }
+
+
+async def test_config_flow_yaml_rejects_a_whitespace_only_password(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Spaces alone are not empty: the password rule refuses them."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await async_configure_flow(
+            hass,
+            flow_id,
+            {
+                CONF_USERS: {
+                    "User 1": {CONF_ENABLED: True, CONF_PIN: "1234", "password": "  "}
+                }
+            },
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "invalid_config"}
+
+
 async def test_options_flow_edits_the_locks(
     hass: HomeAssistant, mock_lock_config_entry
 ):

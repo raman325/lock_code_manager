@@ -137,8 +137,9 @@ def _obeys_rule(credential_type: CredentialType) -> Callable[[str], str]:
     """Return a validator refusing a ``credential_type`` its rule refuses."""
 
     def _validate(value: str) -> str:
-        # The reason names the rule, never the value: it is logged.
-        if error := credential_value_error(credential_type, value):
+        # Empty is no credential, for every type. The reason names the rule,
+        # never the value: it is logged.
+        if value and (error := credential_value_error(credential_type, value)):
             raise vol.Invalid(error)
         return value
 
