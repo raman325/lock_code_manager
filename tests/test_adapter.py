@@ -31,6 +31,8 @@ from custom_components.lock_code_manager.ha.adapter import (
 from custom_components.lock_code_manager.model.credentials import (
     CredentialAddress,
     CredentialType,
+    CredentialTypeCapability,
+    LockCapabilities,
     SlotCredential,
     pin_address,
 )
@@ -60,6 +62,7 @@ from custom_components.lock_code_manager.sync.worker import (
 
 from .common import (
     NO_PIN_CAPABILITIES,
+    PIN_CAPABILITIES,
     MockLCMLock,
     MockLCMPushLock,
     when_mock_lock_built,
@@ -889,6 +892,22 @@ async def test_a_clear_that_found_nothing_says_so(ports) -> None:
     assert await port.write(pin_address(1), None) is True
 
 
+async def test_a_retried_release_goes_to_the_provider_again(ports) -> None:
+    """Each try of a slot's release is sent: one the lock did not take is retried."""
+    port, _, lock = await ports()
+    with patch.object(
+        type(lock),
+        "async_release_managed_slot",
+        autospec=True,
+        side_effect=type(lock).async_release_managed_slot,
+    ) as released:
+        port.release(1, written=True)
+        await port.write(pin_address(1), None)
+        await port.write(pin_address(1), None)
+
+    assert released.call_count == 2
+
+
 async def test_an_unknown_capacity_does_not_stop_a_read(ports) -> None:
     """A capability probe that breaks limits nothing: the slot is still read."""
     port, _, lock = await ports()
@@ -1160,3 +1179,82 @@ async def test_a_lock_with_only_slots_past_capacity_holds_them_at_once(
         assert worker.reachable
         assert 40 not in lock.codes
         await worker.stop(grace=0.1)
+
+
+async def test_a_provider_writes_pins_unless_it_says_otherwise(
+    hass: HomeAssistant,
+) -> None:
+    """The base provider's writable types: PIN alone."""
+    assert _build(hass).writable_credential_types == {CredentialType.PIN}
+
+
+async def test_a_lock_manages_the_managed_types_its_provider_writes(
+    hass: HomeAssistant,
+) -> None:
+    """Managed, writable and, once known, advertised; PIN always."""
+    pin_and_password = frozenset({CredentialType.PIN, CredentialType.PASSWORD})
+    password_only = LockCapabilities(
+        supports_user_management=False,
+        max_users=10,
+        credential_types={
+            CredentialType.PASSWORD: CredentialTypeCapability(
+                num_slots=10, min_length=0, max_length=0, supports_learn=False
+            )
+        },
+    )
+    lock = _build(hass)
+    with patch(
+        "custom_components.lock_code_manager.providers._base.MANAGED_CREDENTIAL_TYPES",
+        pin_and_password,
+    ):
+        # The provider writes PIN alone.
+        assert lock.managed_credential_types == {CredentialType.PIN}
+        with patch.object(
+            MockLCMLock,
+            "writable_credential_types",
+            new_callable=PropertyMock,
+            return_value=pin_and_password,
+        ):
+            # Capabilities not read yet: nothing narrows what is written.
+            assert lock.managed_credential_types == pin_and_password
+            lock._capabilities_cache = PIN_CAPABILITIES
+            assert lock.managed_credential_types == {CredentialType.PIN}
+            # Every slot keeps a PIN address, advertised or not.
+            lock._capabilities_cache = password_only
+            assert lock.managed_credential_types == pin_and_password
+
+
+async def test_a_type_the_provider_cannot_write_is_refused_untouched(
+    hass: HomeAssistant,
+) -> None:
+    """Slot-only providers ignore the type, so a stray set would write the PIN."""
+    lock = _build(hass)
+    codes = dict(lock.codes)
+
+    with pytest.raises(LockOperationUnsupported):
+        await lock.async_set_slot_credential(1, CredentialType.PASSWORD, "x")
+    with pytest.raises(LockOperationUnsupported):
+        await lock.async_clear_slot_credential(1, CredentialType.PASSWORD)
+
+    assert lock.codes == codes
+    assert not lock.service_calls
+
+
+async def test_the_typed_hooks_route_a_pin_through_the_pin_hooks(
+    hass: HomeAssistant,
+) -> None:
+    """A provider overrides the PIN hooks, so the typed ones must reach them."""
+    lock = _build(hass)
+
+    await lock.async_set_slot_credential(5, CredentialType.PIN, "5555")
+    assert lock.codes[5] == "5555"
+    read = await lock.async_get_slot_credentials(CredentialType.PIN, [5])
+    assert read[5] == SlotCredential.known("5555")
+    assert await lock.async_clear_slot_credential(5, CredentialType.PIN)
+    assert 5 not in lock.codes
+
+    assert list(lock.service_calls) == [
+        "set_usercode",
+        "get_usercodes",
+        "clear_usercode",
+    ]

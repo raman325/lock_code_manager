@@ -19,7 +19,7 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.util.async_ import create_eager_task
 
 from ..const import MAX_SEARCHED_SLOT
-from ..model.credentials import CredentialType, pin_address
+from ..model.credentials import CredentialAddress, CredentialType
 from ..model.exceptions import LockCodeManagerError
 from ..model.occupancy import LockOccupancy, Occupancy
 from ..model.queries import slots_configured_on
@@ -248,7 +248,12 @@ async def async_read_occupancy(
                 if not lock_instance.credential_index_follows_slot:
                     occupied = await _async_adoptable(hass, lock_instance, indices)
                 else:
-                    occupied = await _async_occupied(hass, lock_entity_id, indices)
+                    occupied = await _async_occupied(
+                        hass,
+                        lock_entity_id,
+                        indices,
+                        lock_instance.managed_credential_types,
+                    )
                     if lock_instance.supports_native_users:
                         # The read gives a slot someone else's code at its
                         # index as empty (#1695): the slot's own view, not
@@ -535,17 +540,27 @@ async def async_allocate_for(
 
 
 async def _async_occupied(
-    hass: HomeAssistant, lock_entity_id: str, indices: Collection[int]
+    hass: HomeAssistant,
+    lock_entity_id: str,
+    indices: Collection[int],
+    credential_types: Collection[CredentialType],
 ) -> frozenset[int]:
     """
-    Return which of ``indices`` the lock holds, read in its worker's turn.
+    Return which of ``indices`` the lock holds anything in, read in its worker's turn.
 
-    An index whose value could not be read still counts: it holds something,
-    and over-reserving costs a user a slot number, while under-reserving
-    costs them the code on their door. Silence says nothing, so it does not.
+    Any managed type counts: a slot holding only a password is not free.
+    An index whose value could not be read still counts: it holds
+    something, and over-reserving costs a user a slot number, while
+    under-reserving costs them the code on their door. Silence says
+    nothing, so it does not.
     """
     readings = await lock_registry(hass).read_once(
-        lock_entity_id, [pin_address(index) for index in indices]
+        lock_entity_id,
+        [
+            CredentialAddress(index, credential_type)
+            for index in indices
+            for credential_type in sorted(credential_types)
+        ],
     )
     return frozenset(
         address.user_ref

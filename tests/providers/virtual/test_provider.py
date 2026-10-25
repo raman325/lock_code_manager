@@ -285,3 +285,70 @@ async def test_occupied_indices_reports_stored_slots(virtual_lock: VirtualLock) 
     # Stored slots outside the scope are reported too -- the projection seeds
     # the scope but never drops what the lock actually holds.
     assert codes[11].is_present
+
+
+async def test_a_password_is_kept_beside_the_pin(virtual_lock: VirtualLock) -> None:
+    """A slot holds a PIN and a password apart: writing one leaves the other."""
+    await virtual_lock.async_set_usercode(1, "1234", "Alice")
+    await virtual_lock.async_set_slot_credential(
+        1, CredentialType.PASSWORD, "open sesame", name="Alice"
+    )
+
+    assert await virtual_lock.async_get_slot_credentials(CredentialType.PIN, [1]) == {
+        1: SlotCredential.known("1234")
+    }
+    assert await virtual_lock.async_get_slot_credentials(
+        CredentialType.PASSWORD, [1]
+    ) == {1: SlotCredential.known("open sesame")}
+
+
+async def test_a_slot_with_only_a_password_reads_an_empty_pin(
+    virtual_lock: VirtualLock,
+) -> None:
+    """A password alone is no PIN."""
+    await virtual_lock.async_set_slot_credential(
+        3, CredentialType.PASSWORD, "pw", name=None
+    )
+
+    assert await virtual_lock.async_get_slot_credentials(CredentialType.PIN, [3]) == {
+        3: SlotCredential.empty()
+    }
+
+
+async def test_clearing_one_type_leaves_the_other(virtual_lock: VirtualLock) -> None:
+    """A slot's record goes once it holds no credential at all."""
+    await virtual_lock.async_set_usercode(1, "1234", "Alice")
+    await virtual_lock.async_set_slot_credential(
+        1, CredentialType.PASSWORD, "pw", name="Alice"
+    )
+
+    assert await virtual_lock.async_clear_slot_credential(1, CredentialType.PASSWORD)
+    assert virtual_lock._data == {"1": {"code": "1234", "name": "Alice"}}
+    assert not await virtual_lock.async_clear_slot_credential(
+        1, CredentialType.PASSWORD
+    )
+    assert await virtual_lock.async_clear_slot_credential(1, CredentialType.PIN)
+    assert virtual_lock._data == {}
+
+
+async def test_writing_the_same_password_again_changes_nothing(
+    virtual_lock: VirtualLock,
+) -> None:
+    """The second write of a value the slot holds is no change."""
+    write = virtual_lock.async_set_slot_credential
+    assert await write(1, CredentialType.PASSWORD, "pw", name="A") is (
+        WriteResult.CONFIRMED
+    )
+    assert await write(1, CredentialType.PASSWORD, "pw", name="A") is (
+        WriteResult.NO_CHANGE
+    )
+
+
+async def test_a_virtual_lock_writes_pins_and_passwords(
+    virtual_lock: VirtualLock,
+) -> None:
+    """The types its store keeps; it advertises every type, and writes these."""
+    assert virtual_lock.writable_credential_types == {
+        CredentialType.PIN,
+        CredentialType.PASSWORD,
+    }

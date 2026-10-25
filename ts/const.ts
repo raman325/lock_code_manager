@@ -15,7 +15,7 @@ export const inSyncCredential = (key: string): string | undefined =>
     IN_SYNC_KEY_PATTERN.exec(key)?.[1];
 // How a credential is named on a card row, keyed by the backend's credential
 // type; mirrors CREDENTIAL_LABELS in the backend's const.py.
-export const CREDENTIAL_LABELS: Record<string, string> = { pin: 'PIN' };
+export const CREDENTIAL_LABELS: Record<string, string> = { password: 'Password', pin: 'PIN' };
 
 // Condition keys
 export const CONDITION_CALENDAR = 'calendar';
