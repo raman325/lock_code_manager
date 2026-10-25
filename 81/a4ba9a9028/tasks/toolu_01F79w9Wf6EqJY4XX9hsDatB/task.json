@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01F79w9Wf6EqJY4XX9hsDatB",
+  "agent_id": "a6e596dd928d1ff7c",
+  "subagent_type": "general-purpose",
+  "task_description": "Simplify refusal rule on #1772",
+  "token_usage": {
+    "input_tokens": 216,
+    "cache_creation_tokens": 404721,
+    "cache_read_tokens": 17653717,
+    "output_tokens": 50569,
+    "api_call_count": 107
+  },
+  "started_at": "2026-10-25T15:24:00.287748-04:00",
+  "completed_at": "2026-10-25T16:52:11.82657-04:00"
+}
