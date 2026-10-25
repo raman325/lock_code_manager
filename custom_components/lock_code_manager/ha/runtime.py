@@ -915,14 +915,16 @@ def async_reconcile_issues(
         by_slot.setdefault(address.user_ref, []).append((address, credential))
     for slot_num, credentials in by_slot.items():
         owner = configured_owner(hass, lock_entity_id, slot_num)
-        in_sync = all(
-            worker.status(address)[0] is Status.IN_SYNC for address, _ in credentials
-        )
-        wanted = [address for address, slot in credentials if slot.want is not None]
+        # Each credential's (wants a value, in sync), read once.
+        states = [
+            (slot.want is not None, worker.status(address)[0] is Status.IN_SYNC)
+            for address, slot in credentials
+        ]
+        in_sync = all(synced for _, synced in states)
         if (
             owner is not None
-            and wanted
-            and all(worker.status(address)[0] is Status.IN_SYNC for address in wanted)
+            and any(wants for wants, _ in states)
+            and all(synced for wants, synced in states if wants)
         ):
             # Every credential the user wants is on the lock: a refusal's
             # repair is answered, even one raised on a slot never turned off.
