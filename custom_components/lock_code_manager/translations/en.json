@@ -438,13 +438,13 @@
         }
       }
     },
-    "pin_required": {
-      "title": "Lock Code Manager: PIN required for slot {slot_num}",
+    "credential_required": {
+      "title": "Lock Code Manager: PIN or password required for slot {slot_num}",
       "fix_flow": {
         "step": {
           "init": {
-            "title": "PIN required for slot {slot_num}",
-            "description": "A PIN is required to enable slot {slot_num} on the lock configuration **{config_entry_title}**. Please set a PIN before enabling this slot.\n\nClick **Submit** to acknowledge this issue."
+            "title": "PIN or password required for slot {slot_num}",
+            "description": "A PIN or password is required to enable slot {slot_num} on the lock configuration **{config_entry_title}**. Set one before enabling this slot.\n\nClick **Submit** to acknowledge this issue."
           }
         }
       }

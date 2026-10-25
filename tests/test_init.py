@@ -1811,9 +1811,9 @@ async def test_acknowledge_repair_flow_steps():
     assert result["type"] == "create_entry"
 
 
-async def test_async_create_fix_flow_pin_required():
-    """Test async_create_fix_flow returns AcknowledgeRepairFlow for pin_required."""
-    flow = await async_create_fix_flow(None, "pin_required_abc_1", None)
+async def test_async_create_fix_flow_credential_required():
+    """Test async_create_fix_flow returns AcknowledgeRepairFlow for credential_required."""
+    flow = await async_create_fix_flow(None, "credential_required_abc_1", None)
     assert isinstance(flow, AcknowledgeRepairFlow)
 
 
@@ -1855,11 +1855,11 @@ async def test_unload_preserves_persistent_repair_issues(
         ir.async_create_issue(
             hass,
             DOMAIN,
-            f"pin_required_{entry_id}_{slot_num}",
+            f"credential_required_{entry_id}_{slot_num}",
             is_fixable=True,
             is_persistent=True,
             severity=ir.IssueSeverity.WARNING,
-            translation_key="pin_required",
+            translation_key="credential_required",
             translation_placeholders={
                 "slot_num": str(slot_num),
                 "config_entry_title": "test",
@@ -1879,7 +1879,10 @@ async def test_unload_preserves_persistent_repair_issues(
         )
 
     assert issue_reg.async_get_issue(DOMAIN, f"slot_disabled_{entry_id}_1") is not None
-    assert issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_2") is not None
+    assert (
+        issue_reg.async_get_issue(DOMAIN, f"credential_required_{entry_id}_2")
+        is not None
+    )
     assert (
         issue_reg.async_get_issue(DOMAIN, f"lock_offline_{LOCK_1_ENTITY_ID}")
         is not None
@@ -1895,7 +1898,9 @@ async def test_unload_preserves_persistent_repair_issues(
             is not None
         )
         assert (
-            issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+            issue_reg.async_get_issue(
+                DOMAIN, f"credential_required_{entry_id}_{slot_num}"
+            )
             is not None
         )
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
@@ -1976,11 +1981,11 @@ async def test_remove_entry_cleans_up_repair_issues(
         ir.async_create_issue(
             hass,
             DOMAIN,
-            f"pin_required_{entry_id}_{slot_num}",
+            f"credential_required_{entry_id}_{slot_num}",
             is_fixable=True,
             is_persistent=True,
             severity=ir.IssueSeverity.WARNING,
-            translation_key="pin_required",
+            translation_key="credential_required",
             translation_placeholders={
                 "slot_num": str(slot_num),
                 "config_entry_title": "test",
@@ -2022,7 +2027,9 @@ async def test_remove_entry_cleans_up_repair_issues(
             is None
         )
         assert (
-            issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+            issue_reg.async_get_issue(
+                DOMAIN, f"credential_required_{entry_id}_{slot_num}"
+            )
             is None
         )
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):

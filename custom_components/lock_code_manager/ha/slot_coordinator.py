@@ -41,7 +41,12 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import ATTR_IN_SYNC, CREDENTIAL_LABELS, DOMAIN, EVENT_CREDENTIAL_USED
-from ..model.config import EntryConfig, async_write_entry_config, credential_values
+from ..model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    credential_values,
+    has_credential,
+)
 from ..model.credentials import CredentialType, credential_value_error
 from ..model.names import name_error, normalize_name
 from ..model.queries import get_entry_config
@@ -63,7 +68,7 @@ class SlotEntityCoordinator:
 
     Computes the "active" derived state from the slot config plus the
     optional condition entity, fans out updates to the active binary
-    sensor, owns slot-level repair issues (``pin_required``), and provides
+    sensor, owns slot-level repair issues (``credential_required``), and provides
     a single intent-dispatch surface so text and switch entities do not
     have to mutate the config entry or call sibling-entity services
     directly.
@@ -365,20 +370,20 @@ class SlotEntityCoordinator:
         """
         Apply an enabled/disabled toggle requested by the switch entity.
 
-        Disable is unconditional. Enable validates that a PIN exists and
-        raises ``PinRequiredError`` if absent (the switch translates
+        Disable is unconditional. Enable needs a credential of any type and
+        raises ``CredentialRequiredError`` without one (the switch translates
         that into ``HomeAssistantError``). On a successful enable the
-        ``pin_required`` repair issue is cleared; failures inside the
+        ``credential_required`` repair issue is cleared; failures inside the
         issue registry are logged and do not unwind the write.
         """
         if not enabled:
             self._write_config_fields({CONF_ENABLED: False})
             return
 
-        if not self.pin_value:
-            self._safely_raise_pin_required_issue()
-            raise PinRequiredError(
-                f"Set a PIN code for slot {self._slot_num} before enabling it"
+        if not has_credential(self._slot_config()):
+            self._safely_raise_credential_required_issue()
+            raise CredentialRequiredError(
+                f"Set a PIN or password for slot {self._slot_num} before enabling it"
             )
 
         self._write_config_fields({CONF_ENABLED: True})
@@ -386,11 +391,11 @@ class SlotEntityCoordinator:
             async_delete_issue(
                 self._hass,
                 DOMAIN,
-                f"pin_required_{self._config_entry.entry_id}_{self._slot_num}",
+                f"credential_required_{self._config_entry.entry_id}_{self._slot_num}",
             )
         except Exception:
             _LOGGER.exception(
-                "%s: Failed to delete pin_required repair issue after enable",
+                "%s: Failed to delete credential_required repair issue after enable",
                 self._log_prefix,
             )
 
@@ -534,17 +539,17 @@ class SlotEntityCoordinator:
             writer(self._is_active, list(self._inactive_because_of))
 
     @callback
-    def _safely_raise_pin_required_issue(self) -> None:
-        """Create the ``pin_required`` repair issue, logging registry failures."""
+    def _safely_raise_credential_required_issue(self) -> None:
+        """Create the ``credential_required`` repair issue, logging registry failures."""
         try:
             async_create_issue(
                 self._hass,
                 DOMAIN,
-                f"pin_required_{self._config_entry.entry_id}_{self._slot_num}",
+                f"credential_required_{self._config_entry.entry_id}_{self._slot_num}",
                 is_fixable=True,
                 is_persistent=True,
                 severity=IssueSeverity.WARNING,
-                translation_key="pin_required",
+                translation_key="credential_required",
                 translation_placeholders={
                     "slot_num": str(self._slot_num),
                     "config_entry_title": self._config_entry.title,
@@ -552,13 +557,13 @@ class SlotEntityCoordinator:
             )
         except Exception:
             _LOGGER.exception(
-                "%s: Failed to create pin_required repair issue",
+                "%s: Failed to create credential_required repair issue",
                 self._log_prefix,
             )
 
 
-class PinRequiredError(Exception):
-    """Raised when a slot cannot be enabled because no PIN is configured."""
+class CredentialRequiredError(Exception):
+    """Raised when a slot cannot be enabled because it holds no credential."""
 
 
 class InvalidNameError(HomeAssistantError):

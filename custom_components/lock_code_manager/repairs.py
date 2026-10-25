@@ -176,7 +176,7 @@ async def async_create_fix_flow(
         (
             "number_of_uses_removed",
             "slot_disabled_",
-            "pin_required_",
+            "credential_required_",
             "slot_suspended_",
             RE_PAIRED_WORK_DROPPED,
         )

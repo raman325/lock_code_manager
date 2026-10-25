@@ -12,7 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .entity import BaseLockCodeManagerEntity
 from .ha.entry import LockCodeManagerConfigEntry
-from .ha.slot_coordinator import PinRequiredError
+from .ha.slot_coordinator import CredentialRequiredError
 from .model.queries import subentry_id_for_slot
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,7 +59,7 @@ class LockCodeManagerSwitch(BaseLockCodeManagerEntity, SwitchEntity):
         coordinator = self._require_slot_coordinator()
         try:
             await coordinator.async_request_active_toggle(True)
-        except PinRequiredError as err:
+        except CredentialRequiredError as err:
             raise HomeAssistantError(str(err)) from err
         self.async_write_ha_state()
 

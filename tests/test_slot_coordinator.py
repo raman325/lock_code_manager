@@ -28,6 +28,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
 from custom_components.lock_code_manager.binary_sensor import (
@@ -43,7 +44,7 @@ from custom_components.lock_code_manager.ha.entry import (
     available_credential_types,
 )
 from custom_components.lock_code_manager.ha.slot_coordinator import (
-    PinRequiredError,
+    CredentialRequiredError,
     SlotEntityCoordinator,
 )
 from custom_components.lock_code_manager.model.credentials import (
@@ -366,32 +367,32 @@ async def test_request_active_toggle_blocks_when_no_pin(
     assert coordinator.is_enabled is False
     assert coordinator.pin_value is None
 
-    with pytest.raises(PinRequiredError):
+    with pytest.raises(CredentialRequiredError):
         await coordinator.async_request_active_toggle(True)
 
     issue_registry = async_get_issue_registry(hass)
     issue = issue_registry.async_get_issue(
-        DOMAIN, f"pin_required_{lock_code_manager_config_entry.entry_id}_1"
+        DOMAIN, f"credential_required_{lock_code_manager_config_entry.entry_id}_1"
     )
     assert issue is not None
     assert coordinator.is_enabled is False
 
 
-async def test_request_active_toggle_clears_pin_required_issue(
+async def test_request_active_toggle_clears_credential_required_issue(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """Successful enable removes the pin_required repair issue."""
+    """Successful enable removes the credential_required repair issue."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
     await coordinator.async_request_pin_update("")
     await hass.async_block_till_done()
-    with pytest.raises(PinRequiredError):
+    with pytest.raises(CredentialRequiredError):
         await coordinator.async_request_active_toggle(True)
     issue_registry = async_get_issue_registry(hass)
     assert (
         issue_registry.async_get_issue(
-            DOMAIN, f"pin_required_{lock_code_manager_config_entry.entry_id}_1"
+            DOMAIN, f"credential_required_{lock_code_manager_config_entry.entry_id}_1"
         )
         is not None
     )
@@ -405,18 +406,18 @@ async def test_request_active_toggle_clears_pin_required_issue(
     assert coordinator.is_enabled is True
     assert (
         issue_registry.async_get_issue(
-            DOMAIN, f"pin_required_{lock_code_manager_config_entry.entry_id}_1"
+            DOMAIN, f"credential_required_{lock_code_manager_config_entry.entry_id}_1"
         )
         is None
     )
 
 
-async def test_switch_turn_on_raises_homeassistanterror_for_pin_required(
+async def test_switch_turn_on_raises_homeassistanterror_for_credential_required(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
 ):
-    """The switch entity translates PinRequiredError into HomeAssistantError."""
+    """The switch entity translates CredentialRequiredError into HomeAssistantError."""
     # Disable slot 2 so we can test the enable path; clear its PIN to trigger
     await hass.services.async_call(
         SWITCH_DOMAIN,
@@ -432,7 +433,7 @@ async def test_switch_turn_on_raises_homeassistanterror_for_pin_required(
         blocking=True,
     )
 
-    with pytest.raises(HomeAssistantError, match="Set a PIN code"):
+    with pytest.raises(HomeAssistantError, match="Set a PIN or password"):
         await hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TURN_ON,
@@ -781,7 +782,7 @@ async def test_active_toggle_enable_survives_repair_issue_delete_failure(
     lock_code_manager_config_entry,
     caplog: pytest.LogCaptureFixture,
 ):
-    """A failure deleting the pin_required repair issue does not unwind the enable."""
+    """A failure deleting the credential_required repair issue does not unwind the enable."""
     runtime_data = lock_code_manager_config_entry.runtime_data
     coordinator = runtime_data.slot_coordinators[1]
     # Disable so the toggle has work to do.
@@ -1072,13 +1073,13 @@ async def test_recompute_active_missing_condition_entity_is_inactive(
     await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_pin_required_issue_creation_failure_is_swallowed(
+async def test_credential_required_issue_creation_failure_is_swallowed(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
     caplog: pytest.LogCaptureFixture,
 ):
-    """A failure creating the pin_required repair issue does not swallow the raise."""
+    """A failure creating the credential_required repair issue does not swallow the raise."""
     coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
     await coordinator.async_request_pin_update("")
     await hass.async_block_till_done()
@@ -1090,7 +1091,7 @@ async def test_pin_required_issue_creation_failure_is_swallowed(
         side_effect=boom,
     ):
         with caplog.at_level(logging.ERROR):
-            with pytest.raises(PinRequiredError):
+            with pytest.raises(CredentialRequiredError):
                 await coordinator.async_request_active_toggle(True)
 
     assert any(
@@ -1178,3 +1179,25 @@ async def test_a_stored_empty_password_does_not_gate_the_slot(
     await coordinator.async_request_credential_update(CredentialType.PASSWORD, "")
 
     assert coordinator.is_active is True
+
+
+async def test_a_leftover_pin_required_issue_is_deleted_at_setup(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """The issue's old id is cleared once the entry is set up again."""
+    entry_id = lock_code_manager_config_entry.entry_id
+    ir.async_create_issue(
+        hass,
+        DOMAIN,
+        f"pin_required_{entry_id}_1",
+        is_fixable=True,
+        severity=ir.IssueSeverity.WARNING,
+        translation_key="credential_required",
+    )
+
+    await hass.config_entries.async_reload(entry_id)
+    await hass.async_block_till_done()
+
+    assert (
+        ir.async_get(hass).async_get_issue(DOMAIN, f"pin_required_{entry_id}_1") is None
+    )

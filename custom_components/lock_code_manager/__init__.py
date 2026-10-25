@@ -1217,7 +1217,7 @@ async def async_remove_entry(
         async_hand_off(hass, config_entry, lock_entity_id, config.slot_numbers)
     for slot_num in config.slot_numbers:
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
-        async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
+        async_delete_issue(hass, DOMAIN, f"credential_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
         # Only delete per-lock issues if no other LCM entry manages this lock.
         if not another_entry_configures(hass, config_entry, lock_entity_id):
@@ -2061,6 +2061,8 @@ async def _async_apply_entry_update_locked(
     # `in_sync`) look up the slot coordinator in async_added_to_hass and
     # would warn if it did not yet exist.
     for slot_num in slots_to_add:
+        # The repair's id before passwords: a leftover from an older release.
+        async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
         coordinator = SlotEntityCoordinator(hass, config_entry, slot_num)
         runtime_data.slot_coordinators[slot_num] = coordinator
         coordinator.async_start()

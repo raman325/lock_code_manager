@@ -112,3 +112,17 @@ async def test_a_password_only_user_is_in_sync(
         "password": "pw",
         "name": "slot1",
     }
+
+
+async def test_a_password_alone_can_enable_the_slot(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Enabling needs a credential of any type."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
+    await coordinator.async_request_active_toggle(False)
+
+    await coordinator.async_request_active_toggle(True)
+
+    assert coordinator.is_enabled is True

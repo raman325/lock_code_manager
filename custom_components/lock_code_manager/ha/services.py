@@ -29,7 +29,7 @@ from ..sync.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
 from .locks import get_managed_lock
 from .runtime import async_write_once
-from .slot_coordinator import PinRequiredError, SlotEntityCoordinator
+from .slot_coordinator import CredentialRequiredError, SlotEntityCoordinator
 from .validation import validate_credential
 
 _LOGGER = logging.getLogger(__name__)
@@ -451,7 +451,7 @@ async def async_enable_user(
     coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
     try:
         await coordinator.async_request_active_toggle(True)
-    except PinRequiredError as err:
+    except CredentialRequiredError as err:
         # Not a HomeAssistantError, so it would surface as an internal error
         # rather than as the caller's problem, which is what it is.
         raise ServiceValidationError(str(err)) from err

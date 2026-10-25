@@ -87,7 +87,7 @@ async def test_switch_entity(
     )
 
     # Attempt to toggle switch on. This should raise because the PIN value is empty
-    with pytest.raises(HomeAssistantError, match="Set a PIN code"):
+    with pytest.raises(HomeAssistantError, match="Set a PIN or password"):
         await hass.services.async_call(
             SWITCH_DOMAIN,
             SERVICE_TOGGLE,
@@ -97,7 +97,7 @@ async def test_switch_entity(
 
     # Should create a repair issue
     issue_registry = async_get_issue_registry(hass)
-    issue_id = f"pin_required_{lock_code_manager_config_entry.entry_id}_2"
+    issue_id = f"credential_required_{lock_code_manager_config_entry.entry_id}_2"
     issue = issue_registry.async_get_issue(DOMAIN, issue_id)
     assert issue is not None
     assert issue.severity == "warning"
@@ -126,7 +126,7 @@ async def test_switch_entity(
     assert state
     assert state.state == STATE_ON
 
-    # The pin_required repair issue should be auto-deleted on successful turn on
+    # The credential_required repair issue should be auto-deleted on successful turn on
     issue = issue_registry.async_get_issue(DOMAIN, issue_id)
     assert issue is None
 
