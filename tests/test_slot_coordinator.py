@@ -1,6 +1,7 @@
 """Tests for the per-slot entity coordinator."""
 
 import logging
+import re
 from typing import Any
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import issue_registry as ir
+from homeassistant.helpers import issue_registry as ir, translation
 from homeassistant.helpers.issue_registry import async_get as async_get_issue_registry
 
 from custom_components.lock_code_manager.binary_sensor import (
@@ -1201,7 +1202,7 @@ async def test_a_leftover_pin_required_issue_is_deleted_at_setup(
         f"pin_required_{entry_id}_1",
         is_fixable=True,
         severity=ir.IssueSeverity.WARNING,
-        translation_key="credential_required",
+        translation_key="pin_required",
     )
 
     await hass.config_entries.async_reload(entry_id)
@@ -1210,6 +1211,25 @@ async def test_a_leftover_pin_required_issue_is_deleted_at_setup(
     assert (
         ir.async_get(hass).async_get_issue(DOMAIN, f"pin_required_{entry_id}_1") is None
     )
+
+
+async def test_a_leftover_pin_required_issue_keeps_its_text(
+    hass: HomeAssistant,
+) -> None:
+    """
+    An older release's ``pin_required`` issue still renders.
+
+    It is persistent, and only a setup of its entry deletes it: on an entry
+    that never loads again it stays, shown through its own translation key.
+    """
+    translations = await translation.async_get_translations(
+        hass, "en", "issues", {DOMAIN}
+    )
+    # The placeholders the older release raised the issue with.
+    raised_with = {"slot_num", "config_entry_title"}
+    for part in ("title", "fix_flow.step.init.title", "fix_flow.step.init.description"):
+        template = translations[f"component.{DOMAIN}.issues.pin_required.{part}"]
+        assert set(re.findall(r"\{(\w+)\}", template)) <= raised_with
 
 
 async def test_another_users_pin_is_refused(
