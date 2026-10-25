@@ -9,8 +9,13 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
-from custom_components.lock_code_manager.model.credentials import CredentialType
+from custom_components.lock_code_manager.model.credentials import (
+    MANAGED_CREDENTIAL_ORDER,
+    MANAGED_CREDENTIAL_TYPES,
+    CredentialType,
+)
 from custom_components.lock_code_manager.model.pin_masking import (
+    _TOKEN_PREFIX,
     build_pin_deobfuscation_map,
     deobfuscate_pins,
     mask_credential,
@@ -189,3 +194,25 @@ def test_deobfuscation_covers_passwords(hass: HomeAssistant) -> None:
 
     assert text == "wrote open sesame"
     assert summary["matched"] == 1
+
+
+def test_every_managed_type_has_a_token_prefix() -> None:
+    """
+    The prefixes are a second list of the types, kept beside the managed set.
+
+    A managed type without one would raise the first time its value is
+    masked, and be left out of the deobfuscation map.
+    """
+    assert _TOKEN_PREFIX.keys() >= MANAGED_CREDENTIAL_TYPES
+
+
+@pytest.mark.parametrize("credential_type", MANAGED_CREDENTIAL_ORDER)
+def test_every_managed_types_token_deobfuscates(
+    credential_type: CredentialType,
+) -> None:
+    """A masked value of each managed type is a token the log reader recognizes."""
+    token = mask_credential("secret", 1, INSTANCE_ID, credential_type)
+
+    assert deobfuscate_pins(f"wrote {token}.", {token: "secret"})[0] == (
+        "wrote secret."
+    )
