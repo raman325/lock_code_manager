@@ -1,5 +1,6 @@
 """Text for lock_code_manager."""
 
+import asyncio
 import logging
 from typing import override
 
@@ -51,8 +52,9 @@ async def async_setup_entry(
         The one place that decides, and idempotent: it compares the entities
         that exist with what the entry offers now and acts on the difference.
         Removals are awaited before the additions, so a pass that swaps one
-        password lock for another never adds beside an entity still leaving.
-        A removed entity's stored password stays (spec decision 10).
+        password lock for another never adds beside an entity still leaving;
+        the additions are independent and run concurrently. A removed
+        entity's stored password stays (spec decision 10).
         """
         slot_numbers = get_entry_config(config_entry).slot_numbers
         wanted = (
@@ -68,16 +70,23 @@ async def async_setup_entry(
         for slot_num in sorted(present - wanted):
             await callbacks.async_remove_entity(_password_uid(slot_num))
         ent_reg = er.async_get(hass)
-        for slot_num in sorted(wanted - present):
-            await platform.async_add_entities(
-                [
-                    LockCodeManagerCredentialText(
-                        hass, ent_reg, config_entry, slot_num, CredentialType.PASSWORD
+        async with asyncio.TaskGroup() as tg:
+            for slot_num in sorted(wanted - present):
+                tg.create_task(
+                    platform.async_add_entities(
+                        [
+                            LockCodeManagerCredentialText(
+                                hass,
+                                ent_reg,
+                                config_entry,
+                                slot_num,
+                                CredentialType.PASSWORD,
+                            )
+                        ],
+                        True,
+                        config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
                     )
-                ],
-                True,
-                config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
-            )
+                )
 
     config_entry.async_on_unload(
         callbacks.register_standard_adder(add_standard_text_entities)
