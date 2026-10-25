@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "4731c92d2ebc",
+  "strategy": "manual-commit",
+  "branch": "feat/password-cards-backend",
+  "checkpoints_count": 6,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/47/31c92d2ebc/0/metadata.json",
+      "transcript": "/47/31c92d2ebc/0/full.jsonl",
+      "compact_transcript": "/47/31c92d2ebc/0/transcript.jsonl",
+      "content_hash": "/47/31c92d2ebc/0/content_hash.txt",
+      "prompt": "/47/31c92d2ebc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 591729,
+    "cache_read_tokens": 10990950,
+    "output_tokens": 22034,
+    "api_call_count": 22,
+    "subagent_tokens": {
+      "input_tokens": 248,
+      "cache_creation_tokens": 1025043,
+      "cache_read_tokens": 24257797,
+      "output_tokens": 195356,
+      "api_call_count": 124
+    }
+  }
+}
