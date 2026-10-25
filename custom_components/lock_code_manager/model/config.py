@@ -71,6 +71,25 @@ def credential_values(user: Mapping[str, Any]) -> dict[CredentialType, str]:
     }
 
 
+def credential_holder(
+    users: Mapping[str, Mapping[str, Any]], credential_type: CredentialType, value: str
+) -> str | None:
+    """
+    Return the name of a user in ``users`` who holds ``value`` as ``credential_type``.
+
+    Per type: a password may equal a PIN (spec decision 12). A turned-off user
+    still holds their credentials.
+    """
+    return next(
+        (
+            name
+            for name, user in users.items()
+            if credential_values(user).get(credential_type) == value
+        ),
+        None,
+    )
+
+
 def has_credential(user: Mapping[str, Any]) -> bool:
     """Return whether a user's stored fields hold a credential of any type."""
     return bool(credential_values(user))

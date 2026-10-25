@@ -58,6 +58,7 @@ from .ha.runtime import locks_that_cannot_report
 from .model.config import (
     EntryConfig,
     async_write_entry_config,
+    credential_holder,
     credential_values,
     has_credential,
 )
@@ -171,10 +172,7 @@ def _duplicate_credentials(
         credential_type.value: f"{credential_type.value}_not_unique"
         for credential_type, value in credential_values(fields).items()
         if value != held.get(credential_type)
-        and any(
-            credential_values(other).get(credential_type) == value
-            for other in others.values()
-        )
+        and credential_holder(others, credential_type, value) is not None
     }
 
 

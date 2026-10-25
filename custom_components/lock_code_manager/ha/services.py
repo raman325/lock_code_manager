@@ -18,7 +18,12 @@ from ..const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from ..model.config import EntryConfig, async_write_entry_config, credential_values
+from ..model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    credential_holder,
+    credential_values,
+)
 from ..model.credentials import (
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
@@ -530,15 +535,11 @@ async def async_add_users(
         for credential_type, value in credentials.items():
             if error := credential_value_error(credential_type, value):
                 raise ServiceValidationError(f"{name!r}: {error}")
-            holder = next(
-                (
-                    other
-                    for other, fields in (*config.users.items(), *additions.items())
-                    if credential_values(fields).get(credential_type) == value
-                ),
-                None,
-            )
-            if holder is not None:
+            if (
+                holder := credential_holder(
+                    {**config.users, **additions}, credential_type, value
+                )
+            ) is not None:
                 label = CREDENTIAL_LABELS[credential_type.value]
                 raise ServiceValidationError(
                     f"{name!r} cannot have the {label} {holder!r} already has"

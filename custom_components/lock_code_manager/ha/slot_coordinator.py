@@ -44,6 +44,7 @@ from ..const import ATTR_IN_SYNC, CREDENTIAL_LABELS, DOMAIN, EVENT_CREDENTIAL_US
 from ..model.config import (
     EntryConfig,
     async_write_entry_config,
+    credential_holder,
     credential_values,
     has_credential,
 )
@@ -334,16 +335,12 @@ class SlotEntityCoordinator:
         Names the other user, never the value.
         """
         config = get_entry_config(self._config_entry)
-        other = next(
-            (
-                slot_config[CONF_NAME]
-                for slot_num, slot_config in config.slots.items()
-                if slot_num != self._slot_num
-                and credential_values(slot_config).get(credential_type) == value
-            ),
-            None,
-        )
-        if other is not None:
+        others = {
+            slot_config[CONF_NAME]: slot_config
+            for slot_num, slot_config in config.slots.items()
+            if slot_num != self._slot_num
+        }
+        if (other := credential_holder(others, credential_type, value)) is not None:
             label = CREDENTIAL_LABELS[credential_type.value]
             raise ServiceValidationError(f"{other} already has this {label}")
 
