@@ -1219,6 +1219,8 @@ async def async_remove_entry(
     for slot_num in config.slot_numbers:
         async_delete_issue(hass, DOMAIN, f"slot_disabled_{entry_id}_{slot_num}")
         async_delete_issue(hass, DOMAIN, f"credential_required_{entry_id}_{slot_num}")
+        # Its id in an older release.
+        async_delete_issue(hass, DOMAIN, f"pin_required_{entry_id}_{slot_num}")
     for lock_entity_id in config.locks:
         # Only delete per-lock issues if no other LCM entry manages this lock.
         if not another_entry_configures(hass, config_entry, lock_entity_id):

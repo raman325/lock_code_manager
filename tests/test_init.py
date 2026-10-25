@@ -1817,6 +1817,12 @@ async def test_async_create_fix_flow_credential_required():
     assert isinstance(flow, AcknowledgeRepairFlow)
 
 
+async def test_async_create_fix_flow_pin_required():
+    """A ``pin_required`` issue left by an older release can be acknowledged."""
+    flow = await async_create_fix_flow(None, "pin_required_x_1", None)
+    assert isinstance(flow, AcknowledgeRepairFlow)
+
+
 async def test_async_create_fix_flow_unknown():
     """Test async_create_fix_flow raises for unknown issue."""
     with pytest.raises(ValueError, match="Unknown issue"):
@@ -1991,6 +1997,20 @@ async def test_remove_entry_cleans_up_repair_issues(
                 "config_entry_title": "test",
             },
         )
+        # Its id in an older release.
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"pin_required_{entry_id}_{slot_num}",
+            is_fixable=True,
+            is_persistent=True,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="credential_required",
+            translation_placeholders={
+                "slot_num": str(slot_num),
+                "config_entry_title": "test",
+            },
+        )
 
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         ir.async_create_issue(
@@ -2030,6 +2050,10 @@ async def test_remove_entry_cleans_up_repair_issues(
             issue_reg.async_get_issue(
                 DOMAIN, f"credential_required_{entry_id}_{slot_num}"
             )
+            is None
+        )
+        assert (
+            issue_reg.async_get_issue(DOMAIN, f"pin_required_{entry_id}_{slot_num}")
             is None
         )
     for lock_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):

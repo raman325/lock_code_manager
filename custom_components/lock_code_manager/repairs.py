@@ -177,6 +177,8 @@ async def async_create_fix_flow(
             "number_of_uses_removed",
             "slot_disabled_",
             "credential_required_",
+            # The credential-required issue's id in an older release.
+            "pin_required_",
             "slot_suspended_",
             RE_PAIRED_WORK_DROPPED,
         )
