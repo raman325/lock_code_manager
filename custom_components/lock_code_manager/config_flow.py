@@ -110,27 +110,33 @@ def _code_slot_schema(*, password: bool) -> vol.Schema:
 CODE_SLOT_SCHEMA = _code_slot_schema(password=False)
 
 
+# What a form offers before any lock answers: the setup flow, which has no
+# lock set up yet, and an entry that is not loaded (spec decision 4).
+_PIN_ONLY: frozenset[CredentialType] = frozenset({CredentialType.PIN})
+
+
+def _offered_types(entry: ConfigEntry | None) -> frozenset[CredentialType]:
+    """
+    Return the credential types the entry's locks take.
+
+    Known only once the entry is loaded: its locks are what answer. ``None``
+    is the setup flow, whose entry does not exist yet.
+    """
+    if entry is None or getattr(entry, "runtime_data", None) is None:
+        return _PIN_ONLY
+    return available_credential_types(entry)
+
+
 def _offers_password(entry: ConfigEntry) -> bool:
-    """
-    Return whether the entry's locks take passwords.
-
-    Known only once the entry is loaded: its locks are what answer.
-    """
-    return getattr(entry, "runtime_data", None) is not None and (
-        CredentialType.PASSWORD in available_credential_types(entry)
-    )
+    """Return whether the entry's locks take passwords."""
+    return CredentialType.PASSWORD in _offered_types(entry)
 
 
-def _slot_enabled_without_credential(slot: Mapping[str, Any]) -> bool:
-    """Return True if a slot is enabled but holds no credential of any type."""
-    return bool(slot.get(CONF_ENABLED)) and not has_credential(slot)
-
-
-def enabled_requires_credential(data: dict[str, Any]) -> dict[str, Any]:
-    """Validate that every enabled user has a credential."""
-    if any(_slot_enabled_without_credential(val) for val in data.values()):
-        raise vol.Invalid("A PIN or password must be set if enabled is True")
-    return data
+def _slot_enabled_without_credential(
+    slot: Mapping[str, Any], offered: Collection[CredentialType]
+) -> bool:
+    """Return True if a slot is enabled but holds no credential of an offered type."""
+    return bool(slot.get(CONF_ENABLED)) and not has_credential(slot, offered)
 
 
 def _obeys_rule(credential_type: CredentialType) -> Callable[[str], str]:
@@ -195,9 +201,9 @@ USER_SCHEMA = vol.Schema(
     }
 )
 
-USERS_SCHEMA = vol.All(
-    vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_credential
-)
+# Whether an enabled user holds a credential is checked by
+# `_async_validate_users_yaml`, which knows which types the entry offers.
+USERS_SCHEMA = vol.Schema({cv.string: USER_SCHEMA})
 
 LOCKS_FILTER_CONFIG = [
     sel.EntityFilterSelectorConfig(integration=platform, domain=LOCK_DOMAIN)
@@ -392,6 +398,22 @@ async def _async_validate_users_yaml(
         _LOGGER.error("Invalid users: %s", err)
         return None, {"base": "invalid_config"}, {}
 
+    offered = _offered_types(config_entry)
+    if (
+        bare := next(
+            (
+                name
+                for name, fields in parsed_users.items()
+                if _slot_enabled_without_credential(fields, offered)
+            ),
+            None,
+        )
+    ) is not None:
+        _LOGGER.error(
+            "Invalid users: %s is enabled without a credential a lock takes", bare
+        )
+        return None, {"base": "invalid_config"}, {}
+
     if problem := validate_user_names(parsed_users):
         name, error = problem
         return None, {"base": error}, {"name": name}
@@ -506,6 +528,8 @@ def _validate_user_form(
     taken: Mapping[str, Mapping[str, Any]],
     previous: Mapping[str, Any] = MappingProxyType({}),
     carried: Mapping[str, Any] = MappingProxyType({}),
+    *,
+    offered: Collection[CredentialType],
 ) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
     """
     Validate one user's submitted form against the users already there.
@@ -522,14 +546,18 @@ def _validate_user_form(
     They are not a submission, so neither a value rule nor the duplicate
     check applies to them: the user could not change them, and an error on a
     field the form does not draw leaves a dialog that can never be
-    submitted. They still count as the credential an enabled user needs.
+    submitted.
+
+    ``offered`` is the credential types the form offers. An enabled user
+    needs one of them (spec decision 4); a carried value of another type is
+    kept but does not count.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, Any] = {}
     # Compared as it will be stored: a PIN is stripped where it enters.
     submitted = {**user_input, CONF_PIN: (user_input.get(CONF_PIN) or "").strip()}
 
-    if _slot_enabled_without_credential({**submitted, **carried}):
+    if _slot_enabled_without_credential({**submitted, **carried}, offered):
         errors["base"] = "missing_credential_if_enabled"
     invalid = _credential_errors(submitted)
     errors.update(invalid)
@@ -803,7 +831,7 @@ class LockCodeManagerFlowHandler(
 
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, self.data[CONF_USERS]
+                self.hass, user_input, self.data[CONF_USERS], offered=_PIN_ONLY
             )
             description_placeholders.update(placeholders)
 
@@ -1180,6 +1208,19 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
     # drawn, so a submit with no form behind it keeps the stored password.
     _password_offered: bool | None = None
 
+    def _form_offers(self) -> frozenset[CredentialType]:
+        """
+        Return the credential types the dialog's form offers.
+
+        What the form was drawn with, so the rule an enabled user is held to
+        matches the fields they were shown. Asked of the entry when no form
+        was drawn.
+        """
+        offered = self._password_offered
+        if offered is None:
+            offered = _offers_password(self._get_entry())
+        return (_PIN_ONLY | {CredentialType.PASSWORD}) if offered else _PIN_ONLY
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -1197,7 +1238,7 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
 
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, config.users
+                self.hass, user_input, config.users, offered=self._form_offers()
             )
             description_placeholders.update(placeholders)
 
@@ -1386,6 +1427,7 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 others,
                 config.users.get(held, subentry.data),
                 carried,
+                offered=self._form_offers(),
             )
             description_placeholders.update(placeholders)
 

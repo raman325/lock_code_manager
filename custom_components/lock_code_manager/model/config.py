@@ -1,6 +1,6 @@
 """Config entry data types for lock_code_manager."""
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 import logging
 from types import MappingProxyType
@@ -92,9 +92,19 @@ def credential_holder(
     )
 
 
-def has_credential(user: Mapping[str, Any]) -> bool:
-    """Return whether a user's stored fields hold a credential of any type."""
-    return bool(credential_values(user))
+def has_credential(
+    user: Mapping[str, Any], offered: Collection[CredentialType]
+) -> bool:
+    """
+    Return whether a user's stored fields hold a credential of a type in ``offered``.
+
+    ``offered`` is what some lock in the entry takes (spec decision 4). A
+    stored value of any other type is kept (decision 10) but does not count:
+    no lock is given it, so a user enabled on it alone has nothing to present.
+    """
+    return any(
+        credential_type in offered for credential_type in credential_values(user)
+    )
 
 
 @dataclass(frozen=True, slots=True)

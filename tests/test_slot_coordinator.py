@@ -48,6 +48,7 @@ from custom_components.lock_code_manager.ha.slot_coordinator import (
     CredentialRequiredError,
     SlotEntityCoordinator,
 )
+from custom_components.lock_code_manager.model.config import async_write_entry_config
 from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
@@ -1191,6 +1192,59 @@ async def test_a_stored_empty_password_does_not_gate_the_slot(
     await coordinator.async_request_credential_update(CredentialType.PASSWORD, "")
 
     assert coordinator.is_active is True
+
+
+async def _store_slot1_password(hass: HomeAssistant, entry) -> None:
+    """Store a password for slot 1 past every write path, as a departed lock leaves one."""
+    async_write_entry_config(
+        hass, entry, get_entry_config(entry).with_slot_field_set(1, "password", "pw")
+    )
+    await hass.async_block_till_done()
+
+
+async def test_clearing_the_pin_beside_a_password_no_lock_takes_turns_the_user_off(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A stored password no lock in the entry takes does not count (decision 4).
+
+    It is kept (decision 10), but the user is left with nothing a lock is given.
+    """
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    await _store_slot1_password(hass, lock_code_manager_config_entry)
+    assert coordinator.is_enabled is True
+
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
+    await hass.async_block_till_done()
+
+    config = get_entry_config(lock_code_manager_config_entry).slot(1)
+    assert config.get(CONF_ENABLED) is False
+    assert config["password"] == "pw"
+    assert coordinator.is_enabled is False
+
+
+async def test_a_password_no_lock_takes_cannot_enable_a_user(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Enabling a user who holds only a password no lock takes is refused."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    await _store_slot1_password(hass, lock_code_manager_config_entry)
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
+    await hass.async_block_till_done()
+    assert coordinator.is_enabled is False
+
+    with pytest.raises(CredentialRequiredError):
+        await coordinator.async_request_active_toggle(True)
+
+    config = get_entry_config(lock_code_manager_config_entry).slot(1)
+    assert config.get(CONF_ENABLED) is False
+    assert config["password"] == "pw"
+    assert (
+        ir.async_get(hass).async_get_issue(
+            DOMAIN, f"credential_required_{lock_code_manager_config_entry.entry_id}_1"
+        )
+        is not None
+    )
 
 
 async def test_a_leftover_pin_required_issue_is_deleted_at_setup(

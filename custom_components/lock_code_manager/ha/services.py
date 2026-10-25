@@ -23,6 +23,7 @@ from ..model.config import (
     async_write_entry_config,
     credential_holder,
     credential_values,
+    has_credential,
 )
 from ..model.credentials import (
     MANAGED_CREDENTIAL_ORDER,
@@ -38,6 +39,7 @@ from ..model.names import identity, name_error, normalize_name
 from ..model.queries import get_entry_config, get_loaded_config_entry
 from ..sync.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
+from .entry import available_credential_types
 from .locks import get_managed_lock
 from .runtime import async_write_once
 from .slot_coordinator import CredentialRequiredError, SlotEntityCoordinator
@@ -508,6 +510,7 @@ async def async_add_users(
     """
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
+    offered = available_credential_types(config_entry)
 
     additions: dict[str, dict[str, Any]] = {}
     for entry in users:
@@ -528,8 +531,8 @@ async def async_add_users(
         condition = entry.get(CONF_CONDITION)
 
         # The same rule the editor enforces: a slot cannot be programmed
-        # without something to program.
-        if enabled and not credentials:
+        # without something a lock in the entry is given (spec decision 4).
+        if enabled and not has_credential(entry, offered):
             raise ServiceValidationError(
                 f"{name!r} cannot be enabled without a PIN or password"
             )

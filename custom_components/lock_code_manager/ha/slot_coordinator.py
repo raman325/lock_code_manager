@@ -61,6 +61,7 @@ from ..model.credentials import (
 )
 from ..model.names import name_error, normalize_name
 from ..model.queries import get_entry_config
+from .entry import available_credential_types
 from .runtime import async_want
 
 if TYPE_CHECKING:
@@ -307,9 +308,11 @@ class SlotEntityCoordinator:
         ``text.set_value`` neither rejects the empty clear nor pre-empts the
         per-lock error built here -- whose errors would quote the value.
 
-        Clearing the slot's last credential turns an enabled slot off: a user
-        with nothing to present would read as active (spec decision 4).
-        Clearing a credential the user does not hold writes nothing.
+        A clear that leaves an enabled slot no credential of a type some lock
+        in the entry takes turns it off: a user with nothing a lock is given
+        would read as active (spec decision 4). A stored value no lock takes
+        is kept but does not count. Otherwise, clearing a credential the user
+        does not hold writes nothing.
         """
         if credential_type is CredentialType.PIN:
             value = value.strip()
@@ -317,18 +320,22 @@ class SlotEntityCoordinator:
             if error := credential_value_error(credential_type, value):
                 raise ServiceValidationError(error)
             self._validate_credential_length(value, credential_type)
-        held = credential_values(self._slot_config())
+        slot_config = self._slot_config()
+        held = credential_values(slot_config)
         if value and value != held.get(credential_type):
             self._refuse_duplicate(credential_type, value)
 
         updates: dict[str, Any] = {credential_type.value: value}
         if (
             not value
-            and not any(other is not credential_type for other in held)
             and self.is_enabled
+            and not has_credential(
+                {**slot_config, **updates},
+                available_credential_types(self._config_entry),
+            )
         ):
             _LOGGER.debug(
-                "%s: last credential cleared on enabled slot, auto-disabling",
+                "%s: last offered credential cleared on enabled slot, auto-disabling",
                 self._log_prefix,
             )
             updates[CONF_ENABLED] = False
@@ -398,8 +405,9 @@ class SlotEntityCoordinator:
         """
         Apply an enabled/disabled toggle requested by the switch entity.
 
-        Disable is unconditional. Enable needs a credential of any type and
-        raises ``CredentialRequiredError`` without one (the switch translates
+        Disable is unconditional. Enable needs a credential of a type some lock
+        in the entry takes (spec decision 4) and raises
+        ``CredentialRequiredError`` without one (the switch translates
         that into ``HomeAssistantError``). The repairs an enable answers are
         deleted by ``_recompute_active``, which sees every route back on.
         """
@@ -407,7 +415,9 @@ class SlotEntityCoordinator:
             self._write_config_fields({CONF_ENABLED: False})
             return
 
-        if not has_credential(self._slot_config()):
+        if not has_credential(
+            self._slot_config(), available_credential_types(self._config_entry)
+        ):
             self._safely_raise_credential_required_issue()
             raise CredentialRequiredError(
                 f"Set a PIN or password for slot {self._slot_num} before enabling it"

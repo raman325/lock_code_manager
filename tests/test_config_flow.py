@@ -387,6 +387,24 @@ async def test_config_flow_yaml_error(hass: HomeAssistant):
     assert result["errors"] == {"base": "invalid_config"}
 
 
+async def test_config_flow_yaml_refuses_an_enabled_user_with_only_a_password(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """No lock is set up yet, so the setup flow offers PIN only (decision 4)."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await async_configure_flow(
+            hass,
+            flow_id,
+            {CONF_USERS: {"User 1": {CONF_ENABLED: True, "password": "pw"}}},
+        )
+
+    assert result["type"] == "form"
+    assert result["step_id"] == "yaml"
+    assert result["errors"] == {"base": "invalid_config"}
+
+
 async def test_config_flow_ui_stores_a_padded_pin_stripped(
     hass: HomeAssistant, mock_lock_config_entry
 ):
@@ -4076,35 +4094,20 @@ async def test_editing_a_user_keeps_a_password_the_form_does_not_offer(
     assert entry.subentries[subentry.subentry_id].data["password"] == "kept"
 
 
-@pytest.mark.parametrize(
-    ("stored", "submitted"),
-    [
-        # Only hand-edited storage holds one: no write path accepts it.
-        pytest.param(
-            {CONF_PIN: "1234", "password": "café"},
-            {CONF_PIN: "1234"},
-            id="a-password-its-rule-refuses",
-        ),
-        pytest.param({"password": "kept"}, {}, id="the-only-credential-the-user-has"),
-    ],
-)
 async def test_editing_a_user_takes_a_password_the_form_does_not_offer_as_stored(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    stored: dict[str, str],
-    submitted: dict[str, str],
+    hass: HomeAssistant, mock_lock_config_entry
 ):
     """
     A carried password is the user's stored value, not a submission.
 
     No rule is applied to a field the form does not draw, since an error on
-    it could never be cleared; it still is the credential an enabled user
-    needs.
+    it could never be cleared.
     """
+    # Only hand-edited storage holds one: no write path accepts it.
     entry = _entry_with_users(
         hass,
         [LOCK_1_ENTITY_ID],
-        {"Ann": {CONF_ENABLED: True, **stored}},
+        {"Ann": {CONF_ENABLED: True, CONF_PIN: "1234", "password": "café"}},
         unique_id="carries-password-as-stored",
     )
     subentry = next(iter(entry.subentries.values()))
@@ -4116,13 +4119,46 @@ async def test_editing_a_user_takes_a_password_the_form_does_not_offer_as_stored
 
     with _holding():
         result = await hass.config_entries.subentries.async_configure(
-            result["flow_id"], {CONF_NAME: "Annie", CONF_ENABLED: True, **submitted}
+            result["flow_id"],
+            {CONF_NAME: "Annie", CONF_ENABLED: True, CONF_PIN: "1234"},
         )
 
     assert result["type"] == "abort"
     edited = entry.subentries[subentry.subentry_id]
     assert edited.title == "Annie"
-    assert edited.data["password"] == stored["password"]
+    assert edited.data["password"] == "café"
+
+
+async def test_a_password_the_form_does_not_offer_does_not_enable_a_user(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    No lock in the entry takes passwords: a stored one does not count (decision 4).
+
+    The edit is refused, and the password stays stored (decision 10).
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {"Ann": {CONF_ENABLED: True, "password": "kept"}},
+        unique_id="carried-password-does-not-count",
+    )
+    subentry = next(iter(entry.subentries.values()))
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+    assert "password" not in {str(key) for key in result["data_schema"].schema}
+
+    result = await hass.config_entries.subentries.async_configure(
+        result["flow_id"], {CONF_NAME: "Annie", CONF_ENABLED: True}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "missing_credential_if_enabled"}
+    unedited = entry.subentries[subentry.subentry_id]
+    assert unedited.title == "Ann"
+    assert unedited.data["password"] == "kept"
 
 
 async def test_editing_a_user_leaves_a_shared_pin_alone(
@@ -4423,3 +4459,27 @@ class TestUserFormsOnALoadedEntry:
         result = await hass.config_entries.subentries.async_configure(flow_id, None)
 
         assert "password" not in {str(key) for key in result["data_schema"].schema}
+
+    async def test_a_pasted_user_with_only_a_password_no_lock_takes_is_refused(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """
+        Loaded, with locks that take PINs only: a password does not count.
+
+        Only a pasted block can carry one here, since the form has no field.
+        """
+        entry = lock_code_manager_config_entry
+        assert available_credential_types(entry) == {CredentialType.PIN}
+        flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: {"Ann": {CONF_ENABLED: True, "password": "pw"}}}
+        )
+
+        assert result["type"] == "form"
+        assert result["step_id"] == "several"
+        assert result["errors"] == {"base": "invalid_config"}
+        assert "Ann" not in get_entry_config(entry).users

@@ -577,6 +577,28 @@ async def test_add_user_service_rejects_enabled_without_a_pin(
         )
 
 
+async def test_add_user_service_rejects_enabled_with_a_password_no_lock_takes(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """No lock in the entry takes passwords, so one does not count (decision 4)."""
+    entry = lock_code_manager_config_entry
+    with pytest.raises(ServiceValidationError, match="cannot be enabled without"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_NAME: "Newcomer",
+                "password": "pw",
+            },
+            blocking=True,
+        )
+
+    assert "Newcomer" not in get_entry_config(entry).users
+
+
 async def test_add_user_service_stores_a_padded_pin_stripped(
     hass: HomeAssistant,
     mock_lock_config_entry,
