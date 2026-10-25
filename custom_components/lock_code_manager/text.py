@@ -4,11 +4,10 @@ import logging
 from typing import override
 
 from homeassistant.components.text import TextEntity, TextMode
-from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_platform, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
@@ -17,7 +16,6 @@ from .ha.entry import LockCodeManagerConfigEntry, available_credential_types
 from .ha.slot_coordinator import InvalidNameError
 from .model.credentials import CredentialType
 from .model.queries import get_entry_config, subentry_id_for_slot
-from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,32 +26,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> bool:
     """Set up config entry."""
-    runtime_data = config_entry.runtime_data
-    callbacks = runtime_data.callbacks
-    # Slots with a password entity now: the type follows the entry's locks.
-    with_password: set[int] = set()
-
-    @callback
-    def add_password_entity(slot_num: int, ent_reg: er.EntityRegistry) -> None:
-        if slot_num in with_password:
-            return
-        with_password.add(slot_num)
-        async_add_entities(
-            [
-                LockCodeManagerCredentialText(
-                    hass, ent_reg, config_entry, slot_num, CredentialType.PASSWORD
-                )
-            ],
-            True,
-            config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
-        )
+    callbacks = config_entry.runtime_data.callbacks
+    # Awaited adds: a reconcile that returned has added what it decided to.
+    platform = entity_platform.async_get_current_platform()
 
     @callback
     def add_standard_text_entities(slot_num: int, ent_reg: er.EntityRegistry) -> None:
-        """Add a slot's name and PIN, and its password if the entry offers one."""
-        # A number issued again: its earlier password entity left with the
-        # slot that held it.
-        with_password.discard(slot_num)
+        """Add a slot's name and PIN; its password is the reconcile's."""
         async_add_entities(
             [
                 LockCodeManagerNameText(hass, ent_reg, config_entry, slot_num),
@@ -64,50 +43,54 @@ async def async_setup_entry(
             True,
             config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
         )
-        if CredentialType.PASSWORD in available_credential_types(config_entry):
-            add_password_entity(slot_num, ent_reg)
 
-    @callback
-    def locks_added(locks: list[BaseLock]) -> None:
-        if not any(
-            CredentialType.PASSWORD in lock.managed_credential_types for lock in locks
-        ):
-            return
-        ent_reg = er.async_get(hass)
-        for slot_num in get_entry_config(config_entry).slot_numbers:
-            add_password_entity(slot_num, ent_reg)
+    async def reconcile_password_entities() -> None:
+        """
+        Give each slot a Password entity exactly when the entry offers passwords.
 
-    @callback
-    def lock_removed(lock_entity_id: str) -> None:
-        # Unloading runs these handlers too, but its slot teardown has already
-        # removed every slot entity; only a lock leaving a loaded entry acts.
-        if config_entry.state is not ConfigEntryState.LOADED:
-            return
-        # The removed lock is still held while its handlers run.
-        remaining = (
-            lock
-            for entity_id, lock in runtime_data.locks.items()
-            if entity_id != lock_entity_id
+        The one place that decides, and idempotent: it compares the entities
+        that exist with what the entry offers now and acts on the difference.
+        Removals are awaited before the additions, so a pass that swaps one
+        password lock for another never adds beside an entity still leaving.
+        A removed entity's stored password stays (spec decision 10).
+        """
+        slot_numbers = get_entry_config(config_entry).slot_numbers
+        wanted = (
+            set(slot_numbers)
+            if CredentialType.PASSWORD in available_credential_types(config_entry)
+            else set()
         )
-        if any(
-            CredentialType.PASSWORD in lock.managed_credential_types
-            for lock in remaining
-        ):
-            return
-        for slot_num in sorted(with_password):
-            with_password.discard(slot_num)
-            config_entry.async_create_task(
-                hass,
-                callbacks.async_remove_entity(f"{slot_num}|password"),
-                f"Remove slot {slot_num} password entity",
+        present = {
+            slot_num
+            for slot_num in slot_numbers
+            if _password_uid(slot_num) in callbacks.remove_entity
+        }
+        for slot_num in sorted(present - wanted):
+            await callbacks.async_remove_entity(_password_uid(slot_num))
+        ent_reg = er.async_get(hass)
+        for slot_num in sorted(wanted - present):
+            await platform.async_add_entities(
+                [
+                    LockCodeManagerCredentialText(
+                        hass, ent_reg, config_entry, slot_num, CredentialType.PASSWORD
+                    )
+                ],
+                True,
+                config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
             )
 
     config_entry.async_on_unload(
         callbacks.register_standard_adder(add_standard_text_entities)
     )
-    config_entry.async_on_unload(callbacks.register_lock_added_handler(locks_added))
-    config_entry.async_on_unload(callbacks.register_lock_removed_handler(lock_removed))
+    config_entry.async_on_unload(
+        callbacks.register_entity_reconciler(reconcile_password_entities)
+    )
     return True
+
+
+def _password_uid(slot_num: int) -> str:
+    """Return the removal id a slot's Password entity registers under."""
+    return f"{slot_num}|{CredentialType.PASSWORD.value}"
 
 
 class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):

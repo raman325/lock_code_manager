@@ -227,13 +227,11 @@ async def test_each_slot_gets_a_password_entity(
         assert state.attributes["mode"] == "password"
 
 
-async def test_a_second_password_lock_adds_no_second_entity(
+async def test_reconciling_again_adds_no_second_entity(
     hass: HomeAssistant, lcm_config_entry, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Each slot has one password entity, however many locks take passwords."""
-    lock = get_virtual_lock(hass, lcm_config_entry)
-
-    lcm_config_entry.runtime_data.callbacks.invoke_lock_added_handlers([lock])
+    """Each slot has one password entity, however often the entry reconciles."""
+    await lcm_config_entry.runtime_data.callbacks.async_reconcile_entities()
     await hass.async_block_till_done()
 
     assert "does not generate unique IDs" not in caplog.text
@@ -389,6 +387,104 @@ async def test_the_password_entity_stays_while_a_password_lock_remains(
         entity_id = _password_entity(hass, entry, slot)
         assert entity_id is not None
         assert hass.states.get(entity_id) is not None
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _second_virtual_lock(hass: HomeAssistant, provider_entry: MockConfigEntry) -> str:
+    """Register another Virtual lock on the provider's entry; return its id."""
+    lock_entity = er.async_get(hass).async_get_or_create(
+        "lock", "virtual", "test_virtual_2", config_entry=provider_entry
+    )
+    hass.states.async_set(lock_entity.entity_id, "locked")
+    return lock_entity.entity_id
+
+
+async def _set_up_entry(hass: HomeAssistant, locks: list[str]) -> MockConfigEntry:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            CONF_LOCKS: locks,
+            CONF_SLOTS: {
+                1: {CONF_NAME: "slot1", CONF_PIN: "1234", CONF_ENABLED: True},
+                2: {CONF_NAME: "slot2", CONF_PIN: "5678", CONF_ENABLED: True},
+            },
+        },
+        unique_id="test_password_reconcile",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
+
+
+async def _submit_locks(hass: HomeAssistant, entry, locks: list[str]) -> None:
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_LOCKS: locks}
+    )
+    assert result["type"] == "create_entry"
+    await hass.async_block_till_done()
+
+
+async def test_removing_every_password_lock_at_once_removes_the_entities(
+    hass: HomeAssistant,
+    virtual_lock_entity,
+    virtual_provider_entry,
+    mock_lock_config_entry,
+) -> None:
+    """Two password locks leaving in one submit: no slot keeps the entity."""
+    second = _second_virtual_lock(hass, virtual_provider_entry)
+    entry = await _set_up_entry(
+        hass, [VIRTUAL_LOCK_ENTITY_ID, second, LOCK_1_ENTITY_ID]
+    )
+    assert all(
+        CredentialType.PASSWORD
+        in entry.runtime_data.locks[lock].managed_credential_types
+        for lock in (VIRTUAL_LOCK_ENTITY_ID, second)
+    )
+    await entry.runtime_data.slot_coordinators[1].async_request_credential_update(
+        CredentialType.PASSWORD, "pw"
+    )
+    await hass.async_block_till_done()
+    assert all(_password_entity(hass, entry, slot) is not None for slot in (1, 2))
+
+    await _submit_locks(hass, entry, [LOCK_1_ENTITY_ID])
+
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+    for slot in (1, 2):
+        assert _password_entity(hass, entry, slot) is None
+    assert get_entry_config(entry).slot(1)["password"] == "pw"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_swapping_password_locks_in_one_submit_keeps_one_entity_per_slot(
+    hass: HomeAssistant,
+    virtual_lock_entity,
+    virtual_provider_entry,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """One password lock out and another in: each slot ends with one live entity."""
+    second = _second_virtual_lock(hass, virtual_provider_entry)
+    entry = await _set_up_entry(hass, [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID])
+    before = {slot: _password_entity(hass, entry, slot) for slot in (1, 2)}
+    assert all(before.values())
+
+    await _submit_locks(hass, entry, [second, LOCK_1_ENTITY_ID])
+
+    assert set(entry.runtime_data.locks) == {second, LOCK_1_ENTITY_ID}
+    callbacks = entry.runtime_data.callbacks
+    for slot in (1, 2):
+        entity_id = _password_entity(hass, entry, slot)
+        assert entity_id is not None
+        state = hass.states.get(entity_id)
+        assert state is not None
+        assert state.attributes["mode"] == "password"
+        assert f"{slot}|password" in callbacks.remove_entity
+    assert "does not generate unique IDs" not in caplog.text
+    assert "already exists" not in caplog.text
 
     await hass.config_entries.async_unload(entry.entry_id)
 

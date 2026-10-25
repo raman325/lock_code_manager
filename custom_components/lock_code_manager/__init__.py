@@ -2102,6 +2102,11 @@ async def _async_apply_entry_update_locked(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
 
+    # Last, once the locks and the slots are what the entry says: an entity
+    # that follows what the locks take is decided against the settled set,
+    # never against one lock's arrival or departure.
+    await callbacks.async_reconcile_entities()
+
     _LOGGER.info(
         "%s (%s): Done creating and/or updating entities", entry_id, entry_title
     )

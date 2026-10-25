@@ -57,6 +57,9 @@ class LockRemoveCallback(Protocol):
 # Type alias for entity removal callbacks (async)
 EntityRemoveCallback = Callable[[], Awaitable[None]]
 
+# Type alias for entity reconcilers (async)
+EntityReconcileCallback = Callable[[], Awaitable[None]]
+
 # Type alias for unregister functions
 UnregisterFunc = Callable[[], None]
 
@@ -87,6 +90,9 @@ class EntityCallbackRegistry:
     # Lock lifecycle callbacks (entities register to be notified of lock changes)
     lock_added: list[LockUpdateCallback] = field(default_factory=list)
     lock_removed: list[LockRemoveCallback] = field(default_factory=list)
+
+    # Entity reconcilers (platforms register these in async_setup_entry)
+    reconcile_entities: list[EntityReconcileCallback] = field(default_factory=list)
 
     def register_standard_adder(
         self, callback: StandardEntityCallback
@@ -133,6 +139,22 @@ class EntityCallbackRegistry:
             self.remove_entity.pop(uid, None)
 
         return unregister
+
+    def register_entity_reconciler(
+        self, callback: EntityReconcileCallback
+    ) -> UnregisterFunc:
+        """
+        Register a callback that brings a platform's entities into line.
+
+        For entities whose existence follows what the entry's locks take
+        rather than one slot or one lock. Used by: text (the Password entity).
+        """
+        self.reconcile_entities.append(callback)
+        return lambda: (
+            self.reconcile_entities.remove(callback)
+            if callback in self.reconcile_entities
+            else None
+        )
 
     def register_lock_added_handler(
         self, callback: LockUpdateCallback
@@ -206,6 +228,21 @@ class EntityCallbackRegistry:
             _LOGGER.exception("Error removing entity with uid %s", uid)
         finally:
             self.remove_entity.pop(uid, None)
+
+    async def async_reconcile_entities(self) -> None:
+        """
+        Run every entity reconciler, one after another, each awaited.
+
+        The update pass calls this once it has settled the entry's locks and
+        slots. A change in what a lock takes, once a lock's capabilities can
+        be refreshed after setup, calls it too. A reconciler that raises is
+        logged and does not keep the rest from running.
+        """
+        for cb in list(self.reconcile_entities):
+            try:
+                await cb()
+            except Exception:
+                _LOGGER.exception("Error in entity reconcile callback")
 
     @callback
     def invoke_lock_added_handlers(self, locks: list[BaseLock]) -> None:

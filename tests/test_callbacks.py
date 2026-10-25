@@ -194,3 +194,31 @@ async def test_one_entity_can_be_removed_by_its_id() -> None:
     await registry.async_remove_entity("2|password")  # none registered: no-op
 
     assert removed == ["1|password"]
+
+
+async def test_a_failing_reconciler_does_not_stop_the_next(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Every reconciler runs; one that raises is logged; an unregistered one does not."""
+    registry = EntityCallbackRegistry()
+    ran: list[str] = []
+
+    async def _failing() -> None:
+        raise ValueError("Test error")
+
+    async def _succeeding() -> None:
+        ran.append("ran")
+
+    async def _unregistered() -> None:
+        ran.append("unregistered")
+
+    registry.register_entity_reconciler(_failing)
+    registry.register_entity_reconciler(_succeeding)
+    unregister = registry.register_entity_reconciler(_unregistered)
+    unregister()
+    unregister()  # a second call is harmless
+
+    await registry.async_reconcile_entities()
+
+    assert ran == ["ran"]
+    assert "Error in entity reconcile callback" in caplog.text
