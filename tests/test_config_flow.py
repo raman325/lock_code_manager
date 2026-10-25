@@ -47,6 +47,7 @@ from custom_components.lock_code_manager.ha.allocation import (
     LockQuerySkipped,
     build_lock_instance,
 )
+from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.model.credentials import (
     Credential,
     CredentialType,
@@ -4116,3 +4117,76 @@ async def test_pasted_users_cannot_take_a_pin_the_entry_holds(
 
     assert result["errors"] == {"base": "pin_not_unique"}
     assert result["description_placeholders"] == {"name": "A"}
+
+
+@pytest.mark.parametrize(
+    ("answers", "submitted", "stored"),
+    [
+        pytest.param([False, True], {}, "kept", id="drawn-without-the-field"),
+        pytest.param(
+            [True, False], {"password": "typed"}, "typed", id="drawn-with-the-field"
+        ),
+    ],
+)
+async def test_an_edit_follows_the_form_that_was_drawn(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    answers: list[bool],
+    submitted: dict[str, str],
+    stored: str,
+):
+    """
+    Whether a password is offered is decided once, when the form is drawn.
+
+    The entry's answer can change while the dialog is open; the second
+    answer is what a submit asking again would see.
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {"Ann": {CONF_ENABLED: True, CONF_PIN: "1234", "password": "kept"}},
+        unique_id="offer-changes",
+    )
+    subentry = next(iter(entry.subentries.values()))
+
+    with patch(
+        "custom_components.lock_code_manager.config_flow._offers_password",
+        side_effect=answers,
+    ):
+        result = await hass.config_entries.subentries.async_init(
+            (entry.entry_id, SUBENTRY_TYPE_USER),
+            context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+        )
+        with _holding():
+            result = await hass.config_entries.subentries.async_configure(
+                result["flow_id"],
+                {CONF_NAME: "Ann", CONF_ENABLED: True, CONF_PIN: "1234", **submitted},
+            )
+
+    assert result["type"] == "abort"
+    assert entry.subentries[subentry.subentry_id].data["password"] == stored
+
+
+class TestUserFormsOnALoadedEntry:
+    """The user forms of an entry that is set up, whose locks answer for it."""
+
+    @pytest.fixture(name="bypass_entry_setup_and_unload")
+    def run_entry_setup_and_unload_fixture(self) -> Generator[None]:
+        """Run the real entry setup and unload instead of bypassing them."""
+        yield
+
+    async def test_the_add_user_form_has_no_password_when_no_lock_takes_one(
+        self,
+        hass: HomeAssistant,
+        mock_lock_config_entry,
+        lock_code_manager_config_entry,
+    ) -> None:
+        """Loaded, with locks that take PINs only: no field."""
+        entry = lock_code_manager_config_entry
+        assert entry.state is ConfigEntryState.LOADED
+        assert available_credential_types(entry) == {CredentialType.PIN}
+
+        flow_id = await _start_user_subentry_flow(hass, entry)
+        result = await hass.config_entries.subentries.async_configure(flow_id, None)
+
+        assert "password" not in {str(key) for key in result["data_schema"].schema}

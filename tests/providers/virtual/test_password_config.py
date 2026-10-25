@@ -698,3 +698,64 @@ async def test_pasted_users_sharing_a_password_are_refused(
 
     assert result["errors"] == {"base": "password_not_unique"}
     assert result["description_placeholders"] == {"name": "B"}
+
+
+async def test_the_password_field_follows_the_pin(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The two credentials sit together in the form."""
+    result = await _add_user_form(hass, lcm_config_entry)
+
+    assert [str(key) for key in result["data_schema"].schema] == [
+        CONF_NAME,
+        CONF_PIN,
+        "password",
+        CONF_ENABLED,
+        "condition",
+    ]
+
+
+async def _set_slot1_password(hass: HomeAssistant, entry, value: str) -> None:
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {
+            CONF_NAME: "slot1",
+            ATTR_CREDENTIAL_TYPE: "password",
+            ATTR_CREDENTIAL_VALUE: value,
+            "config_entry_id": entry.entry_id,
+        },
+        blocking=True,
+    )
+
+
+async def test_emptying_an_offered_password_in_the_edit_form_removes_it(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The form showed the password, so leaving it empty clears it."""
+    await _set_slot1_password(hass, lcm_config_entry, "pw")
+    result = await _edit_user_form(hass, lcm_config_entry, 1)
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "slot1", CONF_ENABLED: True, CONF_PIN: "1234"},
+    )
+
+    assert result["type"] == "abort"
+    assert not get_entry_config(lcm_config_entry).slot(1).get("password")
+
+
+async def test_emptying_every_credential_of_an_enabled_user_is_refused(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Neither the PIN nor the password left: the edit is refused."""
+    await _set_slot1_password(hass, lcm_config_entry, "pw")
+    result = await _edit_user_form(hass, lcm_config_entry, 1)
+
+    result = await _subentry_configure(
+        hass, result["flow_id"], {CONF_NAME: "slot1", CONF_ENABLED: True}
+    )
+
+    assert result["errors"] == {"base": "missing_credential_if_enabled"}
+    assert get_entry_config(lcm_config_entry).slot(1)["password"] == "pw"

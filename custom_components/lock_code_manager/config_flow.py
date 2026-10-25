@@ -83,17 +83,6 @@ _LOGGER = logging.getLogger(__name__)
 # to serialize into.
 STRIPPED_PIN = vol.All(cv.string, vol.Strip)
 
-CODE_SLOT_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Optional(CONF_PIN): STRIPPED_PIN,
-        vol.Required(CONF_ENABLED, default=True): cv.boolean,
-        vol.Optional(CONF_CONDITION): sel.EntitySelector(
-            sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
-        ),
-    }
-)
-
 # Not stripped: a password is kept as typed (spec decision 7). A selector
 # rather than a validator, because this schema is rendered and a callable has
 # no form.
@@ -103,10 +92,21 @@ PASSWORD_FIELD = sel.TextSelector(
 
 
 def _code_slot_schema(*, password: bool) -> vol.Schema:
-    """Return the one-user form, with a Password field when it is offered."""
-    if not password:
-        return CODE_SLOT_SCHEMA
-    return CODE_SLOT_SCHEMA.extend({vol.Optional(CONF_PASSWORD): PASSWORD_FIELD})
+    """Return the one-user form, with a Password field after the PIN when offered."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_NAME): cv.string,
+            vol.Optional(CONF_PIN): STRIPPED_PIN,
+            **({vol.Optional(CONF_PASSWORD): PASSWORD_FIELD} if password else {}),
+            vol.Required(CONF_ENABLED, default=True): cv.boolean,
+            vol.Optional(CONF_CONDITION): sel.EntitySelector(
+                sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
+            ),
+        }
+    )
+
+
+CODE_SLOT_SCHEMA = _code_slot_schema(password=False)
 
 
 def _offers_password(entry: ConfigEntry) -> bool:
@@ -1160,6 +1160,14 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
 class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
     """Add or edit one user of a Lock Code Manager entry."""
 
+    # Whether the edit form on screen has a Password field, decided when it
+    # is drawn. The entry's answer can change while the dialog is open (a
+    # reload, a lock still setting up, a lock added elsewhere), and a submit
+    # read against a fresh answer would delete a stored password the form
+    # never showed, or overwrite one the user typed. Not shown until drawn,
+    # so a submit with no form behind it keeps the stored password.
+    _password_offered: bool = False
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -1345,13 +1353,14 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         # a dict that still holds their old name issues their new one a
         # second number.
         others = {other: user for other, user in config.users.items() if other != held}
-        offered = _offers_password(entry)
 
         if user_input is not None:
-            if not offered and (kept := subentry.data.get(CONF_PASSWORD)):
-                # Not offered by this entry's locks now, still the user's
-                # (spec decision 10): the form cannot show it, so it cannot
-                # have cleared it.
+            if not self._password_offered and (
+                kept := subentry.data.get(CONF_PASSWORD)
+            ):
+                # Not offered by this entry's locks, still the user's (spec
+                # decision 10): the form did not show it, so it cannot have
+                # cleared it.
                 user_input = {**user_input, CONF_PASSWORD: kept}
             name, fields, errors, placeholders = _validate_user_form(
                 self.hass, user_input, others, subentry.data
@@ -1387,11 +1396,7 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                         errors.update(allocation_errors)
                         description_placeholders.update(allocation_placeholders)
                         return self._async_show_reconfigure(
-                            subentry,
-                            offered,
-                            user_input,
-                            errors,
-                            description_placeholders,
+                            subentry, user_input, errors, description_placeholders
                         )
                     held_slot = config.assignment.reconcile(
                         {**others, name: fields},
@@ -1407,24 +1412,24 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 )
 
         return self._async_show_reconfigure(
-            subentry, offered, user_input, errors, description_placeholders
+            subentry, user_input, errors, description_placeholders
         )
 
     def _async_show_reconfigure(
         self,
         subentry: ConfigSubentry,
-        offered: bool,
         user_input: dict[str, Any] | None,
         errors: dict[str, str],
         description_placeholders: dict[str, Any],
     ) -> SubentryFlowResult:
         """Render the edit form, prefilled from the submission or the record."""
+        self._password_offered = _offers_password(self._get_entry())
         return self.async_show_form(
             step_id="reconfigure",
             # A password the form does not offer has no field, so the
             # suggestions cannot echo it.
             data_schema=self.add_suggested_values_to_schema(
-                _code_slot_schema(password=offered),
+                _code_slot_schema(password=self._password_offered),
                 user_input
                 or {
                     key: value
