@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "878e626084b7",
+  "strategy": "manual-commit",
+  "branch": "feat/password-config",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/providers/virtual/test_password_config.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/87/8e626084b7/0/metadata.json",
+      "transcript": "/87/8e626084b7/0/full.jsonl",
+      "compact_transcript": "/87/8e626084b7/0/transcript.jsonl",
+      "content_hash": "/87/8e626084b7/0/content_hash.txt",
+      "prompt": "/87/8e626084b7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 8131,
+    "cache_read_tokens": 1330969,
+    "output_tokens": 6622,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 90,
+      "cache_creation_tokens": 193486,
+      "cache_read_tokens": 6117148,
+      "output_tokens": 34913,
+      "api_call_count": 44
+    }
+  }
+}
