@@ -4128,7 +4128,8 @@ async def test_pasted_users_sharing_a_pin_are_refused(
             {CONF_USERS: {"A": {CONF_PIN: "1111"}, "B": {CONF_PIN: "1111"}}},
         )
 
-    assert result["errors"] == {"base": "pin_not_unique"}
+    assert result["errors"] == {"base": "pin_not_unique_in_block"}
+    assert result["description_placeholders"] == {"name": "B"}
 
 
 async def test_pasted_users_cannot_take_a_pin_the_entry_holds(
@@ -4144,8 +4145,26 @@ async def test_pasted_users_cannot_take_a_pin_the_entry_holds(
             flow_id, {CONF_USERS: {"A": {CONF_PIN: f" {held} "}}}
         )
 
-    assert result["errors"] == {"base": "pin_not_unique"}
+    assert result["errors"] == {"base": "pin_not_unique_in_block"}
     assert result["description_placeholders"] == {"name": "A"}
+
+
+@pytest.mark.parametrize("section", ["config", "config_subentries"])
+@pytest.mark.parametrize("credential", ["pin", "password"])
+def test_a_pasted_duplicates_message_names_the_user(section: str, credential: str):
+    """Both forms that take a pasted block say whose credential collided."""
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    errors = (
+        strings["config"]["error"]
+        if section == "config"
+        else strings["config_subentries"]["user"]["error"]
+    )
+
+    assert set(
+        re.findall(r"\{(\w+)\}", errors[f"{credential}_not_unique_in_block"])
+    ) == {"name"}
 
 
 @pytest.mark.parametrize(

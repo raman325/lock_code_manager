@@ -884,7 +884,7 @@ async def test_pasted_users_sharing_a_password_are_refused(
         {CONF_USERS: {"A": {"password": "same"}, "B": {"password": "same"}}},
     )
 
-    assert result["errors"] == {"base": "password_not_unique"}
+    assert result["errors"] == {"base": "password_not_unique_in_block"}
     assert result["description_placeholders"] == {"name": "B"}
 
 

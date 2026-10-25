@@ -403,7 +403,9 @@ async def _async_validate_users_yaml(
     seen: dict[str, Mapping[str, Any]] = dict(taken)
     for name, fields in parsed_users.items():
         if duplicates := _duplicate_credentials(fields, seen):
-            return None, {"base": next(iter(duplicates.values()))}, {"name": name}
+            # Its own message: a block has no field to mark, so it names whose.
+            credential = next(iter(duplicates))
+            return None, {"base": f"{credential}_not_unique_in_block"}, {"name": name}
         seen[name] = fields
 
     # The same refusal the guided path gives. Both write the one field, so a
