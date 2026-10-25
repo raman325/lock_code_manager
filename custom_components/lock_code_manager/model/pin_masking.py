@@ -1,8 +1,9 @@
 """
-PIN masking for logs, and its reverse for diagnostics.
+Credential masking for logs, and its reverse for diagnostics.
 
-Logs carry ``pin#xxxxxxxx`` tokens instead of PINs. The deobfuscation
-service maps those tokens back using the PINs currently configured.
+Logs carry ``pin#xxxxxxxx`` and ``pwd#xxxxxxxx`` tokens instead of PINs and
+passwords. The deobfuscation service maps those tokens back using the
+credentials currently configured.
 """
 
 from collections.abc import Iterable
@@ -11,61 +12,76 @@ from typing import Any
 import zlib
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_PIN
 
 from .config import EntryConfig
+from .credentials import CredentialType
+
+# Token prefix by credential type. A PIN's is what logs have always carried.
+_TOKEN_PREFIX = {CredentialType.PIN: "pin", CredentialType.PASSWORD: "pwd"}
 
 
-def mask_pin(
-    pin: str | None,
+def mask_pin(pin: str | None, slot_num: int | str, instance_id: str) -> str:
+    """Return the masked form of a PIN for logging (see ``mask_credential``)."""
+    return mask_credential(pin, slot_num, instance_id, CredentialType.PIN)
+
+
+def mask_credential(
+    value: str | None,
     slot_num: int | str,
     instance_id: str,
+    credential_type: CredentialType,
 ) -> str:
     """
-    Return a deterministic masked representation of a PIN for logging.
+    Return a deterministic masked representation of a credential for logging.
 
-    Uses CRC32 salted with the HA instance ID and slot number so the same
-    PIN on the same slot always produces the same 8-char hex token regardless
-    of which lock or config entry it belongs to.  Different slots or HA
-    instances produce different tokens.
+    CRC32 salted with the HA instance ID and slot number, so the same value
+    on the same slot always produces the same 8-char hex token regardless of
+    which lock or config entry it belongs to. Any type but the PIN is salted
+    with its type too, so a PIN and a password of the same value differ.
     """
-    if not pin:
+    if not value:
         return "<empty>"
-    salt = f"{instance_id}:{slot_num}:{pin}"
-    return f"pin#{zlib.crc32(salt.encode()) & 0xFFFFFFFF:08x}"
+    if credential_type is CredentialType.PIN:
+        salt = f"{instance_id}:{slot_num}:{value}"
+    else:
+        salt = f"{instance_id}:{slot_num}:{credential_type}:{value}"
+    prefix = _TOKEN_PREFIX[credential_type]
+    return f"{prefix}#{zlib.crc32(salt.encode()) & 0xFFFFFFFF:08x}"
 
 
-# Token format emitted by ``mask_pin``: literal "pin#" followed by 8 lowercase
+# Tokens emitted by ``mask_credential``: a type prefix, "#", then 8 lowercase
 # hex chars. Anchored by word boundary on the right so a longer hex string
 # isn't truncated and reported as a match.
-_PIN_TOKEN_RE = re.compile(r"pin#[0-9a-f]{8}\b")
+_PIN_TOKEN_RE = re.compile(r"(?:pin|pwd)#[0-9a-f]{8}\b")
 
 
 def build_pin_deobfuscation_map(
     entries: Iterable[ConfigEntry], instance_id: str
 ) -> dict[str, str]:
     """
-    Build a ``{masked_token: plaintext_pin}`` lookup for every configured PIN.
+    Build a ``{masked_token: plaintext}`` lookup.
 
-    Reads each entry's options-or-data view via ``EntryConfig`` so it works
-    whether or not the entry has been migrated to options yet. Slots whose
-    PIN is empty are skipped because ``mask_pin`` returns ``<empty>`` for
-    them and that's not a token we need to reverse.
+    Covers every configured PIN and password. Reads each entry's
+    options-or-data view via ``EntryConfig`` so it works whether or not the
+    entry has been migrated to options yet. An empty credential is skipped
+    because ``mask_credential`` returns ``<empty>`` for it and that's not a
+    token we need to reverse.
 
-    Slot is part of the salt, so different ``(slot, pin)`` pairs produce
+    Slot is part of the salt, so different ``(slot, value)`` pairs produce
     different tokens with overwhelming probability — CRC32 has a 32-bit
     output so collisions are mathematically possible but vanishingly
     unlikely at any plausible slot count. The resulting map has one
-    entry per configured slot with a PIN.
+    entry per configured credential.
     """
     table: dict[str, str] = {}
     for entry in entries:
         config = EntryConfig.from_entry(entry)
         for slot_num, slot_config in config.slots.items():
-            pin = slot_config.get(CONF_PIN)
-            if not pin:
-                continue
-            table[mask_pin(pin, slot_num, instance_id)] = pin
+            for credential_type in _TOKEN_PREFIX:
+                if value := slot_config.get(credential_type.value):
+                    table[
+                        mask_credential(value, slot_num, instance_id, credential_type)
+                    ] = value
     return table
 
 

@@ -10,8 +10,8 @@ from .const import DATA, DOMAIN, SENSITIVE_ENTITY_KEYS, LockCodeManagerData
 from .ha.adapter import PortWorker
 from .ha.runtime import lock_codes, lock_registry
 from .model.config import build_slot_device_identifier, slot_unique_id_key
-from .model.credentials import SlotCode
-from .model.pin_masking import mask_pin
+from .model.credentials import CredentialType, SlotCode
+from .model.pin_masking import mask_credential, mask_pin
 from .model.queries import get_entry_config
 from .providers._base import BaseLock
 
@@ -145,10 +145,17 @@ def _slot_diagnostic(
 
     raw_pin = slot_config.get("pin")
     masked_pin = mask_pin(raw_pin, slot_num, instance_id) if raw_pin else None
+    raw_password = slot_config.get("password")
+    masked_password = (
+        mask_credential(raw_password, slot_num, instance_id, CredentialType.PASSWORD)
+        if raw_password
+        else None
+    )
 
     result: dict[str, Any] = {
         "slot_num": slot_num,
         "pin": masked_pin,
+        "password": masked_password,
         "enabled": slot_config.get("enabled"),
         "name": slot_config.get("name"),
     }

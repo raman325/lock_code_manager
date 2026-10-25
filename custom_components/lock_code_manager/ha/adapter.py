@@ -437,7 +437,7 @@ class ProviderPort:
                 credential_type,
                 provider.lock.entity_id,
                 slot,
-                provider.mask_pin(value, slot),
+                provider.mask_credential(value, slot, credential_type),
                 "sync",
             )
         try:

@@ -9,9 +9,11 @@ from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant
 
 from custom_components.lock_code_manager.const import CONF_LOCKS, DOMAIN
+from custom_components.lock_code_manager.model.credentials import CredentialType
 from custom_components.lock_code_manager.model.pin_masking import (
     build_pin_deobfuscation_map,
     deobfuscate_pins,
+    mask_credential,
     mask_pin,
 )
 
@@ -150,3 +152,40 @@ async def test_build_pin_deobfuscation_map_skips_empty_pin_slots(
     table = build_pin_deobfuscation_map([entry], INSTANCE_ID)
 
     assert table == {mask_pin("1234", 1, INSTANCE_ID): "1234"}
+
+
+def test_a_pin_masks_as_it_always_has() -> None:
+    """The PIN's token is unchanged, so logs written before still decode."""
+    assert mask_credential("1234", 3, "inst", CredentialType.PIN) == mask_pin(
+        "1234", 3, "inst"
+    )
+
+
+def test_a_password_masks_apart_from_a_pin_of_the_same_value() -> None:
+    """Salted with its type: one token never stands for two credentials."""
+    pin = mask_credential("1234", 3, "inst", CredentialType.PIN)
+    password = mask_credential("1234", 3, "inst", CredentialType.PASSWORD)
+
+    assert password.startswith("pwd#")
+    # The digests differ too, not just the prefixes.
+    assert password.removeprefix("pwd#") != pin.removeprefix("pin#")
+    assert "1234" not in password
+
+
+def test_deobfuscation_covers_passwords(hass: HomeAssistant) -> None:
+    """A configured password's token decodes like a PIN's."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: []},
+        subentries_data=user_subentries(
+            {1: {CONF_NAME: "a", CONF_PIN: "1234", "password": "open sesame"}}
+        ),
+    )
+    entry.add_to_hass(hass)
+    table = build_pin_deobfuscation_map([entry], "inst")
+    token = mask_credential("open sesame", 1, "inst", CredentialType.PASSWORD)
+
+    text, summary = deobfuscate_pins(f"wrote {token}", table)
+
+    assert text == "wrote open sesame"
+    assert summary["matched"] == 1

@@ -1,20 +1,23 @@
 """Tests for diagnostics."""
 
 import copy
+import json
 
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN, SERVICE_TURN_OFF
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
-from custom_components.lock_code_manager.const import CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import CONF_SLOTS, DATA, DOMAIN
 from custom_components.lock_code_manager.diagnostics import (
     async_get_config_entry_diagnostics,
     async_get_device_diagnostics,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
     SlotCode,
     SlotCredential,
 )
+from custom_components.lock_code_manager.model.pin_masking import mask_credential
 
 from .common import (
     BASE_CONFIG,
@@ -104,6 +107,31 @@ async def test_device_diagnostics_slot_device(
     assert "pin" in result
     assert "entities" in result
     assert "locks" in result
+
+
+async def test_a_slot_device_shows_its_password_masked(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A configured password reaches diagnostics only as its token."""
+    entry = lock_code_manager_config_entry
+    new_config = copy.deepcopy(BASE_CONFIG)
+    new_config[CONF_SLOTS][1]["password"] = "open sesame"
+    write_entry_config(hass, entry, new_config)
+    await hass.async_block_till_done()
+    instance_id = hass.data[DATA]["instance_id"]
+
+    slot_device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, f"{entry.entry_id}|1"), entry.entry_id
+    )
+    assert slot_device is not None
+    result = await async_get_device_diagnostics(hass, entry, slot_device)
+
+    assert result["password"] == mask_credential(
+        "open sesame", 1, instance_id, CredentialType.PASSWORD
+    )
+    assert "open sesame" not in json.dumps(result)
 
 
 async def test_device_diagnostics_lock_device(
