@@ -132,6 +132,9 @@ async def test_duplicates_are_refused_within_a_type_only(port: ProviderPort) -> 
         ErrorKind.VALUE_REFUSED,
         False,
     )
+    # The refusal, shown in the repair, names the type that is duplicated.
+    assert "Password duplicates" in refused.value.message
+    assert "taken" not in refused.value.message
 
 
 async def test_one_type_failing_to_read_leaves_the_others(

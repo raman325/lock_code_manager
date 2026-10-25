@@ -923,7 +923,7 @@ class TestRefusedClear:
         suspension = _slot_suspension(hass, lcm_config_entry, 1)
         assert suspension is not None
         text = await _rendered_repair(hass, suspension)
-        assert "couldn't remove the code" in text
+        assert "couldn't remove the PIN" in text
         assert "may still be on the lock" in text
         assert "delete it at the lock itself" in text
         assert "cannot set code" not in text

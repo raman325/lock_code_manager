@@ -32,7 +32,13 @@ from homeassistant.helpers.issue_registry import (
 )
 from homeassistant.helpers.start import async_at_started
 
-from ..const import DATA, DOMAIN, MAX_SEARCHED_SLOT, LockCodeManagerData
+from ..const import (
+    CREDENTIAL_LABELS,
+    DATA,
+    DOMAIN,
+    MAX_SEARCHED_SLOT,
+    LockCodeManagerData,
+)
 from ..model.credentials import (
     CredentialAddress,
     CredentialType,
@@ -117,7 +123,23 @@ _HOLD_ISSUES = {
         "slot_clear_failed",
         "the lock did not clear the slot after two tries",
     ),
+    # Only while the user keeps another credential: otherwise the slot is
+    # turned off and `slot_disabled` says so.
+    Repair.SLOT_DISABLED: ("credential_refused", "the lock refused it"),
 }
+
+
+def _keeps_another_credential(
+    entry: ConfigEntry | None, slot: int, address: CredentialAddress
+) -> bool:
+    """Return whether the slot's user wants a credential other than ``address``'s."""
+    runtime = getattr(entry, "runtime_data", None)
+    coordinator = runtime.slot_coordinators.get(slot) if runtime else None
+    return coordinator is not None and any(
+        want is not None
+        for credential_type, want in coordinator.wants.items()
+        if credential_type is not address.credential_type
+    )
 
 
 def signal_lock_changed(lock_entity_id: str) -> str:
@@ -235,8 +257,11 @@ def async_setup_lock_registry(
             slot = address.user_ref
             if (entry := configured_owner(hass, lock_entity_id, slot)) is None:
                 return
+            if _keeps_another_credential(entry, slot, address):
+                # Held with its own repair; the slot's other credentials work.
+                return
             # Why, as the lock or the duplicate check said it (which slot
-            # already has the PIN): re-enabling blind is refused again. Read
+            # already has it): re-enabling blind is refused again. Read
             # first: turning the slot off (an eager task) starts it over.
             held = worker.slots.get(address)
             why = f" {held.why}" if held is not None and held.why else ""
@@ -260,8 +285,10 @@ def async_setup_lock_registry(
                 translation_placeholders={
                     "slot_num": str(slot),
                     "reason": (
-                        f"Lock **{lock_entity_id}** refused the PIN for slot "
-                        f"**{slot}**.{why}\n\nFix the issue and re-enable the slot."
+                        f"Lock **{lock_entity_id}** refused the "
+                        f"{CREDENTIAL_LABELS[address.credential_type.value]} for "
+                        f"slot **{slot}**.{why}\n\nFix the issue and re-enable "
+                        "the slot."
                     ),
                 },
             )
@@ -882,7 +909,8 @@ def async_reconcile_issues(
 
     A slot it could not set is ``slot_suspended``; a clear that would not
     take is ``slot_clear_failed`` -- the code may still open the door. A
-    refused PIN turns the slot off through ``on_disable`` instead. A lock
+    refused value is ``credential_refused`` while the user keeps another
+    credential; otherwise it turns the slot off through ``on_disable``. A lock
     that answered before and has stopped answering is ``lock_offline``.
     """
     data = hass.data[DATA]
@@ -909,12 +937,18 @@ def async_reconcile_issues(
         in_sync = all(
             worker.status(address)[0] is Status.IN_SYNC for address, _ in credentials
         )
+        wanted = [address for address, slot in credentials if slot.want is not None]
+        if (
+            owner is not None
+            and wanted
+            and all(worker.status(address)[0] is Status.IN_SYNC for address in wanted)
+        ):
+            # Re-enabled and on the lock: a refusal's repair is answered. A
+            # held clear of another type is not part of the refusal.
+            async_delete_issue(
+                hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
+            )
         if owner is not None and in_sync:
-            if any(slot.want is not None for _, slot in credentials):
-                # Re-enabled and on the lock: a refusal's repair is answered.
-                async_delete_issue(
-                    hass, DOMAIN, f"slot_disabled_{owner.entry_id}_{slot_num}"
-                )
             # Every credential in sync: a hold's repair is answered, even one
             # a previous run raised (it is persistent).
             async_delete_issue(
@@ -926,12 +960,16 @@ def async_reconcile_issues(
             (address, credential)
             for address, credential in credentials
             if credential.hold in _HOLD_ISSUES
+            and (
+                credential.hold is not Repair.SLOT_DISABLED
+                or _keeps_another_credential(owner, slot_num, address)
+            )
         ]
         if not held:
             continue
         # The slot raises one repair: the warning that matters most, a code
         # that may still open the door, then the first in address order.
-        _, slot = min(
+        address, slot = min(
             held,
             key=lambda pair: (pair[1].hold is not Repair.CODE_MAY_REMAIN, pair[0]),
         )
@@ -955,7 +993,7 @@ def async_reconcile_issues(
         if slot.hold is Repair.CANT_SET and slot.cause:
             reason = slot.cause
         else:
-            if slot.hold is Repair.CANT_SET and slot.why:
+            if slot.hold in (Repair.CANT_SET, Repair.SLOT_DISABLED) and slot.why:
                 reason = slot.why
             if link_health := provider.describe_link_health():
                 reason = f"{reason}\n\n{link_health}"
@@ -972,6 +1010,7 @@ def async_reconcile_issues(
                 "lock_name": provider.display_name or lock_entity_id,
                 "slot_num": str(slot_num),
                 "reason": reason,
+                "credential": CREDENTIAL_LABELS[address.credential_type.value],
             },
             # Persisted with the repair: after a restart, acknowledging it
             # still knows whose slot it was and that it was on its way out.

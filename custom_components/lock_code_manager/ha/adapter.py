@@ -30,6 +30,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
+from ..const import CREDENTIAL_LABELS
 from ..model.credentials import CredentialAddress, CredentialType, SlotCredential
 from ..model.exceptions import (
     CodeRejectedError,
@@ -468,6 +469,7 @@ class ProviderPort:
                         lock_entity_id=provider.lock.entity_id,
                         conflicting_slot=other,
                         conflicting_slot_managed=provider.is_slot_managed(other),
+                        credential=CREDENTIAL_LABELS[credential_type.value],
                     )
                     raise LockError(
                         ErrorKind.VALUE_REFUSED, sent=False, message=str(duplicate)

@@ -462,7 +462,18 @@
         "step": {
           "init": {
             "title": "Sync suspended for slot {slot_num} on {lock_name}",
-            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nLock Code Manager has stopped trying. Click **Submit** to try again, or change the PIN for this slot."
+            "description": "Sync has been suspended for slot {slot_num} on lock `{lock_entity_id}`.\n\n**Reason:** {reason}\n\nLock Code Manager has stopped trying. Click **Submit** to try again, or change the {credential} for this slot."
+          }
+        }
+      }
+    },
+    "credential_refused": {
+      "title": "Lock Code Manager: {lock_name} refused the {credential} for slot {slot_num}",
+      "fix_flow": {
+        "step": {
+          "init": {
+            "title": "{lock_name} refused the {credential} for slot {slot_num}",
+            "description": "Lock `{lock_entity_id}` refused the {credential} for slot {slot_num}.\n\n**Reason:** {reason}\n\nThe slot's other credentials still work. Change the {credential}, or click **Submit** to try it again."
           }
         }
       }
@@ -473,7 +484,7 @@
         "step": {
           "init": {
             "title": "Code not removed from slot {slot_num} on {lock_name}",
-            "description": "Lock Code Manager couldn't remove the code from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nLock Code Manager has stopped trying. Submit to try again."
+            "description": "Lock Code Manager couldn't remove the {credential} from slot {slot_num} on lock {lock_entity_id}: {reason}\n\nThe code may still be on the lock and may still open the door. To remove it, delete it at the lock itself, from its keypad or the lock maker's app.\n\nLock Code Manager has stopped trying. Submit to try again."
           }
         }
       }
