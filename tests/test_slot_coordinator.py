@@ -38,6 +38,10 @@ from custom_components.lock_code_manager.const import (
     CONF_SLOTS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.ha.entry import (
+    LockCodeManagerConfigEntryRuntimeData,
+    available_credential_types,
+)
 from custom_components.lock_code_manager.ha.slot_coordinator import (
     PinRequiredError,
     SlotEntityCoordinator,
@@ -1132,3 +1136,19 @@ async def test_unload_clears_registry_when_coordinator_stop_raises_before_cleanu
         for record in caplog.records
         if record.levelname == "ERROR"
     )
+
+
+async def test_an_entry_of_pin_locks_offers_pins_only(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """No lock takes a password: the entry offers none."""
+    assert available_credential_types(lock_code_manager_config_entry) == {
+        CredentialType.PIN
+    }
+
+
+async def test_an_entry_holding_no_lock_yet_offers_pins() -> None:
+    """Before any lock is set up, a user can still be given a PIN."""
+    entry = MockConfigEntry(domain=DOMAIN)
+    entry.runtime_data = LockCodeManagerConfigEntryRuntimeData()
+    assert available_credential_types(entry) == {CredentialType.PIN}

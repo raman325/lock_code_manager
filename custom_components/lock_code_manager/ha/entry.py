@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from homeassistant.config_entries import ConfigEntry
 
 from ..model.config import EntryConfig
+from ..model.credentials import CredentialType
 from .callbacks import EntityCallbackRegistry
 
 if TYPE_CHECKING:
@@ -65,3 +66,18 @@ class LockCodeManagerConfigEntryRuntimeData:
 
 
 type LockCodeManagerConfigEntry = ConfigEntry[LockCodeManagerConfigEntryRuntimeData]
+
+
+def available_credential_types(
+    entry: LockCodeManagerConfigEntry,
+) -> frozenset[CredentialType]:
+    """
+    Return the credential types the entry's users can be given.
+
+    The union of what the entry's locks take, and always the PIN (spec
+    decision 10). Read from the locks held now: a lock not set up yet adds
+    its types when it is.
+    """
+    return frozenset({CredentialType.PIN}).union(
+        *(lock.managed_credential_types for lock in entry.runtime_data.locks.values())
+    )

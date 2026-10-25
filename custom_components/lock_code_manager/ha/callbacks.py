@@ -193,6 +193,11 @@ class EntityCallbackRegistry:
             for uid in to_remove:
                 tg.create_task(self._remove_entity(uid))
 
+    async def async_remove_entity(self, uid: str) -> None:
+        """Remove the one entity registered as ``uid``, if there is one."""
+        if uid in self.remove_entity:
+            await self._remove_entity(uid)
+
     async def _remove_entity(self, uid: str) -> None:
         """Run one entity remover, logging rather than raising."""
         try:

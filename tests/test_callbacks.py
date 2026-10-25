@@ -177,3 +177,20 @@ def test_invoke_lock_removed_handlers_exception_handling(
 
     call_tracker.assert_called_once_with("lock.test_lock")
     assert "Error in lock removed callback for lock.test_lock" in caplog.text
+
+
+async def test_one_entity_can_be_removed_by_its_id() -> None:
+    """Only the named remover runs."""
+    registry = EntityCallbackRegistry()
+    removed: list[str] = []
+
+    async def _remove(uid: str) -> None:
+        removed.append(uid)
+
+    registry.register_entity_remover("1|password", lambda: _remove("1|password"))
+    registry.register_entity_remover("1|pin", lambda: _remove("1|pin"))
+
+    await registry.async_remove_entity("1|password")
+    await registry.async_remove_entity("2|password")  # none registered: no-op
+
+    assert removed == ["1|password"]
