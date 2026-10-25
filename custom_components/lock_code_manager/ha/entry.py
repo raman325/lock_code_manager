@@ -78,7 +78,7 @@ def available_credential_types(
     decision 10). Read from the locks held now, as their capabilities were
     read at setup. The entry's entities follow this answer when the update
     pass reconciles them; a capability change after setup is not seen until
-    PR 4 (Z-Wave passwords) reconciles on it.
+    something reconciles again.
     """
     return frozenset({CredentialType.PIN}).union(
         *(lock.managed_credential_types for lock in entry.runtime_data.locks.values())

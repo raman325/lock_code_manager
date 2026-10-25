@@ -233,9 +233,9 @@ class EntityCallbackRegistry:
         """
         Run every entity reconciler, one after another, each awaited.
 
-        Only the update pass calls this, once it has settled the entry's locks
-        and slots. A lock's capabilities are not refreshed after setup yet;
-        when they are (PR 4, Z-Wave passwords), that refresh calls this too.
+        The update pass calls this once it has settled the entry's locks and
+        slots. Anything that changes which credential types a lock takes after
+        setup must call it too.
         A reconciler that raises is logged and does not keep the rest from
         running.
         """
