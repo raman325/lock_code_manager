@@ -10,7 +10,7 @@ from .const import DATA, DOMAIN, SENSITIVE_ENTITY_KEYS, LockCodeManagerData
 from .ha.adapter import PortWorker
 from .ha.runtime import lock_codes, lock_registry
 from .model.config import build_slot_device_identifier, slot_unique_id_key
-from .model.credentials import MANAGED_CREDENTIAL_TYPES, SlotCode
+from .model.credentials import MANAGED_CREDENTIAL_ORDER, SlotCode
 from .model.pin_masking import mask_credential, mask_pin
 from .model.queries import get_entry_config
 from .providers._base import BaseLock
@@ -152,7 +152,7 @@ def _slot_diagnostic(
                 if (value := slot_config.get(credential_type.value))
                 else None
             )
-            for credential_type in sorted(MANAGED_CREDENTIAL_TYPES)
+            for credential_type in MANAGED_CREDENTIAL_ORDER
         },
         "enabled": slot_config.get("enabled"),
         "name": slot_config.get("name"),

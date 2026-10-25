@@ -25,6 +25,7 @@ from ..model.config import (
     credential_values,
 )
 from ..model.credentials import (
+    MANAGED_CREDENTIAL_ORDER,
     MANAGED_CREDENTIAL_TYPES,
     CredentialType,
     credential_value_error,
@@ -194,7 +195,7 @@ def _managed_credential_type(credential_type: str) -> CredentialType:
     """
     kind = CredentialType(credential_type)
     if kind not in MANAGED_CREDENTIAL_TYPES:
-        supported = ", ".join(sorted(MANAGED_CREDENTIAL_TYPES))
+        supported = ", ".join(MANAGED_CREDENTIAL_ORDER)
         raise ServiceValidationError(
             f"Lock Code Manager cannot store a {kind} credential. "
             f"Supported: {supported}"

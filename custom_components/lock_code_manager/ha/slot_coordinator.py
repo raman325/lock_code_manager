@@ -55,7 +55,7 @@ from ..model.config import (
     has_credential,
 )
 from ..model.credentials import (
-    MANAGED_CREDENTIAL_TYPES,
+    MANAGED_CREDENTIAL_ORDER,
     CredentialType,
     credential_value_error,
 )
@@ -155,7 +155,7 @@ class SlotEntityCoordinator:
         values = credential_values(self._slot_config())
         return {
             credential_type: values.get(credential_type) if self._is_active else None
-            for credential_type in sorted(MANAGED_CREDENTIAL_TYPES)
+            for credential_type in MANAGED_CREDENTIAL_ORDER
         }
 
     @callback

@@ -1724,7 +1724,7 @@ async def test_set_credential_refuses_a_kind_it_cannot_store(
     """
     with pytest.raises(
         ServiceValidationError,
-        match=r"cannot store a rfid credential\. Supported: password, pin$",
+        match=r"cannot store a rfid credential\. Supported: pin, password$",
     ):
         await hass.services.async_call(
             DOMAIN,

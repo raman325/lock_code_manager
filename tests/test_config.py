@@ -21,8 +21,14 @@ from custom_components.lock_code_manager.model.config import (
     EntryConfigDiff,
     build_slot_device_identifier,
     build_slot_unique_id,
+    credential_values,
     parse_slot_device_identifier,
     parse_slot_unique_id,
+)
+from custom_components.lock_code_manager.model.credentials import (
+    MANAGED_CREDENTIAL_ORDER,
+    MANAGED_CREDENTIAL_TYPES,
+    CredentialType,
 )
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
@@ -838,3 +844,23 @@ def test_a_non_string_stored_pin_is_left_alone() -> None:
     )
     assert config.slot(1)["pin"] == 1234
     assert not isinstance(config.slot(1)["pin"], str)
+
+
+def test_the_managed_types_have_one_order_pin_first() -> None:
+    """Every managed type once, PIN first, the rest by value."""
+    assert MANAGED_CREDENTIAL_ORDER[0] is CredentialType.PIN
+    assert set(MANAGED_CREDENTIAL_ORDER) == MANAGED_CREDENTIAL_TYPES
+    assert len(MANAGED_CREDENTIAL_ORDER) == len(MANAGED_CREDENTIAL_TYPES)
+    assert list(MANAGED_CREDENTIAL_ORDER[1:]) == sorted(MANAGED_CREDENTIAL_ORDER[1:])
+
+
+def test_a_users_credentials_come_in_the_managed_order() -> None:
+    """
+    Not the stored fields' order, nor the set's.
+
+    A frozenset's iteration order follows the hash seed, so a check that
+    names the first duplicate it finds would name a different one per run.
+    """
+    stored = {"password": "pw", CONF_NAME: "Ann", CONF_PIN: "1234"}
+
+    assert tuple(credential_values(stored)) == MANAGED_CREDENTIAL_ORDER

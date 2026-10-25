@@ -656,6 +656,25 @@ async def test_add_user_refuses_a_password_another_user_holds(
         )
 
 
+async def test_add_user_names_the_pin_when_both_credentials_are_taken(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Credentials are checked in one fixed order, PIN first, every run."""
+    with pytest.raises(ServiceValidationError, match="cannot have the PIN 'A'"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "users": [
+                    {CONF_NAME: "A", CONF_PIN: "9999", "password": "same"},
+                    {CONF_NAME: "B", CONF_PIN: "9999", "password": "same"},
+                ],
+                "config_entry_id": lcm_config_entry.entry_id,
+            },
+            blocking=True,
+        )
+
+
 async def test_add_user_refuses_a_pin_a_user_in_the_entry_holds(
     hass: HomeAssistant, lcm_config_entry
 ) -> None:
@@ -907,6 +926,27 @@ async def test_pasted_users_sharing_a_password_are_refused(
     )
 
     assert result["errors"] == {"base": "password_not_unique_in_block"}
+    assert result["description_placeholders"] == {"name": "B"}
+
+
+async def test_pasted_users_sharing_both_credentials_are_told_the_pin(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Credentials are checked in one fixed order, PIN first, every run."""
+    result = await _add_user_form(hass, lcm_config_entry, path="several")
+
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {
+            CONF_USERS: {
+                "A": {CONF_PIN: "9999", "password": "same"},
+                "B": {CONF_PIN: "9999", "password": "same"},
+            }
+        },
+    )
+
+    assert result["errors"] == {"base": "pin_not_unique_in_block"}
     assert result["description_placeholders"] == {"name": "B"}
 
 

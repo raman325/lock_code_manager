@@ -157,6 +157,15 @@ MANAGED_CREDENTIAL_TYPES: frozenset[CredentialType] = frozenset(
     {CredentialType.PIN, CredentialType.PASSWORD}
 )
 
+# The order the managed types are walked in wherever order shows: PIN first,
+# then the rest by value. A frozenset's iteration order follows the hash
+# seed, so a refusal that names the first duplicate it finds would name a
+# different one from run to run.
+MANAGED_CREDENTIAL_ORDER: tuple[CredentialType, ...] = (
+    CredentialType.PIN,
+    *sorted(MANAGED_CREDENTIAL_TYPES - {CredentialType.PIN}),
+)
+
 # Printable ASCII, space through tilde: what every lock that takes a password
 # can be sent, two bytes each on the wire (spec decision 1).
 _PASSWORD_CHARACTERS: Final = frozenset(map(chr, range(0x20, 0x7F)))
