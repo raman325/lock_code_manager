@@ -152,6 +152,25 @@ MANAGED_CREDENTIAL_TYPES: frozenset[CredentialType] = frozenset(
     {CredentialType.PIN, CredentialType.PASSWORD}
 )
 
+# Printable ASCII, space through tilde: what every lock that takes a password
+# can be sent, two bytes each on the wire (spec decision 1).
+_PASSWORD_CHARACTERS: Final = frozenset(map(chr, range(0x20, 0x7F)))
+
+
+def credential_value_error(credential_type: CredentialType, value: str) -> str | None:
+    """
+    Return why ``value`` cannot be a ``credential_type``; None if it can.
+
+    The reason names the rule and never the value: it reaches errors and
+    logs. A PIN has no character rule here -- each lock's own applies.
+    """
+    if (
+        credential_type is CredentialType.PASSWORD
+        and not set(value) <= _PASSWORD_CHARACTERS
+    ):
+        return "Password may only contain letters, digits, symbols and spaces"
+    return None
+
 
 class UserType(StrEnum):
     """

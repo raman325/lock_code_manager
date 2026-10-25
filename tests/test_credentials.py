@@ -16,6 +16,7 @@ from custom_components.lock_code_manager.model.credentials import (
     UserType,
     WriteResult,
     credential_from_slot,
+    credential_value_error,
     pin_address,
     user_from_slot,
 )
@@ -500,3 +501,25 @@ def test_a_credential_address_names_its_slot_and_type_in_logs() -> None:
 def test_credential_address_distinguishes_types_at_the_same_user_ref() -> None:
     """Two credential types on one user are different addresses."""
     assert pin_address(1) != CredentialAddress(1, CredentialType.RFID)
+
+
+@pytest.mark.parametrize(
+    "value", ["open sesame", "P@ss w0rd!", "~`{}|\\", " ", "a" * 64]
+)
+def test_a_printable_password_is_accepted(value: str) -> None:
+    """Printable ASCII, space included, is a password (spec decision 1)."""
+    assert credential_value_error(CredentialType.PASSWORD, value) is None
+
+
+@pytest.mark.parametrize("value", ["café", "tab\there", "new\nline", "\x7f", "emoji😀"])
+def test_a_password_outside_printable_ascii_is_refused(value: str) -> None:
+    """Anything outside 0x20-0x7E is refused, and the reason never quotes it."""
+    error = credential_value_error(CredentialType.PASSWORD, value)
+
+    assert error == "Password may only contain letters, digits, symbols and spaces"
+    assert value not in error
+
+
+def test_the_pin_keeps_its_rules() -> None:
+    """No character rule for a PIN here: the lock's own rules apply."""
+    assert credential_value_error(CredentialType.PIN, "12#4") is None
