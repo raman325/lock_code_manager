@@ -12,7 +12,7 @@ from homeassistant.helpers import entity_platform, entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .entity import BaseLockCodeManagerEntity
+from .entity import BaseLockCodeManagerEntity, removal_uid
 from .ha.entry import LockCodeManagerConfigEntry, available_credential_types
 from .ha.slot_coordinator import InvalidNameError
 from .model.credentials import CredentialType
@@ -65,10 +65,13 @@ async def async_setup_entry(
         present = {
             slot_num
             for slot_num in slot_numbers
-            if _password_uid(slot_num) in callbacks.remove_entity
+            if removal_uid(slot_num, CredentialType.PASSWORD.value)
+            in callbacks.remove_entity
         }
         for slot_num in sorted(present - wanted):
-            await callbacks.async_remove_entity(_password_uid(slot_num))
+            await callbacks.async_remove_entity(
+                removal_uid(slot_num, CredentialType.PASSWORD.value)
+            )
         ent_reg = er.async_get(hass)
         async with asyncio.TaskGroup() as tg:
             for slot_num in sorted(wanted - present):
@@ -95,11 +98,6 @@ async def async_setup_entry(
         callbacks.register_entity_reconciler(reconcile_password_entities)
     )
     return True
-
-
-def _password_uid(slot_num: int) -> str:
-    """Return the removal id a slot's Password entity registers under."""
-    return f"{slot_num}|{CredentialType.PASSWORD.value}"
 
 
 class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):

@@ -70,6 +70,11 @@ def build_slot_device_info(config_entry: ConfigEntry, slot_num: int) -> DeviceIn
     )
 
 
+def removal_uid(slot_num: int, key: str) -> str:
+    """Return the id a slot's entity registers its removal callback under."""
+    return f"{slot_num}|{key}"
+
+
 class BaseLockCodeManagerEntity(Entity):
     """Base Lock Code Manager Entity."""
 
@@ -196,7 +201,7 @@ class BaseLockCodeManagerEntity(Entity):
 
         Override in subclasses for different UID formats.
         """
-        return f"{self.slot_num}|{self.key}"
+        return removal_uid(self.slot_num, self.key)
 
     @callback
     def _register_callbacks(self) -> None:
