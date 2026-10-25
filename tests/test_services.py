@@ -1724,7 +1724,7 @@ async def test_set_credential_refuses_a_kind_it_cannot_store(
     """
     with pytest.raises(
         ServiceValidationError,
-        match=r"cannot store a rfid credential\. Supported: pin$",
+        match=r"cannot store a rfid credential\. Supported: password, pin$",
     ):
         await hass.services.async_call(
             DOMAIN,
@@ -2379,29 +2379,3 @@ async def test_the_hard_refresh_service_walks_the_whole_lock(
     await hass.async_block_till_done()
 
     assert (None,) in lock.service_calls["hard_refresh_codes"]
-
-
-@pytest.mark.parametrize("service", [SERVICE_SET_CREDENTIAL, SERVICE_CLEAR_CREDENTIAL])
-async def test_a_password_cannot_be_set_through_the_configuration_yet(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    service: str,
-) -> None:
-    """The configuration holds no password: written here it would land in the PIN."""
-    entry = lock_code_manager_config_entry
-    pin = get_entry_config(entry).users["test1"][CONF_PIN]
-    data = {
-        "config_entry_id": entry.entry_id,
-        CONF_NAME: "test1",
-        ATTR_CREDENTIAL_TYPE: "password",
-    }
-    if service == SERVICE_SET_CREDENTIAL:
-        data[ATTR_VALUE] = "pw"
-
-    with pytest.raises(
-        ServiceValidationError,
-        match=r"cannot store a password credential yet\. Supported: pin$",
-    ):
-        await hass.services.async_call(DOMAIN, service, data, blocking=True)
-    assert get_entry_config(entry).users["test1"][CONF_PIN] == pin

@@ -27,6 +27,7 @@ from homeassistant.const import (
     CONF_ENTITY_ID,
     CONF_ID,
     CONF_NAME,
+    CONF_PASSWORD,
     CONF_PIN,
     CONF_URL,
     EVENT_HOMEASSISTANT_STARTED,
@@ -186,6 +187,9 @@ USER_ENTRY_SCHEMA = vol.Schema(
         # code is stripped before it is matched, so a PIN stored with padding
         # matches nothing anybody can type.
         vol.Optional(CONF_PIN): vol.All(cv.string, vol.Strip),
+        # Not stripped: a password is kept as typed (spec decision 7). The
+        # handler checks its character rule.
+        vol.Optional(CONF_PASSWORD): cv.string,
         vol.Optional(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_CONDITION): cv.entity_domain(CONDITION_ENTITY_DOMAINS),
     }
@@ -744,12 +748,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
                 # with a message saying so, which reads better than the
                 # schema calling a real credential kind invalid.
                 vol.Required(ATTR_CREDENTIAL_TYPE): vol.Coerce(CredentialType),
-                # Stripped for the reason every other credential field is: a
-                # submitted code is stripped before it is matched, so padding
-                # kept here makes a credential nothing typed can match.
-                vol.Required(ATTR_VALUE): vol.All(
-                    cv.string, vol.Strip, vol.Length(min=1)
-                ),
+                # Not stripped here: a PIN is stripped by the coordinator, and
+                # a password is kept as typed (spec decision 7).
+                vol.Required(ATTR_VALUE): vol.All(cv.string, vol.Length(min=1)),
                 vol.Optional(ATTR_ENABLE_IF_DISABLED, default=False): cv.boolean,
             }
         ),

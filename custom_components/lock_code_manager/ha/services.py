@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
@@ -14,11 +14,16 @@ from ..const import (
     ATTR_REASON,
     ATTR_USER,
     ATTR_VALID,
+    CREDENTIAL_LABELS,
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from ..model.config import EntryConfig, async_write_entry_config
-from ..model.credentials import CredentialType
+from ..model.config import EntryConfig, async_write_entry_config, credential_values
+from ..model.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
+    CredentialType,
+    credential_value_error,
+)
 from ..model.events import (
     CredentialOperation,
     async_fire_credential_used,
@@ -183,14 +188,11 @@ def _managed_credential_type(credential_type: str) -> CredentialType:
     invalid.
     """
     kind = CredentialType(credential_type)
-    # Only a PIN is held in the configuration: any other kind written here
-    # would land in the PIN. A password is managed on the locks and is
-    # coming to the configuration, so its refusal says "yet".
-    if kind is not CredentialType.PIN:
-        pending = " yet" if kind is CredentialType.PASSWORD else ""
+    if kind not in MANAGED_CREDENTIAL_TYPES:
+        supported = ", ".join(sorted(MANAGED_CREDENTIAL_TYPES))
         raise ServiceValidationError(
-            f"Lock Code Manager cannot store a {kind} credential{pending}. "
-            "Supported: pin"
+            f"Lock Code Manager cannot store a {kind} credential. "
+            f"Supported: {supported}"
         )
     return kind
 
@@ -217,8 +219,9 @@ async def async_set_credential(
 
     Routed through the slot's coordinator rather than written to the entry,
     because that is the authoritative gate for a credential write -- it strips
-    whitespace and validates the length against every bound lock. Writing the
-    configuration directly here would be a second path that skips both.
+    a PIN, refuses a duplicate, and validates the value against every bound
+    lock. Writing the configuration directly here would be a second path that
+    skips all three.
 
     ``enable_if_disabled`` turns the user on afterwards, which is what makes this the
     inverse of :func:`async_clear_credential` rather than half of it: clearing
@@ -227,16 +230,17 @@ async def async_set_credential(
     because giving a user a credential and letting them in are different
     decisions and only the caller knows whether they are making both.
 
-    Not a field written alongside the PIN: enabling has its own rules -- it
+    Not a field written alongside the credential: enabling has its own rules -- it
     refuses a user with no credential and clears the repair issue raised when
     that happened -- and the second call is what runs them.
     """
-    # Not checked for emptiness here: the schema strips and requires at least
-    # one character, so an empty value never reaches this. Repeating that gate
-    # would be a branch nothing can take.
-    _managed_credential_type(credential_type)
+    kind = _managed_credential_type(credential_type)
+    if kind is CredentialType.PIN and not value.strip():
+        # A blank PIN strips to nothing, which the coordinator takes as a
+        # clear. Clearing is its own action.
+        raise ServiceValidationError("A PIN must not be blank")
     coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
-    await coordinator.async_request_pin_update(value)
+    await coordinator.async_request_credential_update(kind, value)
     if enable_if_disabled:
         # Safe in this order, and only in this order: the write above refreshes
         # the entry's cached config before returning, so the PIN this checks
@@ -259,14 +263,14 @@ async def async_clear_credential(
     hold more than one kind, and clearing their PIN must not take their tag
     with it.
 
-    **This disables the user**, which is the same thing emptying their PIN
-    field on the dashboard does: a user with no credential and nothing
-    disabled would read as active while holding nothing anybody could
-    present.
+    **This disables the user when it was their last credential**, which is
+    the same thing emptying the field on the dashboard does: a user with no
+    credential and nothing disabled would read as active while holding
+    nothing anybody could present.
     """
-    _managed_credential_type(credential_type)
+    kind = _managed_credential_type(credential_type)
     coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
-    await coordinator.async_request_pin_update("")
+    await coordinator.async_request_credential_update(kind, "")
 
 
 async def async_use_credential(
@@ -513,20 +517,42 @@ async def async_add_users(
         ):
             raise ServiceValidationError(f"A user named {name!r} already exists")
 
-        pin = entry.get(CONF_PIN)
+        credentials = credential_values(entry)
         enabled = entry.get(CONF_ENABLED, True)
         condition = entry.get(CONF_CONDITION)
 
         # The same rule the editor enforces: a slot cannot be programmed
         # without something to program.
-        if enabled and not pin:
-            raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
+        if enabled and not credentials:
+            raise ServiceValidationError(
+                f"{name!r} cannot be enabled without a PIN or password"
+            )
+        for credential_type, value in credentials.items():
+            if error := credential_value_error(credential_type, value):
+                raise ServiceValidationError(f"{name!r}: {error}")
+            holder = next(
+                (
+                    other
+                    for other, fields in (*config.users.items(), *additions.items())
+                    if credential_values(fields).get(credential_type) == value
+                ),
+                None,
+            )
+            if holder is not None:
+                label = CREDENTIAL_LABELS[credential_type.value]
+                raise ServiceValidationError(
+                    f"{name!r} cannot have the {label} {holder!r} already has"
+                )
         if condition:
             _async_validate_condition(hass, condition)
 
-        user: dict[str, Any] = {CONF_ENABLED: enabled}
-        if pin:
-            user[CONF_PIN] = pin
+        user: dict[str, Any] = {
+            CONF_ENABLED: enabled,
+            **{
+                credential_type.value: value
+                for credential_type, value in credentials.items()
+            },
+        }
         if condition:
             user[CONF_CONDITION] = condition
         additions[name] = user

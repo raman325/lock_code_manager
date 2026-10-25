@@ -41,6 +41,11 @@ add_user:
               label: PIN
               selector:
                 text:
+            password:
+              label: Password
+              selector:
+                text:
+                  type: password
             enabled:
               label: Enabled
               selector:

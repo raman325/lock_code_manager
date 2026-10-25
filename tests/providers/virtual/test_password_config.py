@@ -13,7 +13,16 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
-from custom_components.lock_code_manager.const import CONF_LOCKS, CONF_SLOTS, DOMAIN
+from custom_components.lock_code_manager.const import (
+    ATTR_CREDENTIAL_TYPE,
+    ATTR_VALUE as ATTR_CREDENTIAL_VALUE,
+    CONF_LOCKS,
+    CONF_SLOTS,
+    DOMAIN,
+    SERVICE_ADD_USER,
+    SERVICE_CLEAR_CREDENTIAL,
+    SERVICE_SET_CREDENTIAL,
+)
 from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
@@ -341,3 +350,141 @@ async def test_a_password_longer_than_a_state_is_refused(
     assert "password" not in get_virtual_lock(hass, lcm_config_entry)._data["1"]
     assert marker not in str(refused.value)
     assert marker not in caplog.text
+
+
+async def test_set_credential_sets_a_password(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The action writes the password, unstripped."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_SET_CREDENTIAL,
+        {
+            CONF_NAME: "slot1",
+            ATTR_CREDENTIAL_TYPE: "password",
+            ATTR_CREDENTIAL_VALUE: " open sesame",
+            "config_entry_id": lcm_config_entry.entry_id,
+        },
+        blocking=True,
+    )
+
+    assert get_entry_config(lcm_config_entry).slot(1)["password"] == " open sesame"
+
+
+async def test_set_credential_refuses_a_blank_pin(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """A PIN of spaces strips to nothing: refused, not taken as a clear."""
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CREDENTIAL,
+            {
+                CONF_NAME: "slot1",
+                ATTR_CREDENTIAL_TYPE: "pin",
+                ATTR_CREDENTIAL_VALUE: "   ",
+                "config_entry_id": lcm_config_entry.entry_id,
+            },
+            blocking=True,
+        )
+
+    assert get_entry_config(lcm_config_entry).slot(1)[CONF_PIN] == "1234"
+
+
+async def test_clear_credential_clears_the_password_only(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The PIN stays, and so does the slot."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_CLEAR_CREDENTIAL,
+        {
+            CONF_NAME: "slot1",
+            ATTR_CREDENTIAL_TYPE: "password",
+            "config_entry_id": lcm_config_entry.entry_id,
+        },
+        blocking=True,
+    )
+
+    slot = get_entry_config(lcm_config_entry).slot(1)
+    assert not slot.get("password")
+    assert slot[CONF_PIN] == "1234"
+    assert slot[CONF_ENABLED] is True
+
+
+async def test_add_user_with_a_password_only(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """A password is enough to be added enabled."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {
+            "users": [{CONF_NAME: "Guest", "password": "welcome in"}],
+            "config_entry_id": lcm_config_entry.entry_id,
+        },
+        blocking=True,
+    )
+
+    config = get_entry_config(lcm_config_entry)
+    assert config.users["Guest"]["password"] == "welcome in"
+    assert config.users["Guest"][CONF_ENABLED] is True
+
+
+async def test_add_user_refuses_a_password_another_user_holds(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Duplicates are refused within the batch and against the entry."""
+    with pytest.raises(ServiceValidationError):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "users": [
+                    {CONF_NAME: "A", "password": "same"},
+                    {CONF_NAME: "B", "password": "same"},
+                ],
+                "config_entry_id": lcm_config_entry.entry_id,
+            },
+            blocking=True,
+        )
+
+
+async def test_add_user_refuses_a_pin_a_user_in_the_entry_holds(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The duplicate check reaches the users already stored, not just the batch."""
+    with pytest.raises(ServiceValidationError, match="'slot1' already has"):
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "users": [{CONF_NAME: "Guest", CONF_PIN: "1234"}],
+                "config_entry_id": lcm_config_entry.entry_id,
+            },
+            blocking=True,
+        )
+
+    assert "Guest" not in get_entry_config(lcm_config_entry).users
+
+
+async def test_add_user_refuses_a_password_outside_printable_ascii(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """The character rule holds for a new user, and the error never quotes it."""
+    with pytest.raises(ServiceValidationError) as err:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_ADD_USER,
+            {
+                "users": [{CONF_NAME: "Guest", "password": "café"}],
+                "config_entry_id": lcm_config_entry.entry_id,
+            },
+            blocking=True,
+        )
+
+    assert "café" not in str(err.value)
+    assert "Guest" not in get_entry_config(lcm_config_entry).users

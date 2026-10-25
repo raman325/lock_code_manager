@@ -207,7 +207,7 @@
         },
         "users": {
           "name": "Users",
-          "description": "The people to add. Each takes a name, and optionally a PIN, whether they are enabled, and a condition entity. A single person may be given on their own rather than as a list."
+          "description": "The people to add. Each takes a name, and optionally a PIN, a password, whether they are enabled, and a condition entity. A password takes printable characters and spaces and is kept as typed. A single person may be given on their own rather than as a list."
         }
       }
     },
@@ -231,7 +231,7 @@
     },
     "clear_credential": {
       "name": "Clear credential",
-      "description": "Remove one of a person's credentials from a Lock Code Manager config entry and from every lock in it. This also disables the person, the same as emptying their PIN on the dashboard does.",
+      "description": "Remove one of a person's credentials from a Lock Code Manager config entry and from every lock in it. When it was their last credential, this also disables the person, the same as emptying it on the dashboard does.",
       "fields": {
         "config_entry_id": {
           "name": "Config entry",
@@ -247,7 +247,7 @@
         },
         "credential_type": {
           "name": "Credential type",
-          "description": "Which kind of credential. Only PIN can be stored today; the others are refused with a message saying so."
+          "description": "Which kind of credential. PIN and password can be stored; the others are refused with a message saying so."
         }
       }
     },
@@ -379,11 +379,11 @@
         },
         "credential_type": {
           "name": "Credential type",
-          "description": "Which kind of credential. Only PIN can be stored today; the others are refused with a message saying so."
+          "description": "Which kind of credential. PIN and password can be stored; the others are refused with a message saying so."
         },
         "value": {
           "name": "Value",
-          "description": "The credential itself — the PIN, for a PIN credential. Surrounding whitespace is stripped."
+          "description": "The credential itself. A PIN's surrounding whitespace is stripped; a password is kept as typed."
         },
         "enable_if_disabled": {
           "name": "Enable if disabled",
