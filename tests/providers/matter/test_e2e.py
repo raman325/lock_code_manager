@@ -27,7 +27,7 @@ from homeassistant.const import (
     STATE_OFF,
     STATE_ON,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
@@ -326,9 +326,15 @@ class TestOutOfBandDeletion:
 
         set_credential.side_effect = _write_back
         states: list[str] = []
-        unsub = async_track_state_change_event(
-            hass, in_sync, lambda event: states.append(event.data["new_state"].state)
-        )
+
+        @callback
+        def _transition(event: Event[EventStateChangedData]) -> None:
+            # A state's transitions: an attribute rewrite landing late is none.
+            old, new = event.data["old_state"], event.data["new_state"]
+            if new is not None and (old is None or old.state != new.state):
+                states.append(new.state)
+
+        unsub = async_track_state_change_event(hass, in_sync, _transition)
         deliver(EventType.NODE_EVENT, _user_cleared_event(matter_node.node_id, 1))
         await hass.async_block_till_done(wait_background_tasks=True)
         unsub()
