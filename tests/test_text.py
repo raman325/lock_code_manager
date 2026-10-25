@@ -12,7 +12,6 @@ from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
-    TextMode,
 )
 from homeassistant.const import ATTR_ENTITY_ID, CONF_NAME, CONF_PIN, STATE_OFF
 from homeassistant.core import HomeAssistant
@@ -23,12 +22,15 @@ from custom_components.lock_code_manager.const import DOMAIN
 from custom_components.lock_code_manager.ha.entry import (
     LockCodeManagerConfigEntryRuntimeData,
 )
+from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
 )
 from custom_components.lock_code_manager.text import (
+    LockCodeManagerCredentialText,
+    LockCodeManagerNameText,
     LockCodeManagerText,
 )
 
@@ -80,13 +82,13 @@ def _make_text_entity(
     config_entry.add_to_hass(hass)
     config_entry.runtime_data = LockCodeManagerConfigEntryRuntimeData()
 
-    entity = LockCodeManagerText(
-        hass,
-        er.async_get(hass),
-        config_entry,
-        1,
-        key,
-        TextMode.PASSWORD if key == CONF_PIN else TextMode.TEXT,
+    ent_reg = er.async_get(hass)
+    entity: LockCodeManagerText = (
+        LockCodeManagerCredentialText(
+            hass, ent_reg, config_entry, 1, CredentialType(key)
+        )
+        if key == CONF_PIN
+        else LockCodeManagerNameText(hass, ent_reg, config_entry, 1)
     )
     entity.locks = locks
     return entity
@@ -392,3 +394,12 @@ async def test_set_name_normalizes_whitespace(
     )
 
     assert hass.states.get(SLOT_2_NAME_ENTITY).state == "Raman"
+
+
+async def test_no_password_entity_without_a_password_lock(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """An entry whose locks take no password has no password entity."""
+    uid = build_slot_unique_id(lock_code_manager_config_entry.entry_id, 1, "password")
+
+    assert er.async_get(hass).async_get_entity_id(TEXT_DOMAIN, DOMAIN, uid) is None

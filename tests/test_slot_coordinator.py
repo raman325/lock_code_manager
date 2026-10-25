@@ -911,7 +911,8 @@ async def test_hook_dispatch_routes_each_entity_kind_to_the_right_collection(
         if hasattr(w, "__self__")
     }
 
-    assert "LockCodeManagerText" in state_subscriber_owners
+    assert "LockCodeManagerNameText" in state_subscriber_owners
+    assert "LockCodeManagerCredentialText" in state_subscriber_owners
     assert "LockCodeManagerSwitch" in state_subscriber_owners
     assert active_view_owners == {"LockCodeManagerActiveEntity"}
 
@@ -933,7 +934,7 @@ async def test_text_set_value_raises_when_slot_coordinator_missing(
         sub.__self__
         for sub in coordinator._state_subscribers
         if hasattr(sub, "__self__")
-        and type(sub.__self__).__name__ == "LockCodeManagerText"
+        and type(sub.__self__).__name__ == "LockCodeManagerCredentialText"
     )
 
     text_entity._slot_coordinator = None

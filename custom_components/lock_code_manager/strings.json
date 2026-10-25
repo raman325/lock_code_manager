@@ -160,6 +160,9 @@
       },
       "pin": {
         "name": "PIN"
+      },
+      "password": {
+        "name": "Password"
       }
     }
   },
