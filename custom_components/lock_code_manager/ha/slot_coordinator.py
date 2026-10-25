@@ -113,6 +113,9 @@ class SlotEntityCoordinator:
         # recompute can show STATE_UNKNOWN rather than a stale guess.
         self._is_active: bool | None = None
         self._inactive_because_of: list[str] = []
+        # The enabled flag the last compute saw; None until the first, so a
+        # coordinator starting up is no transition.
+        self._was_enabled: bool | None = None
 
     # -- Lifecycle -----------------------------------------------------------
 
@@ -122,6 +125,7 @@ class SlotEntityCoordinator:
         if self._started:
             return
         self._started = True
+        self._was_enabled = None
         self._update_condition_subscription()
         self._recompute_active()
 
@@ -388,11 +392,8 @@ class SlotEntityCoordinator:
 
         Disable is unconditional. Enable needs a credential of any type and
         raises ``CredentialRequiredError`` without one (the switch translates
-        that into ``HomeAssistantError``). A successful enable answers the
-        ``credential_required`` repair and a refusal's ``slot_disabled`` one:
-        turning the slot back on is what each asks the user to do, and a value
-        refused again raises its repair afresh. Failures inside the issue
-        registry are logged and do not unwind the write.
+        that into ``HomeAssistantError``). The repairs an enable answers are
+        deleted by ``_recompute_active``, which sees every route back on.
         """
         if not enabled:
             self._write_config_fields({CONF_ENABLED: False})
@@ -405,19 +406,6 @@ class SlotEntityCoordinator:
             )
 
         self._write_config_fields({CONF_ENABLED: True})
-        for issue in ("credential_required", "slot_disabled"):
-            try:
-                async_delete_issue(
-                    self._hass,
-                    DOMAIN,
-                    f"{issue}_{self._config_entry.entry_id}_{self._slot_num}",
-                )
-            except Exception:
-                _LOGGER.exception(
-                    "%s: Failed to delete %s repair issue after enable",
-                    self._log_prefix,
-                    issue,
-                )
 
     # -- Config change hook (called by async_update_listener) ----------------
 
@@ -521,8 +509,15 @@ class SlotEntityCoordinator:
         entity (``CONF_CONDITION``) is truthy when its state is ``on``;
         ``off`` is False and any other state (unknown, unavailable,
         missing) is None and treated as inactive.
+
+        Every change of the slot's configuration passes through here, so it
+        is where the slot being turned back on is seen, by whatever route.
         """
         slot_config = self._slot_config()
+        enabled = bool(slot_config.get(CONF_ENABLED))
+        if self._was_enabled is False and enabled:
+            self._answer_enable_repairs()
+        self._was_enabled = enabled
         states: dict[str, bool | None] = {}
         for key, value in slot_config.items():
             if key in (
@@ -557,6 +552,30 @@ class SlotEntityCoordinator:
         self._inactive_because_of = inactive_because_of
         for writer in list(self._active_view_writers):
             writer(self._is_active, list(self._inactive_because_of))
+
+    @callback
+    def _answer_enable_repairs(self) -> None:
+        """
+        Delete the repairs that ask the user to turn the slot back on.
+
+        ``credential_required`` and a refusal's ``slot_disabled``: turning the
+        slot on is what each asks for, and a value refused again raises its
+        repair afresh. A registry failure is logged and does not unwind the
+        enable.
+        """
+        for issue in ("credential_required", "slot_disabled"):
+            try:
+                async_delete_issue(
+                    self._hass,
+                    DOMAIN,
+                    f"{issue}_{self._config_entry.entry_id}_{self._slot_num}",
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "%s: Failed to delete %s repair issue after enable",
+                    self._log_prefix,
+                    issue,
+                )
 
     @callback
     def _safely_raise_credential_required_issue(self) -> None:

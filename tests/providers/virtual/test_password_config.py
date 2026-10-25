@@ -1217,3 +1217,33 @@ async def test_re_enabling_answers_slot_disabled(
 
     assert coordinator.is_enabled is False
     assert _disabled_issue(hass, lcm_config_entry) is not None
+
+
+async def test_re_enabling_in_the_edit_form_answers_slot_disabled(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """Every route back on answers the refusal, the edit form's included."""
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    with patch.object(
+        VirtualLock,
+        "async_set_slot_credential",
+        _suspend_passwords_and_refuse_pin("2468"),
+    ):
+        await coordinator.async_request_credential_update(CredentialType.PIN, "2468")
+        await _settled(hass)
+    assert coordinator.is_enabled is False
+    assert _disabled_issue(hass, lcm_config_entry) is not None
+
+    result = await _edit_user_form(hass, lcm_config_entry, 1)
+    result = await _subentry_configure(
+        hass,
+        result["flow_id"],
+        {CONF_NAME: "slot1", CONF_ENABLED: True, CONF_PIN: "2468"},
+    )
+    assert result["type"] == "abort"
+
+    assert coordinator.is_enabled is True
+    assert _disabled_issue(hass, lcm_config_entry) is None
+    await _settled(hass)
+    assert get_virtual_lock(hass, lcm_config_entry)._data["1"]["code"] == "2468"
+    assert _disabled_issue(hass, lcm_config_entry) is None
