@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01ScNDn7NzkP2doB8B5dfYkT",
+  "agent_id": "a346a064a68ad4ca1",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix ZHA failed ops counted as use",
+  "token_usage": {
+    "input_tokens": 72,
+    "cache_creation_tokens": 119071,
+    "cache_read_tokens": 3735522,
+    "output_tokens": 25519,
+    "api_call_count": 36
+  },
+  "started_at": "2026-10-26T14:15:29.141975-04:00",
+  "completed_at": "2026-10-26T15:07:32.322917-04:00"
+}

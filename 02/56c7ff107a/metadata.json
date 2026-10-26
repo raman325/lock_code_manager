@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "0256c7ff107a",
+  "strategy": "manual-commit",
+  "branch": "deps/terser-1779",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/02/56c7ff107a/0/metadata.json",
+      "transcript": "/02/56c7ff107a/0/full.jsonl",
+      "compact_transcript": "/02/56c7ff107a/0/transcript.jsonl",
+      "content_hash": "/02/56c7ff107a/0/content_hash.txt",
+      "prompt": "/02/56c7ff107a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 48,
+    "cache_creation_tokens": 228203,
+    "cache_read_tokens": 2932317,
+    "output_tokens": 11186,
+    "api_call_count": 24,
+    "subagent_tokens": {
+      "input_tokens": 10,
+      "cache_creation_tokens": 6217,
+      "cache_read_tokens": 501309,
+      "output_tokens": 4806,
+      "api_call_count": 5
+    }
+  }
+}

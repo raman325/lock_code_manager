@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_016EhTFpsWUdY2u22MQ9VVuj",
+  "agent_id": "a72a370299a8646e6",
+  "subagent_type": "general-purpose",
+  "task_description": "Review #1784 ZHA failed-ops fix",
+  "token_usage": {
+    "input_tokens": 44,
+    "cache_creation_tokens": 91270,
+    "cache_read_tokens": 1894549,
+    "output_tokens": 10780,
+    "api_call_count": 22
+  },
+  "started_at": "2026-10-26T14:25:20.692592-04:00",
+  "completed_at": "2026-10-26T15:07:32.331578-04:00"
+}
