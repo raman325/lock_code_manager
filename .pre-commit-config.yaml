@@ -8,7 +8,7 @@ default_language_version:
   python: python3.14
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.1
+    rev: v0.17.2
     hooks:
       - id: ruff-check
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -65,7 +65,7 @@ repos:
         types: [yaml]
 
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.49.1
+    rev: v0.50.0
     hooks:
       - id: markdownlint
         args: ["--fix"]
