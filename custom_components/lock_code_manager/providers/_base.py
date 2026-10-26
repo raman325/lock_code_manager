@@ -2058,7 +2058,7 @@ class BaseLock:
         of credential the lock said was presented. There is no default: a use
         counts as the credential its lock names, so a provider whose lock
         named none does not call this at all rather than letting it pass for
-        a PIN.
+        a Personal Identification Number.
 
         The single funnel every provider goes through, so it is also where
         ``BUS_EVENT_CREDENTIAL_USED`` is fired: every provider gets it

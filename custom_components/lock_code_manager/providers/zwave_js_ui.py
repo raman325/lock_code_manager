@@ -719,7 +719,7 @@ class ZWaveJSUILock(BaseMqttLock):
             )
             return
         # Only the keypad's lock and unlock operations reach here, so the
-        # credential is a PIN.
+        # credential is a Personal Identification Number.
         self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=to_locked,

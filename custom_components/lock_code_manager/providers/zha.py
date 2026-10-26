@@ -163,12 +163,12 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
 
 # A use counts as the credential its operation event source names. The keypad
 # names a Personal Identification Number and the Radio Frequency
-# Identification reader a card. A radio frequency command names a PIN only
-# when it names the user whose PIN it carried (an unlock command sent with a
-# code); without a user it carried none. Every other source -- manual,
-# indeterminate, or one outside the Door Lock cluster such as the vendor
-# extension 4 that zigbee-herdsman-converters names "fingerprint" -- names no
-# credential, so the use is not reported.
+# Identification reader a card. A radio frequency command (``_RADIO_SOURCES``)
+# names a Personal Identification Number only when it names the user whose
+# code it carried (an unlock command sent with one); without a user it carried
+# none. Every other source -- manual, indeterminate, or one outside the Door
+# Lock cluster such as the vendor extension 4 that zigbee-herdsman-converters
+# names "fingerprint" -- names no credential, so the use is not reported.
 SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
     DoorLock.OperationEventSource.Keypad: CredentialType.PIN,
     DoorLock.OperationEventSource.RFID: CredentialType.RFID,
