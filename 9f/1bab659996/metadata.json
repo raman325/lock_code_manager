@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "9f1bab659996",
+  "strategy": "manual-commit",
+  "branch": "feat/refuse-duplicate-pin",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/ha/slot_coordinator.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9f/1bab659996/0/metadata.json",
+      "transcript": "/9f/1bab659996/0/full.jsonl",
+      "compact_transcript": "/9f/1bab659996/0/transcript.jsonl",
+      "content_hash": "/9f/1bab659996/0/content_hash.txt",
+      "prompt": "/9f/1bab659996/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 944649,
+    "cache_read_tokens": 2815303,
+    "output_tokens": 5793,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 150,
+      "cache_creation_tokens": 774708,
+      "cache_read_tokens": 9260439,
+      "output_tokens": 46585,
+      "api_call_count": 74
+    }
+  }
+}

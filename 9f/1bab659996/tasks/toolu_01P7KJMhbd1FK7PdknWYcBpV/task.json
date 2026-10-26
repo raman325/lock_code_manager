@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01P7KJMhbd1FK7PdknWYcBpV",
+  "agent_id": "a75a6e4bfb2f82bb0",
+  "subagent_type": "general-purpose",
+  "task_description": "Z-Wave: only real credential uses",
+  "started_at": "2026-10-26T10:03:44.476117-04:00"
+}
