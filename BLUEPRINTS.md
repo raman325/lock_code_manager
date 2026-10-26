@@ -296,7 +296,7 @@ template or blueprint reads about that use:
 
 | Attribute | Meaning |
 | --------- | ------- |
-| `event_type` | The kind of credential presented — `pin`, or on a lock that reports which: `rfid` or `fingerprint` (Matter, ZHA, Zigbee2MQTT) or `face` (Matter). It says *what* was used, never where |
+| `event_type` | The kind of credential presented — `pin`, or on a lock that reports which: `rfid` (Matter, ZHA, Zigbee2MQTT), `fingerprint` (Matter, and Zigbee2MQTT when the lock's converter names it) or `face` (Matter). It says *what* was used, never where. On a Zigbee lock a use is a `pin` only when typed at the keypad or sent with the user's code; the thumb-turn, a remote command naming no user and a source the lock does not identify record no use |
 | `event_types` | The kinds this user's uses can be: `pin`, plus every kind the configuration's locks can report. A use of a kind not listed here is not recorded on the entity, though `lock_code_manager_credential_used` still fires for it |
 | `name` | The user whose credential was used |
 | `target` | What the credential was used against — a lock that reported the use, or whatever `lock_code_manager.use_credential` was told it acted on |
