@@ -4511,7 +4511,7 @@ async def test_options_flow_refuses_a_lock_where_another_entry_has_a_users_pin(
 
     assert result["type"] == "form"
     assert result["errors"] == {"base": "pin_conflict_on_lock"}
-    assert result["description_placeholders"] == {"lock": LOCK_2_ENTITY_ID}
+    assert result["description_placeholders"] == {"error_lock": LOCK_2_ENTITY_ID}
     _assert_options_error_renders(result)
 
 
@@ -4553,7 +4553,10 @@ async def test_reauth_checks_pins_on_a_lock_it_adds(
     if refused:
         assert result["step_id"] == "reauth_confirm"
         assert result["errors"] == {"base": "pin_conflict_on_lock"}
-        assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+        # The form still names the lock that disappeared; the error, the lock
+        # refused.
+        assert result["description_placeholders"]["lock"] == LOCK_1_ENTITY_ID
+        assert result["description_placeholders"]["error_lock"] == LOCK_2_ENTITY_ID
     else:
         assert result["type"] == "abort"
         assert result["reason"] == "locks_updated"
@@ -4568,4 +4571,4 @@ def test_a_pin_conflict_on_a_lock_names_only_the_lock(section: str):
 
     message = strings[section]["error"]["pin_conflict_on_lock"]
 
-    assert set(re.findall(r"\{(\w+)\}", message)) == {"lock"}
+    assert set(re.findall(r"\{(\w+)\}", message)) == {"error_lock"}

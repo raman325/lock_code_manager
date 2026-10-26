@@ -227,7 +227,7 @@ def _check_pins_on_added_locks(
     )
     if lock is None:
         return {}, {}
-    return {"base": "pin_conflict_on_lock"}, {"lock": lock}
+    return {"base": "pin_conflict_on_lock"}, {"error_lock": lock}
 
 
 async def _async_check_existing_codes(
@@ -914,15 +914,14 @@ class LockCodeManagerFlowHandler(
                     existing_slots,
                     config_entry,
                 )
+            added = [
+                lock_entity_id
+                for lock_entity_id in user_input[CONF_LOCKS]
+                if lock_entity_id not in entry_config.locks
+            ]
             if not additional_errors:
                 additional_errors, additional_placeholders = _check_pins_on_added_locks(
-                    self.hass,
-                    entry_config.users.values(),
-                    (
-                        lock_entity_id
-                        for lock_entity_id in user_input[CONF_LOCKS]
-                        if lock_entity_id not in entry_config.locks
-                    ),
+                    self.hass, entry_config.users.values(), added
                 )
             if not additional_errors:
                 # Reauth is where a lock gets swapped, so it is also where an
@@ -937,11 +936,6 @@ class LockCodeManagerFlowHandler(
             # A lock swapped in gets the entry's numbers as the options flow
             # adds one: checked for keypad codes in them, and said of when it
             # cannot report any.
-            added = [
-                lock_entity_id
-                for lock_entity_id in user_input[CONF_LOCKS]
-                if lock_entity_id not in entry_config.locks
-            ]
             if not additional_errors and added and existing_slots:
                 (
                     additional_errors,
