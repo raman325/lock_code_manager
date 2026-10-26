@@ -35,6 +35,7 @@ from zwave_js_server.util.lock import get_code_slot_value, get_usercodes
 
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
+    ATTR_COMMAND_CLASS_NAME,
     ATTR_EVENT,
     ATTR_EVENT_LABEL,
     ATTR_HOME_ID,
@@ -1154,11 +1155,15 @@ class ZWaveJSLock(BaseLock):
     @callback
     def _handle_zwave_js_event(self, evt: Event) -> None:
         """Handle Z-Wave JS event."""
-        if evt.data[ATTR_TYPE] != NotificationType.ACCESS_CONTROL:
+        # Only a Notification command class event carries a type; an Entry
+        # Control event's data can hold the code typed at the keypad, so no
+        # event data is logged.
+        if evt.data.get(ATTR_TYPE) != NotificationType.ACCESS_CONTROL:
             _LOGGER.debug(
-                "Lock %s received non Access Control event: %s",
+                "Lock %s ignored a %s notification of type %s",
                 self.lock.entity_id,
-                evt.as_dict(),
+                evt.data.get(ATTR_COMMAND_CLASS_NAME),
+                evt.data.get(ATTR_TYPE),
             )
             return
 

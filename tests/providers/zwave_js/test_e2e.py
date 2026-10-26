@@ -18,13 +18,22 @@ from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,
     UserCredentialUserType,
 )
+from zwave_js_server.const.command_class.battery import BatteryReplacementStatus
+from zwave_js_server.const.command_class.entry_control import (
+    EntryControlDataType,
+    EntryControlEventType,
+)
 from zwave_js_server.const.command_class.lock import (
     LOCK_USERCODE_PROPERTY,
     CodeSlotStatus,
 )
+from zwave_js_server.const.command_class.multilevel_switch import (
+    MultilevelSwitchCommand,
+)
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
 )
+from zwave_js_server.const.command_class.power_level import PowerLevelTestStatus
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
@@ -39,6 +48,10 @@ from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
+)
+from homeassistant.components.zwave_js.const import (
+    ATTR_COMMAND_CLASS,
+    ZWAVE_JS_NOTIFICATION_EVENT,
 )
 from homeassistant.config_entries import (
     SOURCE_USER,
@@ -1560,6 +1573,86 @@ async def _async_setup_entry_on_slots(
     if settle:
         await hass.async_block_till_done()
     return entry
+
+
+# A code typed on an Entry Control keypad, distinctive enough to find in any log.
+KEYPAD_ENTRY = "7319468205"
+
+# The ``args`` the driver raises ``notification`` with for command classes
+# other than the Notification command class, as node-zwave-js a0cc3b1c0
+# builds them in packages/zwave-js/src/lib/node/CCHandlers/:
+# EntryControlCC.ts:48-55 (an ASCII Enter carries the keys pressed, which the
+# driver masks in its own log, packages/cc/src/cc/EntryControlCC.ts:523-529),
+# BatteryCC.ts:18-24 (a level of 0xff is low battery),
+# MultilevelSwitchCC.ts:52-66 and PowerlevelCC.ts:188-199. The server forwards them unchanged
+# (zwave-js-server 400fd94, src/lib/forward.ts:563-574).
+OTHER_COMMAND_CLASS_ARGS = {
+    "entry_control": (
+        CommandClass.ENTRY_CONTROL,
+        {
+            "eventType": EntryControlEventType.ENTER,
+            "eventTypeLabel": "Enter",
+            "dataType": EntryControlDataType.ASCII,
+            "dataTypeLabel": "ASCII",
+            "eventData": KEYPAD_ENTRY,
+        },
+    ),
+    "battery": (
+        CommandClass.BATTERY,
+        {"eventType": "battery low", "urgency": BatteryReplacementStatus.SOON},
+    ),
+    "multilevel_switch": (
+        CommandClass.SWITCH_MULTILEVEL,
+        {
+            "eventType": MultilevelSwitchCommand.STOP_LEVEL_CHANGE,
+            "eventTypeLabel": "Stop level change",
+        },
+    ),
+    "powerlevel": (
+        CommandClass.POWERLEVEL,
+        {
+            "testNodeId": 5,
+            "status": PowerLevelTestStatus.SUCCESS,
+            "acknowledgedFrames": 10,
+        },
+    ),
+}
+
+
+class TestNotificationsOfOtherCommandClasses:
+    """A lock's notifications of other command classes are not credential uses."""
+
+    @pytest.mark.parametrize(
+        ("command_class", "args"),
+        OTHER_COMMAND_CLASS_ARGS.values(),
+        ids=OTHER_COMMAND_CLASS_ARGS.keys(),
+    )
+    async def test_a_notification_of_another_command_class_is_ignored(
+        self,
+        hass: HomeAssistant,
+        caplog: pytest.LogCaptureFixture,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_e2e_lock: ZWaveJSLock,
+        command_class: CommandClass,
+        args: dict[str, Any],
+    ) -> None:
+        """
+        It raises no error, announces no use, and logs none of its data.
+
+        Home Assistant's bus event for these carries no Access Control
+        ``type``, and an Entry Control one carries the code typed.
+        """
+        caplog.set_level(logging.DEBUG)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        heard = async_capture_events(hass, ZWAVE_JS_NOTIFICATION_EVENT)
+
+        fake_zwave_lock.notify(command_class, args)
+        await hass.async_block_till_done()
+
+        assert [event.data[ATTR_COMMAND_CLASS] for event in heard] == [command_class]
+        assert used == []
+        assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+        assert not [r for r in caplog.records if KEYPAD_ENTRY in r.getMessage()]
 
 
 def _all_in_sync(
