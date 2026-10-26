@@ -36,6 +36,7 @@ from custom_components.lock_code_manager.const import (
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.model.credentials import (
+    MANAGED_CREDENTIAL_TYPES,
     CredentialType,
     CredentialTypeCapability,
     LockCapabilities,
@@ -180,15 +181,14 @@ async def test_event_types_names_credential_kinds_and_never_locks(
     axis that actually distinguishes one recorded use from another; where
     it happened rides in ``target``.
 
-    These locks answer no capability probe and take only PINs, so this is
-    also the floor: a PIN, which ``use_credential`` reports, plus the types
-    each lock takes. That is what keeps the vocabulary from being empty
-    while a probe has not run.
+    These locks answer no capability probe, so this is also the floor:
+    ``MANAGED_CREDENTIAL_TYPES`` alone, which is what keeps the vocabulary
+    from being empty while a probe has not run.
     """
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
 
-    assert state.attributes[ATTR_EVENT_TYPES] == [CredentialType.PIN]
+    assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
     for lock_entity_id in (LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID):
         assert lock_entity_id not in state.attributes[ATTR_EVENT_TYPES]
 
@@ -203,8 +203,8 @@ async def test_event_types_unions_what_the_entrys_locks_advertise(
     What Lock Code Manager can write and what a lock can report are
     different sets. A lock with its own card reader reports RFID uses that
     nothing here ever wrote, and refusing to name them would make them
-    unrecordable -- so a PIN and the types each lock takes are a floor
-    under the union, not a cap on it.
+    unrecordable -- so the managed set is a floor under the union, not a
+    cap on it.
     """
     with patch(
         "custom_components.lock_code_manager.providers.INTEGRATIONS_CLASS_MAP",
@@ -316,7 +316,7 @@ async def test_a_use_of_a_kind_no_lock_reports_is_dropped(
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
     assert state.state == STATE_UNKNOWN
-    assert state.attributes[ATTR_EVENT_TYPES] == [CredentialType.PIN]
+    assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
     assert [
         (record.levelno, record.args)
         for record in caplog.records
@@ -361,7 +361,7 @@ async def test_a_restored_use_does_not_widen_the_vocabulary(
 
     state = hass.states.get(SLOT_1_EVENT_ENTITY)
     assert state
-    assert state.attributes[ATTR_EVENT_TYPES] == [CredentialType.PIN]
+    assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
 
     await hass.config_entries.async_unload(config_entry.entry_id)
 
@@ -547,7 +547,7 @@ async def test_available_when_no_lock_reports_code_slot_events(
         state = hass.states.get(SLOT_1_EVENT_ENTITY)
         assert state
         assert state.state != STATE_UNAVAILABLE
-        assert state.attributes[ATTR_EVENT_TYPES] == [CredentialType.PIN]
+        assert state.attributes[ATTR_EVENT_TYPES] == sorted(MANAGED_CREDENTIAL_TYPES)
 
         lock: BaseLock = config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
         lock.async_fire_code_slot_event(1, False)

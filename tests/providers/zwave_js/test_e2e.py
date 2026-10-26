@@ -76,7 +76,6 @@ from custom_components.lock_code_manager.ha.runtime import (
     locks_that_cannot_report,
 )
 from custom_components.lock_code_manager.model.credentials import (
-    CredentialAddress,
     CredentialType,
     SlotCode,
     SlotCredential,
@@ -133,17 +132,17 @@ def _codes(hass: HomeAssistant, lock: ZWaveJSLock) -> dict[int, str | SlotCode]:
 
 def _record_pushes(
     hass: HomeAssistant, lock: ZWaveJSLock
-) -> list[tuple[CredentialAddress, SlotCredential]]:
-    """Record what the provider pushes to the lock's worker, address by address."""
+) -> list[tuple[int, SlotCredential]]:
+    """Record what the provider pushes to the lock's worker, slot by slot."""
     worker = lock_registry(hass).worker(lock.lock.entity_id)
     assert worker is not None
     port = worker.port
-    pushed: list[tuple[CredentialAddress, SlotCredential]] = []
+    pushed: list[tuple[int, SlotCredential]] = []
     forward = port.pushed
 
-    def _pushed(address: CredentialAddress, credential: SlotCredential) -> None:
-        pushed.append((address, credential))
-        forward(address, credential)
+    def _pushed(slot: int, credential: SlotCredential) -> None:
+        pushed.append((slot, credential))
+        forward(slot, credential)
 
     port.pushed = _pushed  # type: ignore[method-assign]
     return pushed
@@ -159,13 +158,10 @@ def _users_tagged_for(lock: FakeZWaveLock, slot: int) -> set[int]:
 
 
 def _first_push(
-    pushed: list[tuple[CredentialAddress, SlotCredential]], slot: int
+    pushed: list[tuple[int, SlotCredential]], slot: int
 ) -> SlotCredential | None:
-    """Return the first PIN pushed for ``slot`` (later ones are read-backs)."""
-    return next(
-        (credential for address, credential in pushed if address == pin_address(slot)),
-        None,
-    )
+    """Return the first credential pushed for ``slot`` (later ones are read-backs)."""
+    return next((credential for number, credential in pushed if number == slot), None)
 
 
 def async_capture_events(

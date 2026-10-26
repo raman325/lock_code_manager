@@ -19,7 +19,7 @@ from .const import (
 from .entity import BaseLockCodeManagerEntity
 from .ha.entry import LockCodeManagerConfigEntry
 from .ha.runtime import signal_lock_changed
-from .model.credentials import CredentialType
+from .model.credentials import MANAGED_CREDENTIAL_TYPES
 from .model.queries import get_entry_config, subentry_id_for_slot
 from .providers import BaseLock
 
@@ -107,13 +107,11 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         Frequency Identification reader reports uses of a credential this
         integration never wrote, and they are still this user's uses.
 
-        A PIN is the floor under that union: ``use_credential`` reports a
-        use as a PIN whatever the locks are, so an entry with no locks still
-        admits one. Each lock's ``managed_credential_types`` is a floor too:
-        a type Lock Code Manager writes is one a lock can report a use of
-        only where the lock takes it, and capabilities are probed lazily, so
+        ``MANAGED_CREDENTIAL_TYPES`` is a floor under that union. A use
+        reported through ``use_credential`` is one of those kinds whatever
+        the locks are, and capabilities are probed lazily, so
         ``cached_capabilities`` reads ``None`` for a lock not asked yet or
-        unreachable. An entry's kinds are the union across its locks.
+        unreachable.
 
         Read fresh on every state write, because it moves: a probe
         completing or a lock being added changes it. Home Assistant re-reads
@@ -121,8 +119,7 @@ class LockCodeManagerCodeSlotEventEntity(BaseLockCodeManagerEntity, EventEntity)
         correctly; nothing caches it here, which is deliberate.
         """
         return sorted(
-            {CredentialType.PIN}.union(
-                *(lock.managed_credential_types for lock in self.locks),
+            MANAGED_CREDENTIAL_TYPES.union(
                 *(lock.reported_credential_types for lock in self.locks),
                 *(
                     caps.credential_types

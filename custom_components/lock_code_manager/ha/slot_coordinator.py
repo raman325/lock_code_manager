@@ -129,9 +129,9 @@ class SlotEntityCoordinator:
     # -- What the slot wants on each lock ------------------------------------
 
     @property
-    def wants(self) -> dict[CredentialType, str | None]:
-        """Return what the slot should hold, by credential type: its PIN while active."""
-        return {CredentialType.PIN: self.pin_value if self._is_active else None}
+    def want(self) -> str | None:
+        """Return what the slot should hold: its PIN while active, else nothing."""
+        return self.pin_value if self._is_active else None
 
     @callback
     def async_push_want(self, lock_entity_ids: Iterable[str] | None = None) -> None:
@@ -152,7 +152,7 @@ class SlotEntityCoordinator:
                 self._config_entry,
                 lock_entity_id,
                 self._slot_num,
-                self.wants,
+                self.want,
             )
 
     # -- Read-only views (consumed by entities) ------------------------------
