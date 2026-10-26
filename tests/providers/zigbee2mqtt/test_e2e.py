@@ -108,6 +108,8 @@ from .conftest import (
 from .fake_bridge import ENABLED, FakeZ2MBridge
 
 Z2M_LOGGER = LOGGER.name
+# A keypad source, so a hand-built use is stopped only by what its test is about.
+_KEYPAD = {"action_source_name": "keypad"}
 
 # Full LCM setup briefly holds the coordinator's debounced refresh lock while
 # the initial sync runs. Concurrent async_request_refresh calls during that
@@ -818,12 +820,7 @@ class TestBridgeEvents:
         ("source", "expected"),
         [
             pytest.param(0, "pin", id="keypad"),
-            pytest.param(1, "pin", id="rf"),
-            pytest.param(2, "pin", id="manual"),
             pytest.param(3, "rfid", id="rfid"),
-            # ``lockSourceName`` has no name for the cluster's indeterminate
-            # source, so the event carries ``action_source`` alone.
-            pytest.param(0xFF, "pin", id="indeterminate"),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -861,10 +858,15 @@ class TestBridgeEvents:
             assert state.attributes[ATTR_CREDENTIAL_TYPE] == expected
 
     @pytest.mark.parametrize(
-        ("payload", "source_name"),
+        ("event", "source_name"),
         [
+            pytest.param(1, "rf", id="rf"),
+            pytest.param(2, "manual", id="manual"),
+            # ``lockSourceName`` has no name for the cluster's indeterminate
+            # source, so the event carries ``action_source`` alone.
+            pytest.param(0xFF, None, id="indeterminate"),
             # Source 4, a vendor extension ``lockSourceName`` names "fingerprint".
-            pytest.param(None, "fingerprint", id="fingerprint"),
+            pytest.param(4, "fingerprint", id="fingerprint"),
             # The Nimly locks' own converter (zigbee-herdsman-converters
             # src/devices/onesti.ts, attribute 0x0100's source octet 03).
             pytest.param(
@@ -878,21 +880,24 @@ class TestBridgeEvents:
             ),
         ],
     )
-    async def test_a_use_from_a_source_the_cluster_does_not_define_is_not_reported(
+    async def test_a_use_from_a_source_naming_no_credential_is_not_reported(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
         mqtt_lock_discovered,
         fake_z2m_bridge: FakeZ2MBridge,
         caplog: pytest.LogCaptureFixture,
-        payload: dict[str, Any] | None,
-        source_name: str,
+        event: int | dict[str, Any],
+        source_name: str | None,
     ) -> None:
         """
-        An ``action_source_name`` outside the Door Lock cluster's records no use.
+        A use counts only as the credential its ``action_source_name`` names.
 
-        The use is not reported, rather than announced as a PIN or as a kind
-        the lock may not have. A keypad unlock afterwards still lands.
+        A radio frequency command, the thumb-turn and a nameless
+        (indeterminate) source name no credential, and a name outside the
+        Door Lock cluster's names nothing this integration can classify, so
+        none records a use, rather than a PIN the lock never said was typed.
+        A keypad unlock afterwards still lands.
         """
         lock_id = mqtt_lock_discovered.entity_id
         caplog.set_level(logging.DEBUG, logger=Z2M_LOGGER)
@@ -902,10 +907,10 @@ class TestBridgeEvents:
             )
             used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
-            if payload is None:
-                fake_z2m_bridge.operation_event("unlock", 1, 4)
+            if isinstance(event, int):
+                fake_z2m_bridge.operation_event("unlock", 1, event)
             else:
-                _fire_device_payload(hass, payload)
+                _fire_device_payload(hass, event)
             await hass.async_block_till_done()
 
             assert used == []
@@ -923,9 +928,17 @@ class TestBridgeEvents:
     @pytest.mark.parametrize(
         "payload",
         [
-            pytest.param({"action": ["unlock"], "action_user": 1}, id="list_action"),
-            pytest.param({"action": {"unlock": 1}, "action_user": 1}, id="dict_action"),
-            pytest.param({"action": "unlock", "action_user": True}, id="bool_user"),
+            pytest.param(
+                {"action": ["unlock"], "action_user": 1, **_KEYPAD},
+                id="list_action",
+            ),
+            pytest.param(
+                {"action": {"unlock": 1}, "action_user": 1, **_KEYPAD},
+                id="dict_action",
+            ),
+            pytest.param(
+                {"action": "unlock", "action_user": True, **_KEYPAD}, id="bool_user"
+            ),
         ],
     )
     async def test_a_malformed_event_names_no_slot(

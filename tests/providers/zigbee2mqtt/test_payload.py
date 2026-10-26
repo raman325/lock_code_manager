@@ -22,6 +22,9 @@ from custom_components.lock_code_manager.providers.zigbee2mqtt import (
 
 from .conftest import Z2M_FULL_TOPIC, _minimal_lock
 
+# A keypad source, so a hand-built use is stopped only by what its test is about.
+_KEYPAD = {"action_source_name": "keypad"}
+
 
 def test_mqtt_payload_pin_has_code_value_rejects_bool() -> None:
     """Boolean JSON must not count as a PIN payload (truthiness trap)."""
@@ -288,7 +291,9 @@ def test_keypad_unlock_action_fires_code_slot_event() -> None:
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": 3})
+    lock._process_z2m_device_payload(
+        {"action": "keypad_unlock", "action_user": 3, **_KEYPAD}
+    )
 
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=3,
@@ -303,7 +308,9 @@ def test_keypad_lock_action_fires_code_slot_event() -> None:
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": 1})
+    lock._process_z2m_device_payload(
+        {"action": "keypad_lock", "action_user": 1, **_KEYPAD}
+    )
 
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=1,
@@ -329,24 +336,24 @@ def test_lock_action_with_non_numeric_user_is_ignored() -> None:
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": "bad"})
+    lock._process_z2m_device_payload(
+        {"action": "keypad_unlock", "action_user": "bad", **_KEYPAD}
+    )
 
     lock.async_fire_code_slot_event.assert_not_called()
 
 
-def test_rf_unlock_action_fires_event() -> None:
-    """rf_unlock with action_user fires event."""
+def test_rf_unlock_action_is_not_reported() -> None:
+    """An rf_unlock names no credential, so it records no use."""
     lock = _minimal_lock()
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload({"action": "rf_unlock", "action_user": 5})
-
-    lock.async_fire_code_slot_event.assert_called_once_with(
-        code_slot=5,
-        to_locked=False,
-        credential_type=CredentialType.PIN,
+    lock._process_z2m_device_payload(
+        {"action": "rf_unlock", "action_user": 5, "action_source_name": "rf"}
     )
+
+    lock.async_fire_code_slot_event.assert_not_called()
 
 
 def test_unknown_action_does_not_fire_event() -> None:
@@ -373,12 +380,16 @@ def test_unknown_action_does_not_fire_event() -> None:
 def test_all_lock_actions_fire_event_with_correct_to_locked(
     action: str, expected_locked: bool
 ) -> None:
-    """All supported lock/unlock actions fire events with correct to_locked."""
+    """
+    All supported lock/unlock actions fire events with correct to_locked.
+
+    Each comes from the keypad, so only the action decides the direction.
+    """
     lock = _minimal_lock()
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload({"action": action, "action_user": 2})
+    lock._process_z2m_device_payload({"action": action, "action_user": 2, **_KEYPAD})
 
     lock.async_fire_code_slot_event.assert_called_once()
     call_kwargs = lock.async_fire_code_slot_event.call_args[1]

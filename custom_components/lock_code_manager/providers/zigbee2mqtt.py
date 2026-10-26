@@ -55,16 +55,14 @@ _Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
 )
 _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
-# The credential each source the Door Lock cluster defines says was presented,
-# by the ``action_source_name`` zigbee-herdsman-converters gives it
-# (``lockSourceName``): a card from the Radio Frequency Identification reader,
-# and a PIN from the keypad, a radio frequency remote or manual. Only these
-# names are classified. Any other, such as "fingerprint" for the vendor
-# extension 4, is not reported.
+# A use counts as the credential its ``action_source_name`` names
+# (zigbee-herdsman-converters ``lockSourceName``), and only two names name one:
+# ``keypad`` a PIN, ``rfid`` a card. Every other -- ``rf``, ``manual``, no name
+# at all (the cluster's indeterminate source has none), or a name outside the
+# Door Lock cluster such as ``fingerprint`` for the vendor extension 4 -- names
+# no credential, so the use is not reported.
 _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
     "keypad": CredentialType.PIN,
-    "rf": CredentialType.PIN,
-    "manual": CredentialType.PIN,
     "rfid": CredentialType.RFID,
 }
 
@@ -283,17 +281,11 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     )
                     return
                 source_name = payload.get("action_source_name")
-                # ``lockSourceName`` has no name for the cluster's indeterminate
-                # source, so a use from it arrives without one.
-                credential_type = (
-                    CredentialType.PIN
-                    if source_name is None
-                    else _Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(str(source_name))
-                )
+                credential_type = _Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(str(source_name))
                 if credential_type is None:
                     LOGGER.debug(
-                        "Lock %s: action_source_name %r is not a source the Door "
-                        "Lock cluster defines, so the use is not reported",
+                        "Lock %s: action_source_name %r names no credential, so "
+                        "the use is not reported",
                         self.lock.entity_id,
                         source_name,
                     )
