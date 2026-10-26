@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "c423ccac7c47",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-js-non-notification-events",
+  "checkpoints_count": 4,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/c4/23ccac7c47/0/metadata.json",
+      "transcript": "/c4/23ccac7c47/0/full.jsonl",
+      "compact_transcript": "/c4/23ccac7c47/0/transcript.jsonl",
+      "content_hash": "/c4/23ccac7c47/0/content_hash.txt",
+      "prompt": "/c4/23ccac7c47/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 15097,
+    "cache_read_tokens": 1173299,
+    "output_tokens": 8204,
+    "api_call_count": 7,
+    "subagent_tokens": {
+      "input_tokens": 30,
+      "cache_creation_tokens": 140446,
+      "cache_read_tokens": 1379425,
+      "output_tokens": 13422,
+      "api_call_count": 15
+    }
+  }
+}
