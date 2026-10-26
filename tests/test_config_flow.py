@@ -4240,21 +4240,22 @@ async def test_pasted_users_refuse_a_pin_longer_than_a_state(
     hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
 ):
     """
-    The block is invalid, and the log says why without the value.
+    The block says which pasted user's PIN is too long, never the PIN.
 
-    The pasted block's schema is never rendered, so the limit sits in it.
+    Nor does the log carry it.
     """
     entry = _entry_holding_three_pins(hass)
     flow_id = await _start_user_subentry_flow(hass, entry, path="several")
 
     with _holding():
         result = await hass.config_entries.subentries.async_configure(
-            flow_id, {CONF_USERS: {"A": {CONF_PIN: OVERLONG_PIN}}}
+            flow_id,
+            {CONF_USERS: {"A": {CONF_PIN: "2222"}, "B": {CONF_PIN: OVERLONG_PIN}}},
         )
 
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "invalid_config"}
-    assert "PIN may be at most 255 characters" in caplog.text
+    assert result["errors"] == {"base": "pin_too_long_in_block"}
+    assert result["description_placeholders"] == {"name": "B"}
     assert LEAK_MARKER not in caplog.text
 
     with _holding():
@@ -4277,7 +4278,8 @@ async def test_the_setup_yaml_refuses_a_pin_longer_than_a_state(
             hass, flow_id, {CONF_USERS: {"User 1": {CONF_PIN: OVERLONG_PIN}}}
         )
 
-    assert result["errors"] == {"base": "invalid_config"}
+    assert result["errors"] == {"base": "pin_too_long_in_block"}
+    assert result["description_placeholders"] == {"name": "User 1"}
     assert LEAK_MARKER not in caplog.text
 
     with _holding():
@@ -4301,6 +4303,8 @@ def test_an_overlong_pin_has_a_message(section: str):
     )
 
     assert "255" in errors["invalid_pin"]
+    assert "255" in errors["pin_too_long_in_block"]
+    assert set(re.findall(r"\{(\w+)\}", errors["pin_too_long_in_block"])) == {"name"}
 
 
 async def test_a_pin_stored_as_a_number_is_held(

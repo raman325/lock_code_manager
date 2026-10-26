@@ -106,22 +106,13 @@ def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _pin_fits(pin: str) -> str:
-    """Refuse a PIN too long to store; the reason is logged, so not the PIN."""
-    if error := pin_error(pin):
-        raise vol.Invalid(error)
-    return pin
-
-
 # The editor's shape: users keyed by name, with no slot number anywhere. The
 # name is the key rather than a field, so a duplicate is unrepresentable
 # rather than rejected -- the same reason the stored configuration is keyed
 # that way.
 USER_SCHEMA = vol.Schema(
     {
-        # A callable is fine here: this schema validates a pasted block and
-        # is never rendered.
-        vol.Optional(CONF_PIN): vol.All(STRIPPED_PIN, _pin_fits),
+        vol.Optional(CONF_PIN): STRIPPED_PIN,
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_CONDITION): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
@@ -332,6 +323,19 @@ async def _async_validate_users_yaml(
     for name in parsed_users:
         if identity(name) in spoken_for:
             return None, {"base": "name_not_unique"}, {"name": name}
+
+    # Named rather than quoted: a block has no field to mark, and the PIN is
+    # not repeated back.
+    too_long = next(
+        (
+            name
+            for name, fields in parsed_users.items()
+            if pin_error(stored_pin(fields))
+        ),
+        None,
+    )
+    if too_long is not None:
+        return None, {"base": "pin_too_long_in_block"}, {"name": too_long}
 
     # Its own message: a block has no field to mark, so it names which of
     # the pasted users it is -- never who already has the PIN. The entries
