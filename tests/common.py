@@ -1996,6 +1996,11 @@ def unnumbered_user_subentry(name: str, **fields) -> ConfigSubentryData:
     )
 
 
+# A PIN one character over Home Assistant's state limit, marked so a leak of
+# it into an error or the log can be found.
+LEAK_MARKER = "leak-marker-77ab"
+OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
+
 # The PINs ``entry_holding_pins_on`` gives its users, every way a PIN can be
 # held: by a turned-off user, and by one with no slot number.
 TURNED_OFF_USERS_PIN = "2468"

@@ -53,8 +53,10 @@ from custom_components.lock_code_manager.model.queries import (
 )
 
 from .common import (
+    LEAK_MARKER,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    OVERLONG_PIN,
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_PIN_ENTITY,
@@ -1255,12 +1257,6 @@ async def test_a_pin_held_by_a_user_with_no_slot_number_is_refused(
 
     assert get_entry_config(entry).slot(1)[CONF_PIN] == "4321"
     await hass.config_entries.async_unload(entry.entry_id)
-
-
-# A PIN one character over Home Assistant's state limit, marked so a leak of
-# it into an error or the log can be found.
-LEAK_MARKER = "leak-marker-77ab"
-OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
 
 
 async def test_a_pin_longer_than_a_state_is_refused(

@@ -68,8 +68,10 @@ from custom_components.lock_code_manager.model.queries import get_entry_config
 
 from .common import (
     BASE_CONFIG,
+    LEAK_MARKER,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    OVERLONG_PIN,
     TURNED_OFF_USERS_PIN,
     UNNUMBERED_USERS_PIN,
     LockFault,
@@ -4161,12 +4163,6 @@ def test_a_pasted_duplicates_message_names_the_user(section: str):
 
     assert set(re.findall(r"\{(\w+)\}", errors["pin_not_unique_in_block"])) == {"name"}
     assert "pin_not_unique" in errors
-
-
-# A PIN one character over Home Assistant's state limit, marked so a leak of
-# it into an error or the log can be found.
-LEAK_MARKER = "leak-marker-77ab"
-OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
 
 
 async def test_adding_a_user_refuses_a_pin_longer_than_a_state(

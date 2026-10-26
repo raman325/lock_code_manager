@@ -98,8 +98,10 @@ from custom_components.lock_code_manager.providers.schlage import (
 from tests.providers.helpers import register_mock_service
 
 from .common import (
+    LEAK_MARKER,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    OVERLONG_PIN,
     TURNED_OFF_USERS_PIN,
     UNNUMBERED_USERS_PIN,
     async_advance_clock,
@@ -2513,12 +2515,6 @@ async def test_add_user_refuses_a_pin_a_user_with_no_slot_number_has(
     await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "4321"}])
     assert get_entry_config(entry).users["A"][CONF_PIN] == "4321"
     await hass.config_entries.async_unload(entry.entry_id)
-
-
-# A PIN one character over Home Assistant's state limit, marked so a leak of
-# it into an error or the log can be found.
-LEAK_MARKER = "leak-marker-77ab"
-OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
 
 
 async def test_set_credential_refuses_a_pin_longer_than_a_state(
