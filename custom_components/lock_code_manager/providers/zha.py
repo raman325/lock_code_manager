@@ -148,17 +148,19 @@ def _status_text(status: Any) -> str:
     return f"{name} ({int(status)})" if name else str(status)
 
 
+# The operations that count as a use, and whether each locked the door: the
+# ones Zigbee2MQTT counts (``_Z2M_LOCK_ACTIONS``). Every other operation is not
+# a use: a refused Personal Identification Number, card or schedule left the
+# door as it was, and an unknown or non-access user operation says nothing
+# about it. The one-touch, key, automatic and scheduled operations did move
+# it, but the Zigbee Cluster Library reports them, like the manual lock and
+# unlock, only from the manual source (zigpy's ``ManualOperatitonEventMask``),
+# which names no credential; Zigbee2MQTT does not count them either.
 OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.Lock: True,
-    DoorLock.OperationEvent.KeyLock: True,
-    DoorLock.OperationEvent.AutoLock: True,
     DoorLock.OperationEvent.Manual_Lock: True,
-    DoorLock.OperationEvent.ScheduleLock: True,
-    DoorLock.OperationEvent.OnTouchLock: True,
     DoorLock.OperationEvent.Unlock: False,
-    DoorLock.OperationEvent.KeyUnlock: False,
     DoorLock.OperationEvent.Manual_Unlock: False,
-    DoorLock.OperationEvent.ScheduleUnlock: False,
 }
 
 # A use counts as the credential its operation event source names. The keypad
@@ -870,6 +872,15 @@ class ZHALock(BaseLock):
             user_id,
         )
 
+        if (to_locked := OPERATION_TO_LOCKED.get(event_code)) is None:
+            _LOGGER.debug(
+                "Lock %s: operation event code %s is not a lock or unlock "
+                "that counts as a use, so the use is not reported",
+                self.lock.entity_id,
+                event_code,
+            )
+            return
+
         if (
             credential_type := credential_named_by_source(
                 source,
@@ -888,7 +899,7 @@ class ZHALock(BaseLock):
 
         self.async_fire_code_slot_event(
             code_slot=user_id if user_id > 0 else None,
-            to_locked=OPERATION_TO_LOCKED.get(event_code),
+            to_locked=to_locked,
             credential_type=credential_type,
         )
 
