@@ -44,13 +44,13 @@ from ..model.config import (
     PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
+    held_pins,
     pin_error,
-    pin_taken,
     stored_pin,
 )
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
-from ..model.queries import get_entry_config, users_sharing_a_lock
+from ..model.queries import get_entry_config, users_on_the_locks_of
 from .runtime import async_want
 
 if TYPE_CHECKING:
@@ -319,17 +319,9 @@ class SlotEntityCoordinator:
         already holds is not checked again, so a duplicate saved before this
         rule refuses only a change to it.
         """
-        config = get_entry_config(self._config_entry)
         if value == stored_pin(self._slot_config()):
             return
-        own = config.name_for(self._slot_num)
-        others = [
-            *(user for name, user in config.users.items() if name != own),
-            *users_sharing_a_lock(
-                self._hass, config.locks, excluding=self._config_entry
-            ),
-        ]
-        if pin_taken(others, value):
+        if value in held_pins(users_on_the_locks_of(self._hass, self._config_entry)):
             raise ServiceValidationError(PIN_TAKEN_ERROR)
 
     def _validate_credential_length(

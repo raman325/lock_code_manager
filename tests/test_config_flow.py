@@ -4108,13 +4108,25 @@ async def test_pasted_users_with_a_pin_another_user_has_are_refused(
 async def test_pasted_users_with_pins_nobody_has_are_added(
     hass: HomeAssistant, mock_lock_config_entry
 ):
-    """The counterpart: distinct PINs go through."""
+    """
+    The counterpart: distinct PINs go through.
+
+    So do several users with no PIN at all: no PIN is not a PIN they share.
+    """
     entry = _entry_holding_three_pins(hass)
     flow_id = await _start_user_subentry_flow(hass, entry, path="several")
 
     with _holding():
         result = await hass.config_entries.subentries.async_configure(
-            flow_id, {CONF_USERS: {"A": {CONF_PIN: "2468"}, "B": {CONF_PIN: "1357"}}}
+            flow_id,
+            {
+                CONF_USERS: {
+                    "A": {CONF_PIN: "2468"},
+                    "B": {CONF_ENABLED: False},
+                    "C": {CONF_ENABLED: False, CONF_PIN: "  "},
+                    "D": {CONF_PIN: "1357"},
+                }
+            },
         )
 
     assert result["type"] == "abort"

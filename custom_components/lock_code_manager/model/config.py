@@ -81,25 +81,24 @@ def stored_pin(user: Mapping[str, Any]) -> str:
     return "" if pin is None else str(pin).strip()
 
 
-# The one refusal for a PIN another user has. It names nobody: see pin_taken.
+# The one refusal for a PIN another user has. It names nobody: see held_pins.
 PIN_TAKEN_ERROR = "Another user already has this PIN"
 
 
-def pin_taken(users: Iterable[Mapping[str, Any]], pin: str) -> bool:
+def held_pins(users: Iterable[Mapping[str, Any]]) -> set[str]:
     """
-    Return whether any of ``users`` holds ``pin``.
+    Return the PINs ``users`` hold, each as ``stored_pin`` reads it.
 
     Two users sharing a PIN: whoever types it is recorded as either, and
     turning one off leaves it working for the other. So a turned-off user
-    still holds their PIN, as does one with no slot number. Both sides are
-    compared stripped, as every stored PIN is read.
+    still holds their PIN, as does one with no slot number. No PIN is not a
+    PIN anybody holds.
 
-    Answers yes or no, never who: whoever can set a PIN could otherwise
-    learn whose PIN a guess is.
+    A set of PINs, never who holds them: whoever can set a PIN could
+    otherwise learn whose PIN a guess is. Built once per check, and a batch
+    adds each accepted PIN to it.
     """
-    if not (pin := pin.strip()):
-        return False
-    return any(stored_pin(user) == pin for user in users)
+    return {pin for user in users if (pin := stored_pin(user))}
 
 
 @dataclass(frozen=True, slots=True)

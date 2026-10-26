@@ -21,8 +21,8 @@ from ..model.config import (
     PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
+    held_pins,
     pin_error,
-    pin_taken,
 )
 from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
@@ -33,7 +33,7 @@ from ..model.names import identity, name_error, normalize_name
 from ..model.queries import (
     get_entry_config,
     get_loaded_config_entry,
-    users_sharing_a_lock,
+    users_on_the_locks_of,
 )
 from ..sync.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
@@ -506,9 +506,9 @@ async def async_add_users(
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
-    # The users of the other entries on these locks: their PINs are on the
-    # same keypads.
-    shared = users_sharing_a_lock(hass, config.locks, excluding=config_entry)
+    # The PINs on the entry's locks, its own and other entries' users': each
+    # newcomer's is added as the batch proceeds.
+    held = held_pins(users_on_the_locks_of(hass, config_entry))
     additions: dict[str, dict[str, Any]] = {}
     for entry in users:
         name = entry[CONF_NAME]
@@ -536,9 +536,7 @@ async def async_add_users(
         # Checked against the batch as well as the entry and the entries
         # sharing its locks, turned-off users included: a PIN two users share
         # opens the door as either of them.
-        if pin and pin_taken(
-            [*config.users.values(), *shared, *additions.values()], pin
-        ):
+        if pin in held:
             raise ServiceValidationError(f"{name!r}: {PIN_TAKEN_ERROR}")
         if condition:
             _async_validate_condition(hass, condition)
@@ -546,6 +544,7 @@ async def async_add_users(
         user: dict[str, Any] = {CONF_ENABLED: enabled}
         if pin:
             user[CONF_PIN] = pin
+            held.add(pin)
         if condition:
             user[CONF_CONDITION] = condition
         additions[name] = user

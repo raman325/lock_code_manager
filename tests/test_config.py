@@ -21,10 +21,10 @@ from custom_components.lock_code_manager.model.config import (
     EntryConfigDiff,
     build_slot_device_identifier,
     build_slot_unique_id,
+    held_pins,
     parse_slot_device_identifier,
     parse_slot_unique_id,
     pin_error,
-    pin_taken,
 )
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
@@ -842,23 +842,18 @@ def test_a_non_string_stored_pin_is_left_alone() -> None:
     assert not isinstance(config.slot(1)["pin"], str)
 
 
-@pytest.mark.parametrize(
-    ("stored", "submitted"), [("1234", " 1234 "), (" 1234 ", "1234")]
-)
-def test_pin_taken_compares_stripped_pins(stored: str, submitted: str) -> None:
-    """Padding on either side is not part of the PIN."""
-    users = {"Ann": {CONF_PIN: "9999"}, "Bob": {CONF_PIN: stored}}
+def test_held_pins_are_read_stripped() -> None:
+    """Padding on a stored PIN is not part of it."""
+    users = [{CONF_PIN: "9999"}, {CONF_PIN: " 1234 "}, {CONF_PIN: "5678"}]
 
-    assert pin_taken(users.values(), submitted)
-    assert not pin_taken([users["Ann"]], submitted)
+    assert held_pins(users) == {"9999", "1234", "5678"}
 
 
-@pytest.mark.parametrize("submitted", ["", "   "])
-def test_pin_taken_finds_nobody_for_no_pin(submitted: str) -> None:
+def test_held_pins_leave_out_no_pin() -> None:
     """No PIN is not a PIN two users can share."""
-    users = {"Ann": {CONF_PIN: ""}, "Bob": {CONF_PIN: "   "}, "Cy": {}}
+    users = [{CONF_PIN: ""}, {CONF_PIN: "   "}, {}, {CONF_PIN: None}]
 
-    assert not pin_taken(users.values(), submitted)
+    assert held_pins(users) == set()
 
 
 def test_a_pin_fits_in_a_state() -> None:
@@ -875,7 +870,6 @@ def test_a_pin_fits_in_a_state() -> None:
     assert "1" * 256 not in error
 
 
-def test_pin_taken_reads_a_pin_stored_as_a_number() -> None:
+def test_held_pins_read_a_pin_stored_as_a_number() -> None:
     """A legacy PIN stored as a number is the PIN typed as text."""
-    assert pin_taken([{CONF_PIN: 1234}], "1234")
-    assert not pin_taken([{CONF_PIN: None}], "None")
+    assert held_pins([{CONF_PIN: 1234}]) == {"1234"}
