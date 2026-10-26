@@ -102,24 +102,6 @@ def pin_taken(users: Iterable[Mapping[str, Any]], pin: str) -> bool:
     return any(stored_pin(user) == pin for user in users)
 
 
-def first_with_a_taken_pin(
-    held: Iterable[Mapping[str, Any]], users: Mapping[str, Mapping[str, Any]]
-) -> str | None:
-    """
-    Return the first of ``users`` whose PIN another user already has.
-
-    For users added together: each must clear the users in ``held`` and
-    every one before it among ``users``. Names one of ``users``, the ones
-    being added, never who has the PIN.
-    """
-    seen = list(held)
-    for name, user in users.items():
-        if pin_taken(seen, stored_pin(user)):
-            return name
-        seen.append(user)
-    return None
-
-
 @dataclass(frozen=True, slots=True)
 class EntryConfig:
     """

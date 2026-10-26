@@ -51,7 +51,6 @@ from .ha.runtime import locks_that_cannot_report
 from .model.config import (
     EntryConfig,
     async_write_entry_config,
-    first_with_a_taken_pin,
     pin_error,
     pin_taken,
     stored_pin,
@@ -65,7 +64,6 @@ from .model.names import (
 from .model.queries import (
     entries_configuring,
     get_entry_config,
-    users_on_the_locks_of,
     users_sharing_a_lock,
 )
 from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
@@ -340,12 +338,14 @@ async def _async_validate_users_yaml(
     # Its own message: a block has no field to mark, so it names which of
     # the pasted users it is -- never who already has the PIN. The entries
     # sharing a lock count: their PINs are on the same keypads.
-    held = [
+    seen: list[Mapping[str, Any]] = [
         *taken.values(),
         *users_sharing_a_lock(hass, locks, excluding=config_entry),
     ]
-    if (taken_by := first_with_a_taken_pin(held, parsed_users)) is not None:
-        return None, {"base": "pin_not_unique_in_block"}, {"name": taken_by}
+    for name, fields in parsed_users.items():
+        if pin_taken(seen, fields.get(CONF_PIN) or ""):
+            return None, {"base": "pin_not_unique_in_block"}, {"name": name}
+        seen.append(fields)
 
     # The same refusal the guided path gives. Both write the one field, so a
     # condition entity this integration cannot read must fail on both routes
@@ -1146,15 +1146,6 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 if unavailable is None:
                     errors.update(allocation_errors)
                     description_placeholders.update(allocation_placeholders)
-                elif (
-                    first_with_a_taken_pin(
-                        users_on_the_locks_of(self.hass, entry), {name: fields}
-                    )
-                    is not None
-                ):
-                    # Asked again: the read can take minutes, and the PIN may
-                    # have been given to somebody else meanwhile.
-                    errors[CONF_PIN] = "pin_not_unique"
                 else:
                     # Reconciled against what the entry already holds, so
                     # everybody already here keeps their number and only the
@@ -1239,15 +1230,6 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 if unavailable is None:
                     errors.update(allocation_errors)
                     description_placeholders.update(allocation_placeholders)
-                elif (
-                    taken_by := first_with_a_taken_pin(
-                        users_on_the_locks_of(self.hass, entry), users
-                    )
-                ) is not None:
-                    # Asked again: the read can take minutes, and a PIN may
-                    # have been given to somebody else meanwhile.
-                    errors["base"] = "pin_not_unique_in_block"
-                    description_placeholders["name"] = taken_by
                 else:
                     arrived = {**config.users, **users}
                     assignment = config.assignment.reconcile(

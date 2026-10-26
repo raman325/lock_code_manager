@@ -33,7 +33,6 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 
-from custom_components.lock_code_manager import config_flow
 from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -46,11 +45,7 @@ from custom_components.lock_code_manager.const import (
 )
 from custom_components.lock_code_manager.ha.allocation import (
     LockQuerySkipped,
-    async_allocate_for,
     build_lock_instance,
-)
-from custom_components.lock_code_manager.model.config import (
-    async_write_entry_config,
 )
 from custom_components.lock_code_manager.model.credentials import (
     Credential,
@@ -4449,57 +4444,3 @@ async def test_the_setup_yaml_refuses_a_pin_held_on_a_shared_lock(
         assert result["errors"] == {"base": "pin_not_unique_in_block"}
     else:
         assert result["type"] == "create_entry"
-
-
-def _allocating_while_user_1_takes(hass: HomeAssistant, entry, pin: str):
-    """
-    Patch allocation so ``User 1`` is given ``pin`` while the locks are read.
-
-    Reading the locks for numbers can take minutes, and the entry stays
-    editable meanwhile.
-    """
-
-    async def _allocate(*args, **kwargs):
-        async_write_entry_config(
-            hass,
-            entry,
-            get_entry_config(entry).with_user_field_set("User 1", CONF_PIN, pin),
-        )
-        return await async_allocate_for(*args, **kwargs)
-
-    return patch.object(config_flow, "async_allocate_for", _allocate)
-
-
-async def test_adding_a_user_checks_the_pin_again_once_the_locks_are_read(
-    hass: HomeAssistant, mock_lock_config_entry
-):
-    """A PIN another user is given during the read is refused, not saved."""
-    _, entry = await _start_options_flow(hass)
-    flow_id = await _start_user_subentry_flow(hass, entry)
-
-    with _holding(), _allocating_while_user_1_takes(hass, entry, "2468"):
-        result = await hass.config_entries.subentries.async_configure(
-            flow_id, {CONF_NAME: "Cy", CONF_ENABLED: True, CONF_PIN: "2468"}
-        )
-
-    assert result["type"] == "form"
-    assert result["errors"] == {CONF_PIN: "pin_not_unique"}
-    assert "Cy" not in entry_users(entry)
-
-
-async def test_pasted_users_are_checked_again_once_the_locks_are_read(
-    hass: HomeAssistant, mock_lock_config_entry
-):
-    """The block is checked again just before it is written."""
-    _, entry = await _start_options_flow(hass)
-    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
-
-    with _holding(), _allocating_while_user_1_takes(hass, entry, "2468"):
-        result = await hass.config_entries.subentries.async_configure(
-            flow_id, {CONF_USERS: {"A": {CONF_PIN: "1357"}, "B": {CONF_PIN: "2468"}}}
-        )
-
-    assert result["type"] == "form"
-    assert result["errors"] == {"base": "pin_not_unique_in_block"}
-    assert result["description_placeholders"] == {"name": "B"}
-    assert set(entry_users(entry)) == {"User 1"}
