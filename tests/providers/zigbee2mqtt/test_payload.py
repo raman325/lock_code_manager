@@ -1,6 +1,7 @@
 """Payload parsing tests for Zigbee2MQTT lock provider."""
 
 import asyncio
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,6 +16,7 @@ from custom_components.lock_code_manager.model.credentials import (
     pin_address,
 )
 from custom_components.lock_code_manager.providers._mqtt import CANNOT_TELL
+from custom_components.lock_code_manager.providers.const import LOGGER
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
     _mqtt_payload_pin_has_code_value,
@@ -351,6 +353,23 @@ def test_rf_unlock_action_fires_event() -> None:
         to_locked=False,
         credential_type=CredentialType.PIN,
     )
+
+
+def test_a_source_inferred_from_the_action_is_logged_as_such(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The debug record says the source came from the action, not the payload."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+
+    lock._process_z2m_device_payload({"action": "rf_unlock", "action_user": 0})
+
+    lock.async_fire_code_slot_event.assert_not_called()
+    assert ("lock.test", "rf", "rf_unlock") in [
+        record.args for record in caplog.records if record.name == LOGGER.name
+    ]
 
 
 @pytest.mark.parametrize(

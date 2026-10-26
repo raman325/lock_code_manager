@@ -850,6 +850,13 @@ class TestBridgeEvents:
                 "rfid",
                 id="javis_rfid_card_unlock",
             ),
+            # The Nimly locks' converter names a Zigbee command ``zigbee``:
+            # attribute 0x0100's source octet 00 (src/devices/onesti.ts:123).
+            pytest.param(
+                {"action": "unlock", "action_user": 1, "action_source_name": "zigbee"},
+                "pin",
+                id="nimly_zigbee_with_user",
+            ),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -918,6 +925,13 @@ class TestBridgeEvents:
                 },
                 "touch_unlock",
                 id="javis_touch_unlock",
+            ),
+            # The Nimly locks' converter names a Zigbee command ``zigbee``:
+            # attribute 0x0100's source octet 00 (src/devices/onesti.ts:123).
+            pytest.param(
+                {"action": "unlock", "action_user": 0, "action_source_name": "zigbee"},
+                "zigbee",
+                id="nimly_zigbee_without_user",
             ),
         ],
     )

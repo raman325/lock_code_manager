@@ -62,16 +62,16 @@ _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
 # A use counts as the credential its ``action_source_name`` names. The standard
 # converter's names (zigbee-herdsman-converters ``lockSourceName``): ``keypad``
-# a PIN, ``rfid`` a card, and ``fingerprint`` for source 4, which the Yale Lia
-# sends for a fingerprint unlock (``yale.ts`` ``lia_action``). Vendor
-# converters' names that say which credential was presented: the Nimly locks'
-# ``fingerprintsensor`` (``onesti.ts``) and the Javis lock's
-# ``rfid_card_unlock`` (``javis.ts``). ``rf`` names a PIN only when the use
-# names the user whose PIN it carried (an unlock command sent with a code);
-# without one it carried none. Every other name -- ``manual``, none at all
-# (the cluster's indeterminate source has none), or a vendor name that does
-# not say which credential, such as the Javis lock's ``touch_unlock`` -- names
-# no credential, so the use is not reported.
+# a Personal Identification Number, ``rfid`` a card, and ``fingerprint`` for
+# source 4, which the Yale Lia sends for a fingerprint unlock (``yale.ts``
+# ``lia_action``). Vendor converters' names that say which credential was
+# presented: the Nimly locks' ``fingerprintsensor`` (``onesti.ts``) and the
+# Javis lock's ``rfid_card_unlock`` (``javis.ts``). A radio frequency source
+# (``_Z2M_RADIO_SOURCES``) names a Personal Identification Number only when
+# the use names the user whose code it carried. Every other name --
+# ``manual``, none at all (the cluster's indeterminate source has none), or a
+# vendor name that does not say which credential, such as the Javis lock's
+# ``touch_unlock`` -- names no credential, so the use is not reported.
 _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
     "keypad": CredentialType.PIN,
     "rfid": CredentialType.RFID,
@@ -80,7 +80,10 @@ _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
     "rfid_card_unlock": CredentialType.RFID,
 }
 _Z2M_RF_SOURCE = "rf"
-_Z2M_RADIO_SOURCES = frozenset({_Z2M_RF_SOURCE})
+# The radio frequency sources: the standard converter's ``rf``, and the Nimly
+# locks' ``zigbee`` for a Zigbee command (``onesti.ts`` attribute 0x0100's
+# source octet 00).
+_Z2M_RADIO_SOURCES = frozenset({_Z2M_RF_SOURCE, "zigbee"})
 
 # An action whose name carries its source (``keypad_unlock``, ``rf_lock``)
 # says where it came from when the payload has no ``action_source_name``.
@@ -304,8 +307,9 @@ class Zigbee2MQTTLock(BaseMqttLock):
                         self.lock.entity_id,
                     )
                     return
-                source_name = payload.get("action_source_name")
-                if source_name is None:
+                named_source = payload.get("action_source_name")
+                source_name = named_source
+                if named_source is None:
                     source_name = next(
                         (
                             source
@@ -321,12 +325,21 @@ class Zigbee2MQTTLock(BaseMqttLock):
                     radio=_Z2M_RADIO_SOURCES,
                 )
                 if credential_type is None:
-                    LOGGER.debug(
-                        "Lock %s: action_source_name %r names no credential, so "
-                        "the use is not reported",
-                        self.lock.entity_id,
-                        source_name,
-                    )
+                    if named_source is None and source_name is not None:
+                        LOGGER.debug(
+                            "Lock %s: source %r (from action %r) names no "
+                            "credential, so the use is not reported",
+                            self.lock.entity_id,
+                            source_name,
+                            action,
+                        )
+                    else:
+                        LOGGER.debug(
+                            "Lock %s: action_source_name %r names no credential, "
+                            "so the use is not reported",
+                            self.lock.entity_id,
+                            source_name,
+                        )
                     return
                 self.async_fire_code_slot_event(
                     code_slot=code_slot,
