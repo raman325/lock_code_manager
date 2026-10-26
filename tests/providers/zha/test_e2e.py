@@ -43,6 +43,7 @@ from homeassistant.helpers import issue_registry as ir, translation
 
 from custom_components.lock_code_manager.const import (
     ATTR_CREDENTIAL_TYPE,
+    ATTR_OPERATION,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -1335,11 +1336,18 @@ class TestLockThatCannotReport:
 
 def _unlock_from(door_lock: DoorLockStandIn, source: int, user_id: int = 1) -> None:
     """Deliver the lock's operation event: ``user_id`` unlocked it from ``source``."""
+    _operation_from(door_lock, source, DoorLock.OperationEvent.Unlock, user_id)
+
+
+def _operation_from(
+    door_lock: DoorLockStandIn, source: int, code: int, user_id: int = 1
+) -> None:
+    """Deliver the lock's operation event ``code`` for ``user_id`` from ``source``."""
     event = lock_frame(
         door_lock.cluster,
         "operation_event_notification",
         operation_event_source=source,
-        operation_event_code=DoorLock.OperationEvent.Unlock,
+        operation_event_code=code,
         user_id=user_id,
         pin="",
         local_time=0,
@@ -1446,6 +1454,111 @@ class TestCredentialPresented:
         assert (after.state, after.attributes) == (before.state, before.attributes)
         lock_id = _zha_lock(lcm_config_entry).lock.entity_id
         assert (logging.DEBUG, (lock_id, int(source))) in [
+            (record.levelno, record.args)
+            for record in caplog.records
+            if record.name == ZHA_LOGGER
+        ]
+
+
+class TestOperationOutcome:
+    """A use is an operation that locked or unlocked the door."""
+
+    @pytest.mark.parametrize(
+        ("code", "operation"),
+        [
+            pytest.param(DoorLock.OperationEvent.Lock, "lock", id="lock"),
+            pytest.param(DoorLock.OperationEvent.Unlock, "unlock", id="unlock"),
+            pytest.param(DoorLock.OperationEvent.Manual_Lock, "lock", id="manual_lock"),
+            pytest.param(
+                DoorLock.OperationEvent.Manual_Unlock, "unlock", id="manual_unlock"
+            ),
+        ],
+    )
+    async def test_a_lock_or_unlock_is_a_use_in_its_direction(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        code: int,
+        operation: str,
+    ) -> None:
+        """A keypad PIN that moved the door is a PIN use, in the way it moved."""
+        await _run_ticks(hass)
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        _operation_from(door_lock, DoorLock.OperationEventSource.Keypad, code)
+        await hass.async_block_till_done()
+
+        assert [
+            (event.data[ATTR_CREDENTIAL_TYPE], event.data[ATTR_OPERATION])
+            for event in used
+        ] == [("pin", operation)]
+        after = hass.states.get(event_entity)
+        assert after.state != before.state
+        assert after.attributes[ATTR_OPERATION] == operation
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            pytest.param(code, id=code.name)
+            for code in (
+                # Refused attempts: the door did not move.
+                DoorLock.OperationEvent.LockFailureInvalidPINorID,
+                DoorLock.OperationEvent.LockFailureInvalidSchedule,
+                DoorLock.OperationEvent.UnlockFailureInvalidPINorID,
+                DoorLock.OperationEvent.UnlockFailureInvalidSchedule,
+                # Says nothing about the door moving.
+                DoorLock.OperationEvent.UnknownOrMfgSpecific,
+                DoorLock.OperationEvent.Non_Access_User_Operational_Event,
+                # Moved the door without a credential: the Zigbee Cluster
+                # Library reports these from the manual source, and
+                # Zigbee2MQTT counts none of them.
+                DoorLock.OperationEvent.OnTouchLock,
+                DoorLock.OperationEvent.KeyLock,
+                DoorLock.OperationEvent.KeyUnlock,
+                DoorLock.OperationEvent.AutoLock,
+                DoorLock.OperationEvent.ScheduleLock,
+                DoorLock.OperationEvent.ScheduleUnlock,
+            )
+        ],
+    )
+    async def test_an_operation_that_is_not_a_use_is_not_reported(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        caplog: pytest.LogCaptureFixture,
+        code: DoorLock.OperationEvent,
+    ) -> None:
+        """
+        A keypad attempt naming a user records no use unless the door moved.
+
+        A lock reports a refused PIN with the user it matched, from the
+        keypad, so the source names a PIN and the user names the slot; only
+        the operation says the door stayed shut. Counting it would move the
+        user's last use and spend their usage limit on an attempt that let
+        nobody in.
+        """
+        await _run_ticks(hass)
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        caplog.set_level(logging.DEBUG, logger=ZHA_LOGGER)
+
+        _operation_from(door_lock, DoorLock.OperationEventSource.Keypad, code)
+        await hass.async_block_till_done()
+
+        assert used == []
+        after = hass.states.get(event_entity)
+        assert (after.state, after.attributes) == (before.state, before.attributes)
+        lock_id = _zha_lock(lcm_config_entry).lock.entity_id
+        assert (logging.DEBUG, (lock_id, code)) in [
             (record.levelno, record.args)
             for record in caplog.records
             if record.name == ZHA_LOGGER

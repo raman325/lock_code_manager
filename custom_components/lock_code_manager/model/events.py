@@ -28,7 +28,7 @@ class CredentialOperation(StrEnum):
     deliberately kept out of this integration does not belong here either.
 
     ``UNKNOWN`` is a first-class answer rather than a gap. A provider that
-    cannot classify a notification says so (Matter, ZHA and Z-Wave JS all
+    cannot classify a notification says so (Matter and Z-Wave JS both
     have such a path), and so does the ``use_credential`` action: the caller
     told this integration a credential was used, not what happened
     afterwards, and guessing on their behalf would put a fact in the payload
