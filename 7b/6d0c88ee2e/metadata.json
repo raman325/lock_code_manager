@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "7b6d0c88ee2e",
+  "strategy": "manual-commit",
+  "branch": "fix/zigbee-spec-sources",
+  "checkpoints_count": 6,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/7b/6d0c88ee2e/0/metadata.json",
+      "transcript": "/7b/6d0c88ee2e/0/full.jsonl",
+      "compact_transcript": "/7b/6d0c88ee2e/0/transcript.jsonl",
+      "content_hash": "/7b/6d0c88ee2e/0/content_hash.txt",
+      "prompt": "/7b/6d0c88ee2e/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 46,
+    "cache_creation_tokens": 50740,
+    "cache_read_tokens": 19379341,
+    "output_tokens": 21107,
+    "api_call_count": 23,
+    "subagent_tokens": {
+      "input_tokens": 82,
+      "cache_creation_tokens": 75775,
+      "cache_read_tokens": 8153520,
+      "output_tokens": 23752,
+      "api_call_count": 40
+    }
+  }
+}

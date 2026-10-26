@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01JvEEcQrGXeBEbSEk4EBYoc",
+  "agent_id": "a983470292bab971e",
+  "subagent_type": "general-purpose",
+  "task_description": "Build PIN-only duplicate/255 PR",
+  "token_usage": {
+    "input_tokens": 210,
+    "cache_creation_tokens": 300229,
+    "cache_read_tokens": 23133830,
+    "output_tokens": 72034,
+    "api_call_count": 105
+  },
+  "started_at": "2026-10-25T22:38:39.571713-04:00",
+  "completed_at": "2026-10-25T23:10:15.052881-04:00"
+}
