@@ -17,6 +17,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
+from homeassistant.config_entries import SOURCE_IGNORE
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CONDITION,
@@ -1334,3 +1335,17 @@ async def test_a_pin_held_in_another_entry_on_a_shared_lock_is_refused(
 
     for loaded in (entry, other):
         await hass.config_entries.async_unload(loaded.entry_id)
+
+
+async def test_an_ignored_entry_on_the_lock_holds_no_pin(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """An entry the user ignored is not set up, and never puts PINs on a lock."""
+    entry_holding_pins_on([LOCK_1_ENTITY_ID], source=SOURCE_IGNORE).add_to_hass(hass)
+    entry = await async_setup_lcm_entry(hass, unique_id="mine")
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_pin_update(TURNED_OFF_USERS_PIN)
+
+    assert get_entry_config(entry).slot(1)[CONF_PIN] == TURNED_OFF_USERS_PIN
+    await hass.config_entries.async_unload(entry.entry_id)

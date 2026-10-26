@@ -2007,13 +2007,14 @@ TURNED_OFF_USERS_PIN = "2468"
 UNNUMBERED_USERS_PIN = "1357"
 
 
-def entry_holding_pins_on(locks: list[str]) -> MockConfigEntry:
+def entry_holding_pins_on(locks: list[str], **kwargs: Any) -> MockConfigEntry:
     """
     Build another entry on ``locks`` whose users hold two PINs.
 
     Ann is turned off, at slot 5 so she collides with no fixture's numbers,
     and Unplaced has no slot number: each still holds their PIN. The caller
     adds it to Home Assistant, and sets it up if the test needs it loaded.
+    ``kwargs`` reach the entry, such as ``source``.
     """
     return MockConfigEntry(
         domain=DOMAIN,
@@ -2035,6 +2036,7 @@ def entry_holding_pins_on(locks: list[str]) -> MockConfigEntry:
         unique_id="another-entry",
         title="another entry",
         version=CONFIG_ENTRY_VERSION,
+        **kwargs,
     )
 
 

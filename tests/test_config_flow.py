@@ -16,6 +16,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.config_entries import (
+    SOURCE_IGNORE,
     SOURCE_REAUTH,
     SOURCE_USER,
     ConfigEntries,
@@ -4456,3 +4457,20 @@ async def test_the_setup_yaml_refuses_a_pin_held_on_a_shared_lock(
         assert result["errors"] == {"base": "pin_not_unique_in_block"}
     else:
         assert result["type"] == "create_entry"
+
+
+async def test_an_ignored_entry_on_the_lock_holds_no_pin(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """An entry the user ignored never puts PINs on a lock, so none is refused."""
+    entry_holding_pins_on([LOCK_1_ENTITY_ID], source=SOURCE_IGNORE).add_to_hass(hass)
+    _, entry = await _start_options_flow(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry)
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id,
+            {CONF_NAME: "Cy", CONF_ENABLED: True, CONF_PIN: TURNED_OFF_USERS_PIN},
+        )
+
+    assert result["type"] == "create_entry"

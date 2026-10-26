@@ -16,9 +16,6 @@ entry's:
   operation budgets, confirmation scope, the websocket's ``managed`` flag,
   the unmanaged-code sweep, and the numbers allocation treats as claimed by
   other entries.
-- ``users_on_locks``: an entry's own users and those of the entries listing
-  any of its locks. Their PINs are on the same keypads, so a PIN one of them
-  holds is refused to anybody else.
 - ``configured_owner``: the entry holding one slot, the oldest if old storage
   has two. Which entry writes the slot on the lock (a younger one never does,
   even while the oldest is disabled or reloading), duplicate-code
@@ -29,6 +26,9 @@ Entries that are not ignored, in any load state, disabled ones included:
 - ``another_entry_configures``: whether one other than the one asking lists
   the lock. Keeping per-lock repair issues, the provider's stored state and
   what the core remembers when a lock leaves an entry.
+- ``users_on_locks``: an entry's own users and those of the entries listing
+  any of its locks. Their PINs are on the same keypads, so a PIN one of them
+  holds is refused to anybody else.
 - ``every_configured_lock``: every lock one lists. What the core remembers
   is kept for these alone.
 """
@@ -158,9 +158,10 @@ def users_on_locks(
     entry itself lists its locks too, so its users may come twice: harmless
     to a question of whether a PIN is held.
 
-    Other entries count in any state, disabled included: one switched off
-    puts its users' PINs back on the keypad when it is switched on,
-    turned-off users and users with no slot number included. A caller
+    Other entries count in any load state, disabled included: one switched
+    off puts its users' PINs back on the keypad when it is switched on,
+    turned-off users and users with no slot number included. An ignored
+    entry is never set up, so it puts none there. A caller
     editing one of the users exempts the PIN that user already holds before
     asking, so their own PIN never counts against them.
     """
@@ -169,7 +170,7 @@ def users_on_locks(
         *users,
         *(
             user
-            for entry in _every_entry(hass)
+            for entry in _listing_entries(hass)
             if not wanted.isdisjoint((config := get_entry_config(entry)).locks)
             for user in config.users.values()
         ),
