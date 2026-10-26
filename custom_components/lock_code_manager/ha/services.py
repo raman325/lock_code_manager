@@ -29,6 +29,7 @@ from ..model.events import (
     async_fire_credential_used,
 )
 from ..model.names import identity, name_error, normalize_name
+from ..model.pin_generator import generate_pin
 from ..model.queries import (
     get_entry_config,
     get_loaded_config_entry,
@@ -480,6 +481,38 @@ async def async_disable_user(
     """
     coordinator = _slot_coordinator_for(hass, name, config_entry_id, config_entry_title)
     await coordinator.async_request_active_toggle(False)
+
+
+def generate_pin_for(
+    hass: HomeAssistant,
+    length: int,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> str:
+    """
+    Generate a PIN, one no user on the entry's locks has when given an entry.
+
+    A script that generates a PIN and then sets it would otherwise fail at
+    random on a PIN somebody already has. Without an entry nothing is held
+    against it.
+
+    Bounded like the generator: when every draw is taken, the refusal names
+    the length asked for, never a PIN.
+    """
+    if config_entry_id is None and config_entry_title is None:
+        return generate_pin(length)
+    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
+    try:
+        return generate_pin(
+            length, avoid=held_pins(users_on_the_locks_of(hass, config_entry))
+        )
+    except RuntimeError as err:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="pin_generation_exhausted",
+            translation_placeholders={"length": str(length)},
+        ) from err
 
 
 async def async_add_users(

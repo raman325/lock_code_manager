@@ -308,9 +308,17 @@
       }
     },
     "generate_pin": {
-      "description": "Generate a random PIN that avoids known unsafe patterns (all-same digits, sequential digits, repeating sub-sequences, and common weak PINs). Returns the PIN via response_variable.",
+      "description": "Generate a random PIN that avoids known unsafe patterns (all-same digits, sequential digits, repeating sub-sequences, and common weak PINs). Given a config entry, the PIN is also one no user on that entry's locks already has, so it can be set without being refused. Returns the PIN via response_variable.",
       "name": "Generate PIN",
       "fields": {
+        "config_entry_id": {
+          "name": "Config entry",
+          "description": "Optional. The Lock Code Manager entry the PIN is for: the PIN will be one no user on its locks already has."
+        },
+        "config_entry_title": {
+          "name": "Config entry title",
+          "description": "Optional. The Lock Code Manager entry, named by its title instead of its ID. Matched ignoring case and punctuation. Use this or the config entry, not both."
+        },
         "length": {
           "description": "Number of digits in the generated PIN (4-12). Defaults to 4.",
           "name": "Length"
@@ -547,6 +555,9 @@
     },
     "user_pin_too_long": {
       "message": "'{name}': PIN may be at most 255 characters."
+    },
+    "pin_generation_exhausted": {
+      "message": "Could not generate a {length}-digit PIN that no user on this entry's locks already has. Try a longer PIN."
     }
   },
   "selector": {

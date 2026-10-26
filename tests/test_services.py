@@ -80,6 +80,7 @@ from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.ha.services import async_set_usercode
+from custom_components.lock_code_manager.model import pin_generator
 from custom_components.lock_code_manager.model.config import (
     build_slot_unique_id,
 )
@@ -107,6 +108,7 @@ from .common import (
     async_set_slot_pin,
     async_setup_lcm_entry,
     async_tick_until,
+    async_write_slot_pin,
     entry_holding_pins_on,
     mock_lock,
     reading_for,
@@ -2642,13 +2644,102 @@ async def test_add_user_refuses_a_taken_pin_without_reading_the_locks(
         ("pin_too_long", set()),
         ("user_pin_not_unique", {"name"}),
         ("user_pin_too_long", {"name"}),
+        ("pin_generation_exhausted", {"length"}),
     ],
 )
 def test_the_pin_refusals_are_translated(key: str, placeholders: set[str]) -> None:
-    """Each PIN refusal has a message, naming at most the user being added."""
+    """Each PIN refusal has a message, naming no PIN and no other user."""
     strings = json.loads(
         Path("custom_components/lock_code_manager/strings.json").read_text()
     )
     message = strings["exceptions"][key]["message"]
 
     assert set(re.findall(r"\{(\w+)\}", message)) == placeholders
+
+
+def _random_digits(*pins: str):
+    """Patch the PIN generator's random source to spell out ``pins`` in turn."""
+    return patch.object(
+        pin_generator.secrets,
+        "randbelow",
+        side_effect=[int(digit) for pin in pins for digit in pin],
+    )
+
+
+async def _async_generate_pin(hass: HomeAssistant, **data) -> str:
+    """Call ``generate_pin`` and return the PIN it answers with."""
+    response = await hass.services.async_call(
+        DOMAIN, SERVICE_GENERATE_PIN, data, blocking=True, return_response=True
+    )
+    assert response is not None
+    return response["pin"]
+
+
+@pytest.mark.parametrize("by", ["config_entry_id", "config_entry_title"])
+async def test_generate_pin_for_an_entry_avoids_a_pin_already_held(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    by: str,
+) -> None:
+    """
+    Given an entry, the PIN is one no user on its locks has.
+
+    So a script that generates a PIN and then sets it does not fail at
+    random on a PIN that is taken.
+    """
+    entry = lock_code_manager_config_entry
+    await async_write_slot_pin(hass, entry, 2, "2468")
+    selector = entry.entry_id if by == "config_entry_id" else entry.title
+
+    with _random_digits("2468", "1397"):
+        pin = await _async_generate_pin(hass, **{by: selector})
+
+    assert pin == "1397"
+
+
+async def test_generate_pin_for_an_entry_avoids_another_entrys_pin_on_its_lock(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A PIN held by a user of another entry on one of its locks is avoided."""
+    entry_holding_pins_on([LOCK_1_ENTITY_ID]).add_to_hass(hass)
+    entry = await async_setup_lcm_entry(hass, unique_id="mine")
+
+    with _random_digits(TURNED_OFF_USERS_PIN, "1397"):
+        pin = await _async_generate_pin(hass, config_entry_id=entry.entry_id)
+
+    assert pin == "1397"
+
+
+async def test_generate_pin_without_an_entry_is_unchanged(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """With no entry there is nothing to avoid: the first safe PIN is returned."""
+    await async_write_slot_pin(hass, lock_code_manager_config_entry, 2, "2468")
+
+    with _random_digits("2468"):
+        pin = await _async_generate_pin(hass)
+
+    assert pin == "2468"
+
+
+async def test_generate_pin_for_an_entry_gives_up_without_naming_a_pin(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Bounded: when every draw is taken, a clear error that names no PIN."""
+    entry = lock_code_manager_config_entry
+    await async_write_slot_pin(hass, entry, 2, "2468")
+
+    with (
+        _random_digits(*["2468"] * 100),
+        pytest.raises(ServiceValidationError) as refused,
+    ):
+        await _async_generate_pin(hass, config_entry_id=entry.entry_id)
+
+    assert refused.value.translation_key == "pin_generation_exhausted"
+    assert refused.value.translation_placeholders == {"length": "4"}
+    assert "2468" not in str(refused.value)

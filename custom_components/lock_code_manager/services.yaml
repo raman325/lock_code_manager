@@ -77,6 +77,13 @@ delete_user:
 
 generate_pin:
   fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: lock_code_manager
+    config_entry_title:
+      selector:
+        text:
     length:
       default: 4
       example: 4
