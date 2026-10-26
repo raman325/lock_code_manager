@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01G9fjXgWMpJsUXkoF6FHXN2",
+  "agent_id": "ae690e533cb0cc132",
+  "subagent_type": "general-purpose",
+  "task_description": "Zigbee: only spec credential sources",
+  "started_at": "2026-10-25T22:50:31.990043-04:00"
+}
