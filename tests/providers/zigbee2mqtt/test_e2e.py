@@ -817,10 +817,39 @@ class TestBridgeEvents:
             assert state.attributes[ATTR_OPERATION] == CredentialOperation.UNLOCK
 
     @pytest.mark.parametrize(
-        ("source", "expected"),
+        ("event", "expected"),
         [
             pytest.param(0, "pin", id="keypad"),
+            # A PIN sent over the radio, naming the user whose PIN it is.
+            pytest.param(1, "pin", id="rf_with_user"),
             pytest.param(3, "rfid", id="rfid"),
+            # ``lockSourceName``'s name for source 4, which the Yale Lia sends
+            # for a fingerprint unlock (zigbee-herdsman-converters
+            # src/devices/yale.ts ``lia_action``).
+            pytest.param(4, "fingerprint", id="fingerprint"),
+            # The Nimly locks' converter: attribute 0x0100's source octet 03
+            # (src/devices/onesti.ts).
+            pytest.param(
+                {
+                    "action": "unlock",
+                    "action_user": 1,
+                    "action_source_name": "fingerprintsensor",
+                },
+                "fingerprint",
+                id="nimly_fingerprintsensor",
+            ),
+            # The Javis lock's converter: report byte 5's source 2
+            # (src/devices/javis.ts ``javis_lock_report``).
+            pytest.param(
+                {
+                    "action": "unlock",
+                    "action_user": 1,
+                    "action_source": 2,
+                    "action_source_name": "rfid_card_unlock",
+                },
+                "rfid",
+                id="javis_rfid_card_unlock",
+            ),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -829,16 +858,15 @@ class TestBridgeEvents:
         freezer: FrozenDateTimeFactory,
         mqtt_lock_discovered,
         fake_z2m_bridge: FakeZ2MBridge,
-        source: int,
+        event: int | dict[str, Any],
         expected: str,
     ) -> None:
         """
-        A card unlocking the door is announced as a card, not a PIN.
+        A use is announced as the credential its converter names.
 
-        Every use carrying an ``action_user`` was announced as a PIN,
-        whatever its ``action_source_name`` said. Nothing asks the lock which
-        readers it has, so the user's event entity admits every kind the
-        provider can report from setup.
+        A card unlocking the door is a card and a fingerprint a fingerprint,
+        not a PIN. Nothing asks the lock which readers it has, so the user's
+        event entity admits every kind the provider can report from setup.
         """
         lock_id = mqtt_lock_discovered.entity_id
         async with _bridge_entry(hass, freezer, lock_id) as entry:
@@ -846,11 +874,15 @@ class TestBridgeEvents:
                 hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
             )
             assert hass.states.get(event_1).attributes[ATTR_EVENT_TYPES] == [
+                "fingerprint",
                 "pin",
                 "rfid",
             ]
 
-            fake_z2m_bridge.operation_event("unlock", 1, source)
+            if isinstance(event, int):
+                fake_z2m_bridge.operation_event("unlock", 1, event)
+            else:
+                _fire_device_payload(hass, event)
             await hass.async_block_till_done()
 
             state = hass.states.get(event_1)
@@ -860,23 +892,32 @@ class TestBridgeEvents:
     @pytest.mark.parametrize(
         ("event", "source_name"),
         [
-            pytest.param(1, "rf", id="rf"),
+            # A radio frequency command naming no user carried no PIN.
+            pytest.param(
+                {
+                    "action": "unlock",
+                    "action_user": 0,
+                    "action_source": 1,
+                    "action_source_name": "rf",
+                },
+                "rf",
+                id="rf_without_user",
+            ),
             pytest.param(2, "manual", id="manual"),
             # ``lockSourceName`` has no name for the cluster's indeterminate
             # source, so the event carries ``action_source`` alone.
             pytest.param(0xFF, None, id="indeterminate"),
-            # Source 4, a vendor extension ``lockSourceName`` names "fingerprint".
-            pytest.param(4, "fingerprint", id="fingerprint"),
-            # The Nimly locks' own converter (zigbee-herdsman-converters
-            # src/devices/onesti.ts, attribute 0x0100's source octet 03).
+            # The Javis lock's source 3 (src/devices/javis.ts
+            # ``javis_lock_report``): a touch could be a keypad or a finger.
             pytest.param(
                 {
                     "action": "unlock",
                     "action_user": 1,
-                    "action_source_name": "fingerprintsensor",
+                    "action_source": 3,
+                    "action_source_name": "touch_unlock",
                 },
-                "fingerprintsensor",
-                id="nimly_fingerprintsensor",
+                "touch_unlock",
+                id="javis_touch_unlock",
             ),
         ],
     )
@@ -893,11 +934,11 @@ class TestBridgeEvents:
         """
         A use counts only as the credential its ``action_source_name`` names.
 
-        A radio frequency command, the thumb-turn and a nameless
-        (indeterminate) source name no credential, and a name outside the
-        Door Lock cluster's names nothing this integration can classify, so
-        none records a use, rather than a PIN the lock never said was typed.
-        A keypad unlock afterwards still lands.
+        A radio frequency command naming no user, the thumb-turn and a
+        nameless (indeterminate) source name no credential, and a vendor name
+        that does not say which credential was presented names nothing this
+        integration can classify, so none records a use, rather than a PIN
+        the lock never said was typed. A keypad unlock afterwards still lands.
         """
         lock_id = mqtt_lock_discovered.entity_id
         caplog.set_level(logging.DEBUG, logger=Z2M_LOGGER)

@@ -1,6 +1,7 @@
 """Payload parsing tests for Zigbee2MQTT lock provider."""
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -291,9 +292,7 @@ def test_keypad_unlock_action_fires_code_slot_event() -> None:
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload(
-        {"action": "keypad_unlock", "action_user": 3, **_KEYPAD}
-    )
+    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": 3})
 
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=3,
@@ -308,9 +307,7 @@ def test_keypad_lock_action_fires_code_slot_event() -> None:
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload(
-        {"action": "keypad_lock", "action_user": 1, **_KEYPAD}
-    )
+    lock._process_z2m_device_payload({"action": "keypad_lock", "action_user": 1})
 
     lock.async_fire_code_slot_event.assert_called_once_with(
         code_slot=1,
@@ -336,22 +333,45 @@ def test_lock_action_with_non_numeric_user_is_ignored() -> None:
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload(
-        {"action": "keypad_unlock", "action_user": "bad", **_KEYPAD}
-    )
+    lock._process_z2m_device_payload({"action": "keypad_unlock", "action_user": "bad"})
 
     lock.async_fire_code_slot_event.assert_not_called()
 
 
-def test_rf_unlock_action_is_not_reported() -> None:
-    """An rf_unlock names no credential, so it records no use."""
+def test_rf_unlock_action_fires_event() -> None:
+    """rf_unlock with action_user fires event."""
     lock = _minimal_lock()
     lock.coordinator = MagicMock()
     lock.async_fire_code_slot_event = MagicMock()
 
-    lock._process_z2m_device_payload(
-        {"action": "rf_unlock", "action_user": 5, "action_source_name": "rf"}
+    lock._process_z2m_device_payload({"action": "rf_unlock", "action_user": 5})
+
+    lock.async_fire_code_slot_event.assert_called_once_with(
+        code_slot=5,
+        to_locked=False,
+        credential_type=CredentialType.PIN,
     )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # A radio frequency command naming no user carried no PIN.
+        pytest.param({"action": "rf_unlock", "action_user": 0}, id="rf_without_user"),
+        # A bare action names no source to infer.
+        pytest.param({"action": "unlock", "action_user": 2}, id="bare_unlock"),
+        pytest.param({"action": "manual_lock", "action_user": 2}, id="manual_lock"),
+    ],
+)
+def test_an_action_naming_no_credential_is_not_reported(
+    payload: dict[str, Any],
+) -> None:
+    """Without ``action_source_name``, only the action's own prefix names one."""
+    lock = _minimal_lock()
+    lock.coordinator = MagicMock()
+    lock.async_fire_code_slot_event = MagicMock()
+
+    lock._process_z2m_device_payload(payload)
 
     lock.async_fire_code_slot_event.assert_not_called()
 
