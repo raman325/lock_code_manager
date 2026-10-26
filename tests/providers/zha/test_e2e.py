@@ -1,6 +1,7 @@
 """End-to-end tests for the ZHA provider through a real Lock Code Manager entry."""
 
 from datetime import timedelta
+import logging
 import re
 from typing import Any
 
@@ -85,6 +86,8 @@ from .helpers import (
     default_response,
     lock_frame,
 )
+
+ZHA_LOGGER = ZHALock.__module__
 
 CONFIGURED_PINS = {slot: config["pin"] for slot, config in ZHA_LCM_CONFIG_SLOTS.items()}
 # A PIN for slot 1 that differs from the one it is configured with.
@@ -1357,9 +1360,11 @@ class TestCredentialPresented:
         [
             pytest.param(DoorLock.OperationEventSource.Keypad, "pin", id="keypad"),
             pytest.param(DoorLock.OperationEventSource.RF, "pin", id="rf"),
+            pytest.param(DoorLock.OperationEventSource.Manual, "pin", id="manual"),
             pytest.param(DoorLock.OperationEventSource.RFID, "rfid", id="rfid"),
-            # A vendor extension zigbee-herdsman-converters names fingerprint.
-            pytest.param(4, "fingerprint", id="fingerprint"),
+            pytest.param(
+                DoorLock.OperationEventSource.Indeterminate, "pin", id="indeterminate"
+            ),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -1384,7 +1389,6 @@ class TestCredentialPresented:
             hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
         )
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == [
-            "fingerprint",
             "pin",
             "rfid",
         ]
@@ -1394,6 +1398,42 @@ class TestCredentialPresented:
 
         assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == [expected]
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == expected
+
+    async def test_a_use_from_a_source_the_cluster_does_not_define_is_not_reported(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """
+        A source outside the Door Lock cluster's records no use at all.
+
+        Source 4 is a vendor extension zigbee-herdsman-converters names
+        "fingerprint" (``lockSourceName``); the cluster does not define it,
+        so the use is not reported, rather than announced as a PIN or as a
+        kind the lock may not have.
+        """
+        await _run_ticks(hass)
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        caplog.set_level(logging.DEBUG, logger=ZHA_LOGGER)
+
+        _unlock_from(door_lock, 4)
+        await hass.async_block_till_done()
+
+        assert used == []
+        after = hass.states.get(event_entity)
+        assert (after.state, after.attributes) == (before.state, before.attributes)
+        lock_id = _zha_lock(lcm_config_entry).lock.entity_id
+        assert (logging.DEBUG, (lock_id, 4)) in [
+            (record.levelno, record.args)
+            for record in caplog.records
+            if record.name == ZHA_LOGGER
+        ]
 
 
 def _no_answer(request: Any) -> Frame | None:
@@ -1453,8 +1493,7 @@ class TestCardReader:
         announced on the bus. A zero is the lock not saying, as with its PIN
         count; that and no answer keep the reader listed, because recording
         a kind the lock cannot produce costs nothing and dropping a real card
-        use would not. A fingerprint has no attribute to ask about and is
-        always listed.
+        use would not.
 
         Asked in the same read as the programming event masks, and each
         answer stands on its own: a lock refusing one says nothing of the
@@ -1474,7 +1513,7 @@ class TestCardReader:
         )
         before = hass.states.get(event_entity)
         assert before.attributes[ATTR_EVENT_TYPES] == (
-            ["fingerprint", "pin", "rfid"] if reads_cards else ["fingerprint", "pin"]
+            ["pin", "rfid"] if reads_cards else ["pin"]
         )
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
