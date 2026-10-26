@@ -1034,7 +1034,7 @@ async def test_config_flow_yaml_rejects_slot_beyond_lock_capacity(
             flow_id,
             {
                 CONF_USERS: {
-                    f"User {n}": {CONF_ENABLED: True, CONF_PIN: "2222"}
+                    f"User {n}": {CONF_ENABLED: True, CONF_PIN: f"{2000 + n}"}
                     for n in range(1, 32)
                 }
             },
@@ -1195,9 +1195,9 @@ async def test_setup_reads_only_as_far_as_it_has_to(
 
     with patch.object(MockLCMLock, "async_get_usercodes", _read):
         result = await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
-        for name in ("Raman", "Alice"):
+        for name, pin in (("Raman", "1111"), ("Alice", "2222")):
             result = await async_configure_flow(
-                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: pin}
             )
 
     assert result["type"] == "create_entry"
@@ -1774,9 +1774,9 @@ async def test_a_nearly_full_lock_is_read_once_through(
     assert sorted(asked) == list(range(1, 32))
     assert len(asked) == len(set(asked)), "an index was read more than once"
 
-    for name in ("Raman", "Alice"):
+    for name, pin in (("Raman", "1111"), ("Alice", "2222")):
         result = await async_configure_flow(
-            hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+            hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: pin}
         )
     assert result["type"] == "create_entry"
     assert set(flow_slots(result).values()) <= set(asked)
@@ -1799,9 +1799,9 @@ async def test_numbers_another_entry_manages_are_stepped_over(
     # holds nothing, so only the neighbour's claim can push the users up.
     with _holding():
         await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 2})
-        for name in ("Raman", "Alice"):
+        for name, pin in (("Raman", "1111"), ("Alice", "2222")):
             result = await async_configure_flow(
-                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: pin}
             )
 
     assert result["type"] == "create_entry"
@@ -1849,9 +1849,9 @@ async def test_an_empty_lock_numbers_users_from_one(
 
     with _holding():
         await async_configure_flow(hass, flow_id, {CONF_NUM_USERS: 3})
-        for name in ("Raman", "Alice", "Wren"):
+        for name, pin in (("Raman", "1111"), ("Alice", "2222"), ("Wren", "3333")):
             result = await async_configure_flow(
-                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: "1111"}
+                hass, flow_id, {CONF_NAME: name, CONF_ENABLED: True, CONF_PIN: pin}
             )
 
     assert result["type"] == "create_entry"
@@ -3912,3 +3912,244 @@ class TestFlowsOnAFailedEntry:
         assert get_entry_config(entry).locks == (LOCK_1_ENTITY_ID,)
         assert not list(entry.async_get_active_flows(hass, {SOURCE_REAUTH}))
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _entry_holding_three_pins(hass: HomeAssistant) -> MockConfigEntry:
+    """
+    An entry whose users hold PINs every way one can be held.
+
+    Ann is on, Bob is turned off, and Unplaced has no slot number: each of
+    them still holds their PIN.
+    """
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            *user_subentries(
+                {
+                    1: {CONF_NAME: "Ann", CONF_ENABLED: True, CONF_PIN: "1234"},
+                    2: {CONF_NAME: "Bob", CONF_ENABLED: False, CONF_PIN: "5678"},
+                }
+            ),
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_ENABLED: True, CONF_PIN: "9999"}
+            ),
+        ],
+        title="test",
+    )
+    entry.add_to_hass(hass)
+    return entry
+
+
+async def _async_edit_user(
+    hass: HomeAssistant, entry: MockConfigEntry, title: str, user_input: dict
+) -> Any:
+    """Open the edit dialog for the user titled ``title`` and submit it."""
+    subentry = next(s for s in entry.subentries.values() if s.title == title)
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={"source": "reconfigure", "subentry_id": subentry.subentry_id},
+    )
+    with _holding():
+        return await hass.config_entries.subentries.async_configure(
+            result["flow_id"], user_input
+        )
+
+
+@pytest.mark.parametrize(
+    "pin",
+    [
+        pytest.param("1234", id="enabled user"),
+        pytest.param(" 1234 ", id="padded"),
+        pytest.param("5678", id="turned-off user"),
+        pytest.param("9999", id="user with no slot number"),
+    ],
+)
+async def test_adding_a_user_with_another_users_pin_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, pin: str
+):
+    """Two users sharing a PIN: whoever types it opens the door as either."""
+    entry = _entry_holding_three_pins(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry)
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_NAME: "Cy", CONF_ENABLED: True, CONF_PIN: pin}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_PIN: "pin_not_unique"}
+    assert "Cy" not in {s.title for s in entry.subentries.values()}
+
+
+async def test_adding_a_user_with_a_pin_nobody_has_is_accepted(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The counterpart: a PIN no user holds goes through."""
+    entry = _entry_holding_three_pins(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry)
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_NAME: "Cy", CONF_ENABLED: True, CONF_PIN: "2468"}
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_PIN] == "2468"
+
+
+async def test_the_setup_flow_refuses_a_pin_an_earlier_user_took(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The users collected so far are the entry's users."""
+    flow_id = await _start_ui_config_flow(hass)
+    await async_configure_flow(
+        hass, flow_id, {CONF_NAME: "User 1", CONF_ENABLED: False, CONF_PIN: "1234"}
+    )
+
+    result = await async_configure_flow(
+        hass, flow_id, {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["step_id"] == "code_slot"
+    assert result["errors"] == {CONF_PIN: "pin_not_unique"}
+    assert result["description_placeholders"]["user_num"] == 2
+
+    result = await async_configure_flow(
+        hass, flow_id, {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "5678"}
+    )
+
+    assert result["errors"] == {}
+    assert result["description_placeholders"]["user_num"] == 3
+
+
+@pytest.mark.parametrize("stored", ["1234", " 1234"])
+async def test_editing_a_user_leaves_a_shared_pin_alone(
+    hass: HomeAssistant, mock_lock_config_entry, stored: str
+):
+    """
+    A duplicate saved before the rule is refused only once it changes.
+
+    The edited user's PIN is compared as it is read, stripped: one stored
+    with padding is the same PIN submitted without it.
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "Ann": {CONF_ENABLED: True, CONF_PIN: stored},
+            "Bob": {CONF_ENABLED: True, CONF_PIN: "1234"},
+        },
+        unique_id="shared-pin",
+    )
+
+    result = await _async_edit_user(
+        hass, entry, "Ann", {CONF_NAME: "Annie", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["type"] == "abort"
+    assert "Annie" in {s.title for s in entry.subentries.values()}
+
+
+@pytest.mark.parametrize("pin", ["5678", "9999"])
+async def test_editing_a_user_onto_another_users_pin_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, pin: str
+):
+    """A changed PIN is checked like a new one, against every other user."""
+    entry = _entry_holding_three_pins(hass)
+
+    result = await _async_edit_user(
+        hass, entry, "Ann", {CONF_NAME: "Ann", CONF_ENABLED: True, CONF_PIN: pin}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_PIN: "pin_not_unique"}
+
+
+@pytest.mark.parametrize(
+    ("block", "who"),
+    [
+        pytest.param(
+            {"A": {CONF_PIN: "2468"}, "B": {CONF_PIN: " 2468 "}}, "B", id="in the block"
+        ),
+        pytest.param({"A": {CONF_PIN: " 1234 "}}, "A", id="enabled user"),
+        pytest.param({"A": {CONF_PIN: "5678"}}, "A", id="turned-off user"),
+        pytest.param({"A": {CONF_PIN: "9999"}}, "A", id="user with no slot number"),
+        pytest.param(
+            {"A": {CONF_ENABLED: False, CONF_PIN: "2468"}, "B": {CONF_PIN: "2468"}},
+            "B",
+            id="turned-off in the block",
+        ),
+    ],
+)
+async def test_pasted_users_with_a_pin_another_user_has_are_refused(
+    hass: HomeAssistant, mock_lock_config_entry, block: dict, who: str
+):
+    """The block clears the users already here as well as its own."""
+    entry = _entry_holding_three_pins(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: block}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "pin_not_unique_in_block"}
+    assert result["description_placeholders"] == {"name": who}
+    assert len(entry.subentries) == 3
+
+
+async def test_pasted_users_with_pins_nobody_has_are_added(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The counterpart: distinct PINs go through."""
+    entry = _entry_holding_three_pins(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: {"A": {CONF_PIN: "2468"}, "B": {CONF_PIN: "1357"}}}
+        )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "users_added"
+
+
+async def test_the_setup_yaml_refuses_users_sharing_a_pin(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Within the block, which is the whole configuration here."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await async_configure_flow(
+            hass,
+            flow_id,
+            {
+                CONF_USERS: {
+                    "User 1": {CONF_ENABLED: False, CONF_PIN: "1234"},
+                    "User 2": {CONF_ENABLED: True, CONF_PIN: "1234"},
+                }
+            },
+        )
+
+    assert result["step_id"] == "yaml"
+    assert result["errors"] == {"base": "pin_not_unique_in_block"}
+    assert result["description_placeholders"] == {"name": "User 2"}
+
+
+@pytest.mark.parametrize("section", ["config", "config_subentries"])
+def test_a_pasted_duplicates_message_names_the_user(section: str):
+    """Both forms that take a pasted block say whose PIN collided."""
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    errors = (
+        strings["config"]["error"]
+        if section == "config"
+        else strings["config_subentries"]["user"]["error"]
+    )
+
+    assert set(re.findall(r"\{(\w+)\}", errors["pin_not_unique_in_block"])) == {"name"}
+    assert "pin_not_unique" in errors
