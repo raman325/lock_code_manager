@@ -52,7 +52,7 @@ from .model.config import (
     EntryConfig,
     async_write_entry_config,
     held_pins,
-    pin_error,
+    pin_too_long,
     stored_pin,
 )
 from .model.names import (
@@ -329,7 +329,7 @@ async def _async_validate_users_yaml(
         (
             name
             for name, fields in parsed_users.items()
-            if pin_error(stored_pin(fields))
+            if pin_too_long(stored_pin(fields))
         ),
         None,
     )
@@ -470,7 +470,7 @@ def _validate_user_form(
 
     if _slot_enabled_without_pin(user_input):
         errors[CONF_PIN] = "missing_pin_if_enabled"
-    elif pin_error(pin):
+    elif pin_too_long(pin):
         errors[CONF_PIN] = "invalid_pin"
     elif pin != stored_pin(previous) and pin in pins_held:
         errors[CONF_PIN] = "pin_not_unique"

@@ -18,11 +18,10 @@ from ..const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from ..model.config import (
-    PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
     held_pins,
-    pin_error,
+    pin_too_long,
 )
 from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
@@ -531,13 +530,23 @@ async def async_add_users(
         # without something to program.
         if enabled and not pin:
             raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
-        if pin and (error := pin_error(pin)):
-            raise ServiceValidationError(f"{name!r}: {error}")
+        if pin and pin_too_long(pin):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="user_pin_too_long",
+                translation_placeholders={"name": name},
+            )
         # Checked against the batch as well as the entry and the entries
         # sharing its locks, turned-off users included: a PIN two users share
         # opens the door as either of them.
         if pin in held:
-            raise ServiceValidationError(f"{name!r}: {PIN_TAKEN_ERROR}")
+            # Names the user being added, the caller's own input; never who
+            # already has the PIN.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="user_pin_not_unique",
+                translation_placeholders={"name": name},
+            )
         if condition:
             _async_validate_condition(hass, condition)
 

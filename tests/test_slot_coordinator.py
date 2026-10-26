@@ -1180,6 +1180,8 @@ async def test_another_users_pin_is_refused(
 
     assert "5678" not in str(refused.value)
     assert "test2" not in str(refused.value)
+    assert refused.value.translation_key == "pin_not_unique"
+    assert not refused.value.translation_placeholders
     assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
 
 
@@ -1281,6 +1283,8 @@ async def test_a_pin_longer_than_a_state_is_refused(
     await hass.async_block_till_done()
 
     assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
+    assert refused.value.translation_key == "pin_too_long"
+    assert not refused.value.translation_placeholders
     assert LEAK_MARKER not in str(refused.value)
     assert LEAK_MARKER not in caplog.text
 

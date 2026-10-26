@@ -24,7 +24,7 @@ from custom_components.lock_code_manager.model.config import (
     held_pins,
     parse_slot_device_identifier,
     parse_slot_unique_id,
-    pin_error,
+    pin_too_long,
 )
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
@@ -862,12 +862,8 @@ def test_a_pin_fits_in_a_state() -> None:
 
     A longer PIN would make its text entity's state raise, quoting it.
     """
-    assert pin_error("1" * 255) is None
-
-    error = pin_error("1" * 256)
-
-    assert error == "PIN may be at most 255 characters"
-    assert "1" * 256 not in error
+    assert not pin_too_long("1" * 255)
+    assert pin_too_long("1" * 256)
 
 
 def test_held_pins_read_a_pin_stored_as_a_number() -> None:

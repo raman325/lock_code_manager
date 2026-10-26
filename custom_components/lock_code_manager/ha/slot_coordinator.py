@@ -41,11 +41,10 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from ..model.config import (
-    PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
     held_pins,
-    pin_error,
+    pin_too_long,
     stored_pin,
 )
 from ..model.credentials import CredentialType
@@ -295,8 +294,10 @@ class SlotEntityCoordinator:
         value = value.strip()
 
         if value:
-            if error := pin_error(value):
-                raise ServiceValidationError(error)
+            if pin_too_long(value):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="pin_too_long"
+                )
             self._validate_credential_length(value, CredentialType.PIN)
             self._refuse_duplicate_pin(value)
 
@@ -322,7 +323,11 @@ class SlotEntityCoordinator:
         if value == stored_pin(self._slot_config()):
             return
         if value in held_pins(users_on_the_locks_of(self._hass, self._config_entry)):
-            raise ServiceValidationError(PIN_TAKEN_ERROR)
+            # Names nobody: whoever can set a PIN could otherwise learn whose
+            # PIN a guess is.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="pin_not_unique"
+            )
 
     def _validate_credential_length(
         self, value: str, credential_type: CredentialType

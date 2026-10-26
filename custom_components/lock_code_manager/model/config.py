@@ -56,18 +56,15 @@ def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def pin_error(pin: str) -> str | None:
+def pin_too_long(pin: str) -> bool:
     """
-    Return why ``pin`` cannot be stored, or None if it can.
+    Return whether ``pin`` is too long to store.
 
-    The reason names the rule and never the value: it reaches errors and
-    logs. A PIN is shown as a Home Assistant state -- its text entity and
-    each lock's PIN sensor -- and a state longer than Home Assistant allows
-    is refused with an error that quotes it.
+    A PIN is shown as a Home Assistant state -- its text entity and each
+    lock's PIN sensor -- and a state longer than Home Assistant allows is
+    refused with an error that quotes it.
     """
-    if len(pin) > MAX_LENGTH_STATE_STATE:
-        return f"PIN may be at most {MAX_LENGTH_STATE_STATE} characters"
-    return None
+    return len(pin) > MAX_LENGTH_STATE_STATE
 
 
 def stored_pin(user: Mapping[str, Any]) -> str:
@@ -79,10 +76,6 @@ def stored_pin(user: Mapping[str, Any]) -> str:
     """
     pin = user.get(CONF_PIN)
     return "" if pin is None else str(pin).strip()
-
-
-# The one refusal for a PIN another user has. It names nobody: see held_pins.
-PIN_TAKEN_ERROR = "Another user already has this PIN"
 
 
 def held_pins(users: Iterable[Mapping[str, Any]]) -> set[str]:

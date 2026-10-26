@@ -3,6 +3,8 @@
 import asyncio
 import json
 import logging
+from pathlib import Path
+import re
 from unittest.mock import AsyncMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
@@ -1657,6 +1659,7 @@ async def test_set_credential_refuses_a_pin_another_user_has(
 
     assert "5678" not in str(refused.value)
     assert "test2" not in str(refused.value)
+    assert refused.value.translation_key == "pin_not_unique"
     assert get_entry_config(entry).users["test1"][CONF_PIN] == "1234"
 
 
@@ -2481,6 +2484,8 @@ async def test_add_user_refuses_a_pin_another_user_has(
 
     assert not any(pin in str(refused.value) for pin in ("1234", "5678", "2468"))
     assert not any(other in str(refused.value) for other in ("test1", "test2"))
+    assert refused.value.translation_key == "user_pin_not_unique"
+    assert refused.value.translation_placeholders == {"name": users[-1][CONF_NAME]}
     assert set(get_entry_config(entry).users) == {"test1", "test2"}
 
 
@@ -2538,6 +2543,7 @@ async def test_set_credential_refuses_a_pin_longer_than_a_state(
     await hass.async_block_till_done()
 
     assert get_entry_config(entry).users["test1"][CONF_PIN] == "1234"
+    assert refused.value.translation_key == "pin_too_long"
     assert LEAK_MARKER not in str(refused.value)
     assert LEAK_MARKER not in caplog.text
 
@@ -2562,6 +2568,8 @@ async def test_add_user_refuses_a_pin_longer_than_a_state(
     await hass.async_block_till_done()
 
     assert "A" not in get_entry_config(entry).users
+    assert refused.value.translation_key == "user_pin_too_long"
+    assert refused.value.translation_placeholders == {"name": "A"}
     assert LEAK_MARKER not in str(refused.value)
     assert LEAK_MARKER not in caplog.text
 
@@ -2625,3 +2633,22 @@ async def test_add_user_refuses_a_taken_pin_without_reading_the_locks(
         )
 
     allocate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("key", "placeholders"),
+    [
+        ("pin_not_unique", set()),
+        ("pin_too_long", set()),
+        ("user_pin_not_unique", {"name"}),
+        ("user_pin_too_long", {"name"}),
+    ],
+)
+def test_the_pin_refusals_are_translated(key: str, placeholders: set[str]) -> None:
+    """Each PIN refusal has a message, naming at most the user being added."""
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    message = strings["exceptions"][key]["message"]
+
+    assert set(re.findall(r"\{(\w+)\}", message)) == placeholders

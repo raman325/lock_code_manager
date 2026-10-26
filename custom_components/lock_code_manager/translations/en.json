@@ -535,6 +535,18 @@
     },
     "slot_out_of_range": {
       "message": "Lock {error_lock} reports only {num_slots} PIN code slots, so these slot numbers are out of range for it: {out_of_range_slots}."
+    },
+    "pin_not_unique": {
+      "message": "Another user already has this PIN."
+    },
+    "pin_too_long": {
+      "message": "PIN may be at most 255 characters."
+    },
+    "user_pin_not_unique": {
+      "message": "'{name}': Another user already has this PIN."
+    },
+    "user_pin_too_long": {
+      "message": "'{name}': PIN may be at most 255 characters."
     }
   },
   "selector": {
