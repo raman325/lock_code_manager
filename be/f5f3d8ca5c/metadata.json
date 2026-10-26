@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "bef5f3d8ca5c",
+  "strategy": "manual-commit",
+  "branch": "fix/zwave-credential-sources",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/be/f5f3d8ca5c/0/metadata.json",
+      "transcript": "/be/f5f3d8ca5c/0/full.jsonl",
+      "compact_transcript": "/be/f5f3d8ca5c/0/transcript.jsonl",
+      "content_hash": "/be/f5f3d8ca5c/0/content_hash.txt",
+      "prompt": "/be/f5f3d8ca5c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 10,
+    "cache_creation_tokens": 11960,
+    "cache_read_tokens": 3801414,
+    "output_tokens": 3702,
+    "api_call_count": 4,
+    "subagent_tokens": {
+      "input_tokens": 50,
+      "cache_creation_tokens": 123025,
+      "cache_read_tokens": 5214895,
+      "output_tokens": 24677,
+      "api_call_count": 25
+    }
+  }
+}
