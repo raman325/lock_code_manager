@@ -166,8 +166,9 @@ MANAGED_CREDENTIAL_ORDER: tuple[CredentialType, ...] = (
     *sorted(MANAGED_CREDENTIAL_TYPES - {CredentialType.PIN}),
 )
 
-# Printable ASCII, space through tilde: what every lock that takes a password
-# can be sent, two bytes each on the wire (spec decision 1).
+# Printable ASCII (American Standard Code for Information Interchange), space
+# through tilde: what every lock that takes a password can be sent, two bytes
+# each on the wire (spec decision 1).
 _PASSWORD_CHARACTERS: Final = frozenset(map(chr, range(0x20, 0x7F)))
 
 

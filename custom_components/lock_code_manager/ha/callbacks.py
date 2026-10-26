@@ -54,11 +54,8 @@ class LockRemoveCallback(Protocol):
         ...
 
 
-# Type alias for entity removal callbacks (async)
-EntityRemoveCallback = Callable[[], Awaitable[None]]
-
-# Type alias for entity reconcilers (async)
-EntityReconcileCallback = Callable[[], Awaitable[None]]
+# Type alias for entity removal callbacks and entity reconcilers (async)
+EntityCallback = Callable[[], Awaitable[None]]
 
 # Type alias for unregister functions
 UnregisterFunc = Callable[[], None]
@@ -85,14 +82,14 @@ class EntityCallbackRegistry:
 
     # Entity removal callbacks (entities register themselves in async_added_to_hass)
     # Key format: "{slot_num}|{key}" or "{slot_num}|{key}|{lock_entity_id}"
-    remove_entity: dict[str, EntityRemoveCallback] = field(default_factory=dict)
+    remove_entity: dict[str, EntityCallback] = field(default_factory=dict)
 
     # Lock lifecycle callbacks (entities register to be notified of lock changes)
     lock_added: list[LockUpdateCallback] = field(default_factory=list)
     lock_removed: list[LockRemoveCallback] = field(default_factory=list)
 
     # Entity reconcilers (platforms register these in async_setup_entry)
-    reconcile_entities: list[EntityReconcileCallback] = field(default_factory=list)
+    reconcile_entities: list[EntityCallback] = field(default_factory=list)
 
     def register_standard_adder(
         self, callback: StandardEntityCallback
@@ -125,7 +122,7 @@ class EntityCallbackRegistry:
         )
 
     def register_entity_remover(
-        self, uid: str, callback: EntityRemoveCallback
+        self, uid: str, callback: EntityCallback
     ) -> UnregisterFunc:
         """
         Register callback for entity removal by unique ID.
@@ -140,9 +137,7 @@ class EntityCallbackRegistry:
 
         return unregister
 
-    def register_entity_reconciler(
-        self, callback: EntityReconcileCallback
-    ) -> UnregisterFunc:
+    def register_entity_reconciler(self, callback: EntityCallback) -> UnregisterFunc:
         """
         Register a callback that brings a platform's entities into line.
 

@@ -173,13 +173,10 @@ class SlotEntityCoordinator:
             if lock_entity_ids is None
             else list(lock_entity_ids)
         )
+        wants = self.wants
         for lock_entity_id in locks:
             async_want(
-                self._hass,
-                self._config_entry,
-                lock_entity_id,
-                self._slot_num,
-                self.wants,
+                self._hass, self._config_entry, lock_entity_id, self._slot_num, wants
             )
 
     # -- Read-only views (consumed by entities) ------------------------------
