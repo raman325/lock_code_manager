@@ -721,10 +721,24 @@ class FakeZWaveLock:
         }
         if parameters is not None:
             args["parameters"] = parameters
+        self.notify(CommandClass.NOTIFICATION, args)
+
+    def notify(self, command_class: CommandClass, args: dict[str, Any]) -> None:
+        """
+        Deliver a notification of any command class the lock sends.
+
+        Besides the Notification command class, the driver raises
+        ``notification`` for a Battery report of low battery, an Entry Control
+        notification, a Multilevel Switch level change and a Powerlevel test
+        report, each with its own ``args`` (zwave-js/src/lib/node/CCHandlers/,
+        at the node-zwave-js commit above). The server
+        forwards them all alike (SRV_FWD:563-574), and Home Assistant builds a
+        differently shaped ``zwave_js_notification`` bus event for each.
+        """
         self._emit(
             "notification",
             endpointIndex=0,
-            ccId=CommandClass.NOTIFICATION,
+            ccId=command_class,
             args=args,
         )
 
