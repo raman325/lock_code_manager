@@ -115,6 +115,7 @@ from tests.common import (
 )
 from tests.conftest import async_trigger_sync_tick
 from tests.providers.zwave_access_control import (
+    DRIVER_EVENT_LABELS,
     NOT_A_USE_CASES,
     PIN_USE_CASES,
     USER,
@@ -295,7 +296,8 @@ class TestEvents:
         assert after.attributes == before.attributes
 
 
-ZWAVE_JS_LOGGER = ZWaveJSLock.__module__
+# Both Z-Wave providers log a notification that is no use here.
+PROVIDERS_LOGGER = "custom_components.lock_code_manager.providers"
 
 
 class TestCredentialUses:
@@ -348,7 +350,6 @@ class TestCredentialUses:
         hass: HomeAssistant,
         fake_zwave_lock: FakeZWaveLock,
         fake_zwave_lock_entry: MockConfigEntry,
-        lock_entity: er.RegistryEntry,
         caplog: pytest.LogCaptureFixture,
         event: AccessControlNotificationEvent,
         parameters: dict[str, Any] | None,
@@ -378,11 +379,12 @@ class TestCredentialUses:
         assert [
             record for record in caplog.records if record.levelno >= logging.ERROR
         ] == []
-        assert (logging.DEBUG, (lock_entity.entity_id, int(event))) in [
-            (record.levelno, record.args[:2])
+        assert any(
+            record.name == PROVIDERS_LOGGER
+            and record.levelno == logging.DEBUG
+            and DRIVER_EVENT_LABELS[event] in record.getMessage()
             for record in caplog.records
-            if record.name == ZWAVE_JS_LOGGER and isinstance(record.args, tuple)
-        ]
+        )
 
 
 # A push lock is read only when asked, and Home Assistant debounces the asking:
@@ -1500,19 +1502,27 @@ class TestDuplicateRefusedByUserCodeLock:
 
         assert used == []
 
+    @pytest.mark.parametrize(
+        "parameters",
+        [{"userId": 5}, {"userId": -1}, {"userId": "x"}, {"userId": 2.7}],
+        ids=["5", "negative", "text", "not_whole"],
+    )
     async def test_a_refusal_naming_another_slot_is_not_the_writes(
         self,
         hass: HomeAssistant,
         fake_zwave_lock: FakeZWaveLock,
         fake_e2e_lock: ZWaveJSLock,
+        parameters: dict[str, Any],
     ) -> None:
         """
         A refusal naming a slot other than the one written is not pinned on it.
 
         Writes to a lock run one at a time, but a slot named outright is not
-        the written one: disabling it would guess.
+        the written one: disabling it would guess. A user that is no user
+        identifier is not the written slot either, nor is it a refusal
+        naming no slot: 2.7 is not slot 2.
         """
-        fake_zwave_lock.duplicate_parameters = {"userId": 5}
+        fake_zwave_lock.duplicate_parameters = parameters
 
         result = await fake_e2e_lock.async_set_usercode(2, "5555")
 

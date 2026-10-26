@@ -21,7 +21,7 @@ from zwave_js_server.const.command_class.notification import (
 )
 
 # The driver's labels for the Access Control events (NOTIF:651-846).
-ACCESS_CONTROL_EVENT_LABELS: dict[int, str] = {
+DRIVER_EVENT_LABELS: dict[int, str] = {
     Event.MANUAL_LOCK_OPERATION: "Manual lock operation",
     Event.MANUAL_UNLOCK_OPERATION: "Manual unlock operation",
     Event.RF_LOCK_OPERATION: "RF lock operation",
@@ -94,6 +94,15 @@ NOT_A_USE_CASES: list[Any] = [
     pytest.param(
         Event.KEYPAD_UNLOCK_OPERATION, {"userId": None}, id="keypad_user_null"
     ),
+    # A user that is no user identifier names nobody, rather than a slot it
+    # could be truncated or coerced to.
+    pytest.param(
+        Event.KEYPAD_UNLOCK_OPERATION, {"userId": 1.5}, id="keypad_user_not_whole"
+    ),
+    pytest.param(
+        Event.KEYPAD_UNLOCK_OPERATION, {"userId": -1}, id="keypad_user_negative"
+    ),
+    pytest.param(Event.KEYPAD_UNLOCK_OPERATION, {"userId": "1"}, id="keypad_user_text"),
     # Failed attempts.
     pytest.param(
         Event.UNLOCK_BY_RF_WITH_INVALID_USER_CODE,

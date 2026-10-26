@@ -10,6 +10,9 @@ from uuid import uuid4
 
 from zwave_js_server.const import CommandClass, SupervisionStatus
 from zwave_js_server.const.command_class.lock import CodeSlotStatus
+from zwave_js_server.const.command_class.notification import (
+    AccessControlNotificationEvent,
+)
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -39,14 +42,13 @@ from ._mqtt import BaseMqttLock
 from ._util import (
     is_masked_code,
     parse_slot_num,
-    refuses_write_in_flight,
     resolve_discovery_payload,
 )
 from ._zwave import (
-    ACCESS_CONTROL_DUPLICATE,
-    ACCESS_CONTROL_EVENT_LABELS,
-    ACCESS_CONTROL_PIN_USES,
+    ACCESS_CONTROL_PIN_USE_TO_LOCKED,
     access_control_user,
+    answers_write_in_flight,
+    log_not_a_use,
 )
 from .const import LOGGER
 
@@ -146,24 +148,23 @@ NOTIFICATION_CC_SEGMENTS = frozenset({str(int(CC_NOTIFICATION)), "notification"}
 NOTIFICATION_ACCESS_CONTROL = "access_control"
 
 
-def _gateway_segment(label: str) -> str:
-    """
-    Return a label as the gateway spells it in a topic, lowercased.
-
-    Slashes become dashes, whitespace underscores, and other punctuation is
-    dropped (zwave-js-ui api/lib/Gateway.ts ``removeSlash`` then
-    api/lib/utils.ts ``sanitizeTopic``).
-    """
-    segment = re.sub(r"\s", "_", label.replace("/", "-"))
-    return re.sub(r"[^A-Za-z0-9\-_À-ÖØ-öø-ÿ/]", "", segment).lower()
-
-
-# The Access Control events a provider acts on, by the topic segment the
-# gateway publishes each under, compared case-insensitively. An event not
-# here is ignored.
-ACCESS_CONTROL_EVENT_BY_SEGMENT = {
-    _gateway_segment(label): event
-    for event, label in ACCESS_CONTROL_EVENT_LABELS.items()
+# The Access Control events this provider acts on, by the topic segment the
+# gateway publishes each under: the driver's label with whitespace made
+# underscores (zwave-js-ui api/lib/Gateway.ts, ``sanitizeTopic``), compared
+# case-insensitively. Whether one is a use is the shared rule's to say; any
+# other event under the label is none.
+ACCESS_CONTROL_EVENT_BY_SEGMENT: dict[str, AccessControlNotificationEvent] = {
+    "keypad_lock_operation": AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION,
+    "keypad_unlock_operation": AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION,
+    "lock_operation_with_user_code": (
+        AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE
+    ),
+    "unlock_operation_with_user_code": (
+        AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE
+    ),
+    "new_user_code_not_added_due_to_duplicate_code": (
+        AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+    ),
 }
 
 # Where the gateways found by scanning a topic prefix live, keyed by
@@ -720,26 +721,23 @@ class ZWaveJSUILock(BaseMqttLock):
         """
         if label.lower() != NOTIFICATION_ACCESS_CONTROL:
             return
-        value = _unwrap_mqtt_value(payload)
-        user = access_control_user(value)
+        named = access_control_user(_unwrap_mqtt_value(payload))
         event = ACCESS_CONTROL_EVENT_BY_SEGMENT.get(event_label.lower())
-        if event == ACCESS_CONTROL_DUPLICATE:
-            if refuses_write_in_flight(self._write_slot, user):
-                self._write_refused = True
+        if event == (
+            AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
+        ) and answers_write_in_flight(self._write_slot, named):
+            self._write_refused = True
             return
-        if event is None or (use := ACCESS_CONTROL_PIN_USES.get(event)) is None:
-            return
-        if user is None:
-            LOGGER.debug(
-                "Lock %s: ignoring %s notification naming no code slot: %r",
-                self.lock.entity_id,
-                event_label,
-                value,
-            )
+        if (
+            event is None
+            or (to_locked := ACCESS_CONTROL_PIN_USE_TO_LOCKED.get(event)) is None
+            or named.user is None
+        ):
+            log_not_a_use(self.lock.entity_id, event_label, named)
             return
         self.async_fire_code_slot_event(
-            code_slot=user,
-            to_locked=use.to_locked,
+            code_slot=named.user,
+            to_locked=to_locked,
             credential_type=CredentialType.PIN,
         )
 
