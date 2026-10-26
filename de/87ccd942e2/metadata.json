@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "de87ccd942e2",
+  "strategy": "manual-commit",
+  "branch": "feat/refuse-duplicate-pin",
+  "checkpoints_count": 2,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/de/87ccd942e2/0/metadata.json",
+      "transcript": "/de/87ccd942e2/0/full.jsonl",
+      "compact_transcript": "/de/87ccd942e2/0/transcript.jsonl",
+      "content_hash": "/de/87ccd942e2/0/content_hash.txt",
+      "prompt": "/de/87ccd942e2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 5268,
+    "cache_read_tokens": 886500,
+    "output_tokens": 1932,
+    "api_call_count": 1,
+    "subagent_tokens": {
+      "input_tokens": 92,
+      "cache_creation_tokens": 153760,
+      "cache_read_tokens": 8266036,
+      "output_tokens": 53346,
+      "api_call_count": 46
+    }
+  }
+}
