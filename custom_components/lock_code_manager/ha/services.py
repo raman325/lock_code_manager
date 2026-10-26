@@ -33,7 +33,7 @@ from ..model.pin_generator import generate_pin
 from ..model.queries import (
     get_entry_config,
     get_loaded_config_entry,
-    users_on_the_locks_of,
+    users_on_locks,
 )
 from ..sync.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
@@ -503,10 +503,10 @@ def generate_pin_for(
     if config_entry_id is None and config_entry_title is None:
         return generate_pin(length)
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
+    config = get_entry_config(config_entry)
+    held = held_pins(users_on_locks(hass, config.users.values(), config.locks))
     try:
-        return generate_pin(
-            length, avoid=held_pins(users_on_the_locks_of(hass, config_entry))
-        )
+        return generate_pin(length, avoid=held)
     except RuntimeError as err:
         raise ServiceValidationError(
             translation_domain=DOMAIN,
@@ -540,7 +540,7 @@ async def async_add_users(
 
     # The PINs on the entry's locks, its own and other entries' users': each
     # newcomer's is added as the batch proceeds.
-    held = held_pins(users_on_the_locks_of(hass, config_entry))
+    held = held_pins(users_on_locks(hass, config.users.values(), config.locks))
     additions: dict[str, dict[str, Any]] = {}
     for entry in users:
         name = entry[CONF_NAME]

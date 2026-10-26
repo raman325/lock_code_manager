@@ -43,13 +43,13 @@ from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from ..model.config import (
     EntryConfig,
     async_write_entry_config,
-    held_pins,
+    pin_held,
     pin_too_long,
     stored_pin,
 )
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
-from ..model.queries import get_entry_config, users_on_the_locks_of
+from ..model.queries import get_entry_config, users_on_locks
 from .runtime import async_want
 
 if TYPE_CHECKING:
@@ -322,7 +322,9 @@ class SlotEntityCoordinator:
         """
         if value == stored_pin(self._slot_config()):
             return
-        if value in held_pins(users_on_the_locks_of(self._hass, self._config_entry)):
+        config = get_entry_config(self._config_entry)
+        holders = users_on_locks(self._hass, config.users.values(), config.locks)
+        if pin_held(holders, value):
             # Names nobody: whoever can set a PIN could otherwise learn whose
             # PIN a guess is.
             raise ServiceValidationError(

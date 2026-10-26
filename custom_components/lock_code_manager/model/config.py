@@ -94,6 +94,16 @@ def held_pins(users: Iterable[Mapping[str, Any]]) -> set[str]:
     return {pin for user in users if (pin := stored_pin(user))}
 
 
+def pin_held(users: Iterable[Mapping[str, Any]], pin: str) -> bool:
+    """
+    Return whether any of ``users`` holds ``pin``, stopping at the first.
+
+    For one PIN checked once; a batch builds ``held_pins`` instead. No PIN is
+    not a PIN anybody holds.
+    """
+    return bool(pin) and any(stored_pin(user) == pin for user in users)
+
+
 @dataclass(frozen=True, slots=True)
 class EntryConfig:
     """

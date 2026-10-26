@@ -52,6 +52,7 @@ from .model.config import (
     EntryConfig,
     async_write_entry_config,
     held_pins,
+    pin_held,
     pin_too_long,
     stored_pin,
 )
@@ -64,8 +65,7 @@ from .model.names import (
 from .model.queries import (
     entries_configuring,
     get_entry_config,
-    users_on_the_locks_of,
-    users_sharing_a_lock,
+    users_on_locks,
 )
 from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
@@ -339,9 +339,7 @@ async def _async_validate_users_yaml(
     # Its own message: a block has no field to mark, so it names which of
     # the pasted users it is -- never who already has the PIN. The entries
     # sharing a lock count: their PINs are on the same keypads.
-    held = held_pins(
-        [*taken.values(), *users_sharing_a_lock(hass, locks, excluding=config_entry)]
-    )
+    held = held_pins(users_on_locks(hass, taken.values(), locks))
     for name, fields in parsed_users.items():
         if (pin := stored_pin(fields)) in held:
             return None, {"base": "pin_not_unique_in_block"}, {"name": name}
@@ -445,7 +443,7 @@ def _validate_user_form(
     taken: Collection[str],
     previous: Mapping[str, Any] = MappingProxyType({}),
     *,
-    pins_held: Collection[str],
+    pin_holders: Iterable[Mapping[str, Any]],
 ) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
     """
     Validate one user's submitted form against the users already there.
@@ -458,21 +456,20 @@ def _validate_user_form(
     for an edit, everybody except the user being edited, whose fields as the
     configuration reads them are ``previous``.
 
-    ``pins_held`` is the PINs it must not take: those of the other users on
-    the same locks, in this entry or another. A PIN equal to the one the
-    edited user already holds is not checked again, so a duplicate saved
+    ``pin_holders`` is the users whose PINs it must not take: the other
+    users on the same locks, in this entry or another. A PIN equal to the one
+    the edited user already holds is not checked again, so a duplicate saved
     before that check refuses only an edit that changes it.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, Any] = {}
-    # Compared as it will be stored: a PIN is stripped where it enters.
-    pin = (user_input.get(CONF_PIN) or "").strip()
+    pin = stored_pin(user_input)
 
     if _slot_enabled_without_pin(user_input):
         errors[CONF_PIN] = "missing_pin_if_enabled"
     elif pin_too_long(pin):
         errors[CONF_PIN] = "invalid_pin"
-    elif pin != stored_pin(previous) and pin in pins_held:
+    elif pin != stored_pin(previous) and pin_held(pin_holders, pin):
         errors[CONF_PIN] = "pin_not_unique"
 
     name: str | None = None
@@ -735,11 +732,10 @@ class LockCodeManagerFlowHandler(
                 self.hass,
                 user_input,
                 self.data[CONF_USERS],
-                pins_held=held_pins(
-                    [
-                        *self.data[CONF_USERS].values(),
-                        *users_sharing_a_lock(self.hass, self.data[CONF_LOCKS]),
-                    ]
+                pin_holders=users_on_locks(
+                    self.hass,
+                    self.data[CONF_USERS].values(),
+                    self.data[CONF_LOCKS],
                 ),
             )
             description_placeholders.update(placeholders)
@@ -1127,7 +1123,9 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 self.hass,
                 user_input,
                 config.users,
-                pins_held=held_pins(users_on_the_locks_of(self.hass, entry)),
+                pin_holders=users_on_locks(
+                    self.hass, config.users.values(), config.locks
+                ),
             )
             description_placeholders.update(placeholders)
 
@@ -1304,7 +1302,9 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
                 user_input,
                 others,
                 config.users.get(held, subentry.data),
-                pins_held=held_pins(users_on_the_locks_of(self.hass, entry)),
+                pin_holders=users_on_locks(
+                    self.hass, config.users.values(), config.locks
+                ),
             )
             description_placeholders.update(placeholders)
 

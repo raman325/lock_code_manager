@@ -78,10 +78,9 @@ def generate_pin(
 
     Retries until the candidate passes ``is_unsafe_pin`` and is not one of
     ``avoid`` (the PINs users already hold, for a caller who will set it on
-    somebody). Uses ``secrets``
-    for entropy. A safety cap of 100 attempts protects against pathological
-    edge cases (e.g. a future filter change rejecting a much larger fraction
-    of the space).
+    somebody). Uses ``secrets`` for entropy. A safety cap of 100 attempts
+    protects against pathological edge cases (e.g. a future filter change
+    rejecting a much larger fraction of the space).
     """
     if not MIN_PIN_LENGTH <= length <= MAX_PIN_LENGTH:
         raise ValueError(

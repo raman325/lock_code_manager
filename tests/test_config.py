@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.model.config import (
     held_pins,
     parse_slot_device_identifier,
     parse_slot_unique_id,
+    pin_held,
     pin_too_long,
 )
 from custom_components.lock_code_manager.model.queries import get_entry_config
@@ -869,3 +870,15 @@ def test_a_pin_fits_in_a_state() -> None:
 def test_held_pins_read_a_pin_stored_as_a_number() -> None:
     """A legacy PIN stored as a number is the PIN typed as text."""
     assert held_pins([{CONF_PIN: 1234}]) == {"1234"}
+
+
+def test_pin_held_reads_stored_pins_as_held_pins_does() -> None:
+    """Padded or stored as a number, a stored PIN is the PIN typed."""
+    assert pin_held([{CONF_PIN: "9999"}, {CONF_PIN: " 1234 "}], "1234")
+    assert pin_held([{CONF_PIN: 1234}], "1234")
+    assert not pin_held([{CONF_PIN: "9999"}], "1234")
+
+
+def test_pin_held_finds_nobody_for_no_pin() -> None:
+    """No PIN is not a PIN two users can share."""
+    assert not pin_held([{CONF_PIN: ""}, {}, {CONF_PIN: None}], "")
