@@ -17,7 +17,7 @@ from ..const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from ..model.config import EntryConfig, async_write_entry_config
+from ..model.config import EntryConfig, async_write_entry_config, credential_holder
 from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
     CredentialOperation,
@@ -518,6 +518,10 @@ async def async_add_users(
         # without something to program.
         if enabled and not pin:
             raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
+        # Checked against the batch as well as the entry, turned-off users
+        # included: a PIN two users share opens the door as either of them.
+        if pin and (holder := credential_holder({**config.users, **additions}, pin)):
+            raise ServiceValidationError(f"{name!r}: {holder} already has this PIN")
         if condition:
             _async_validate_condition(hass, condition)
 

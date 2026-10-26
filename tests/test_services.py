@@ -17,6 +17,7 @@ from homeassistant.components.event import (
     ATTR_EVENT_TYPE,
     DOMAIN as EVENT_DOMAIN,
 )
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_NAME,
@@ -2402,3 +2403,103 @@ async def test_the_hard_refresh_service_walks_the_whole_lock(
     await hass.async_block_till_done()
 
     assert (None,) in lock.service_calls["hard_refresh_codes"]
+
+
+async def _async_add_users(
+    hass: HomeAssistant, entry: ConfigEntry, users: list[dict]
+) -> None:
+    """Call ``add_user`` with a batch of users for ``entry``."""
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_ADD_USER,
+        {"config_entry_id": entry.entry_id, CONF_USERS: users},
+        blocking=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("users", "message"),
+    [
+        pytest.param(
+            [{CONF_NAME: "A", CONF_PIN: " 1234 "}],
+            "'A': test1 already has this PIN",
+            id="enabled user",
+        ),
+        pytest.param(
+            [{CONF_NAME: "A", CONF_PIN: "5678"}],
+            "'A': test2 already has this PIN",
+            id="turned-off user",
+        ),
+        pytest.param(
+            [
+                {CONF_NAME: "A", CONF_PIN: "2468"},
+                {CONF_NAME: "B", CONF_PIN: "2468"},
+            ],
+            "'B': A already has this PIN",
+            id="in the batch",
+        ),
+        pytest.param(
+            [
+                {CONF_NAME: "A", CONF_PIN: "2468", CONF_ENABLED: False},
+                {CONF_NAME: "B", CONF_PIN: "2468"},
+            ],
+            "'B': A already has this PIN",
+            id="turned-off in the batch",
+        ),
+    ],
+)
+async def test_add_user_refuses_a_pin_another_user_has(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    users: list[dict],
+    message: str,
+) -> None:
+    """
+    Checked within the batch and against the entry, turned-off users included.
+
+    All or nothing: nobody in a refused batch is added. The error names the
+    other user, never the value.
+    """
+    entry = lock_code_manager_config_entry
+    await hass.services.async_call(
+        DOMAIN,
+        SERVICE_DISABLE_USER,
+        {"config_entry_id": entry.entry_id, CONF_NAME: "test2"},
+        blocking=True,
+    )
+
+    with pytest.raises(ServiceValidationError, match=f"^{message}$") as refused:
+        await _async_add_users(hass, entry, users)
+
+    assert not any(pin in str(refused.value) for pin in ("1234", "5678", "2468"))
+    assert set(get_entry_config(entry).users) == {"test1", "test2"}
+
+
+async def test_add_user_refuses_a_pin_a_user_with_no_slot_number_has(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Every user in the entry counts, numbered or not."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_PIN: "1234", CONF_ENABLED: True}
+            )
+        ],
+        unique_id="unplaced",
+        version=5,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    with pytest.raises(
+        ServiceValidationError, match="^'A': Unplaced already has this PIN$"
+    ):
+        await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "1234"}])
+
+    await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "4321"}])
+    assert get_entry_config(entry).users["A"][CONF_PIN] == "4321"
+    await hass.config_entries.async_unload(entry.entry_id)
