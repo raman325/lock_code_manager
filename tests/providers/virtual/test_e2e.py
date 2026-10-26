@@ -1,7 +1,7 @@
 """Full lifecycle E2E tests for Virtual lock provider."""
 
 import logging
-from unittest.mock import PropertyMock, patch
+from unittest.mock import patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import (
@@ -9,7 +9,6 @@ from pytest_homeassistant_custom_component.common import (
     async_fire_time_changed,
 )
 
-from homeassistant.components.binary_sensor import DOMAIN as BINARY_SENSOR_DOMAIN
 from homeassistant.components.event import ATTR_EVENT_TYPE, ATTR_EVENT_TYPES
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -28,58 +27,36 @@ from homeassistant.const import (
     CONF_ENABLED,
     CONF_NAME,
     CONF_PIN,
-    STATE_OFF,
-    STATE_ON,
     STATE_UNAVAILABLE,
 )
 from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
-    issue_registry as ir,
 )
-from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from custom_components.lock_code_manager.const import (
     ATTR_CONFIG_ENTRY_ID,
-    ATTR_SYNC_STATUS,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_SLOTS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
-    credential_in_sync_key,
 )
 from custom_components.lock_code_manager.ha.adapter import ProviderPort, _Coordinator
-from custom_components.lock_code_manager.ha.allocation import async_read_occupancy
-from custom_components.lock_code_manager.ha.runtime import (
-    async_give_up,
-    async_reconcile_issues,
-    async_want,
-    lock_registry,
-    signal_lock_changed,
-)
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
-    CredentialAddress,
+    MANAGED_CREDENTIAL_TYPES,
     CredentialRef,
     CredentialType,
     SlotCredential,
     credential_from_slot,
-    pin_address,
 )
 from custom_components.lock_code_manager.providers.virtual import VirtualLock
-from custom_components.lock_code_manager.sync.slot import Holds, Repair, Seen, Slot
-from custom_components.lock_code_manager.sync.worker import LockWorker
-from tests.common import (
-    async_configure_flow,
-    code_entity_id,
-    in_sync_entity_id,
-    user_subentries,
-)
+from tests.common import async_configure_flow, user_subentries
 
 from ...common import TICK_INTERVAL
 from .conftest import VIRTUAL_LOCK_ENTITY_ID, get_virtual_lock
@@ -366,11 +343,10 @@ class TestCredentialUseRecording:
         assert state.state != STATE_UNAVAILABLE
         lock = get_virtual_lock(hass, lcm_config_entry)
         # The first sync's write probed the capabilities: the virtual lock
-        # advertises every credential type, on top of the types it takes.
+        # advertises every credential type, on top of the managed floor.
         assert lock.cached_capabilities is not None
         assert state.attributes[ATTR_EVENT_TYPES] == sorted(
-            {CredentialType.PIN}
-            | lock.managed_credential_types
+            set(MANAGED_CREDENTIAL_TYPES)
             | set(lock.cached_capabilities.credential_types)
         )
         assert lock.supports_code_slot_events is False
@@ -421,8 +397,7 @@ class TestCredentialUseRecording:
             build_slot_unique_id(entry.entry_id, 1, EVENT_CREDENTIAL_USED),
         )
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == sorted(
-            {CredentialType.PIN}
-            | lock.managed_credential_types
+            set(MANAGED_CREDENTIAL_TYPES)
             | set(lock.cached_capabilities.credential_types)
         )
         assert await hass.config_entries.async_unload(entry.entry_id)
@@ -458,22 +433,6 @@ class TestCredentialUseRecording:
         state = hass.states.get(SLOT_1_PIN_ENTITY)
         assert state
         assert state.state == pin
-
-    async def test_a_password_is_a_kind_of_use_before_capabilities_are_read(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A type the lock takes is one a use can be reported as, probed or not."""
-        lock = get_virtual_lock(hass, lcm_config_entry)
-
-        # Unprobed, so only the types the lock takes can name a password;
-        # shown at once by the change signal the worker sends after a job.
-        lock._capabilities_cache = None
-        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
-
-        assert hass.states.get(SLOT_1_EVENT_ENTITY).attributes[ATTR_EVENT_TYPES] == [
-            CredentialType.PASSWORD,
-            CredentialType.PIN,
-        ]
 
 
 class TestReauthLockSwap:
@@ -612,315 +571,6 @@ class TestLockLeaving:
             hass, 1, f"{lock.domain}_{DOMAIN}_{VIRTUAL_LOCK_ENTITY_ID}"
         ).async_load()
         assert stored is not None
-
-
-class TestSlotRepairs:
-    """A slot's repairs are decided over every credential it holds."""
-
-    async def test_a_held_pin_keeps_its_repair_beside_an_in_sync_password(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """The repair is the slot's: a credential in sync does not answer another's hold."""
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        # Set by hand and reconciled at once: nothing awaits in between, so the
-        # worker cannot sync them first.
-        worker.slots[pin_address(1)] = Slot(
-            "1234", seen=Holds("0000"), hold=Repair.CANT_SET
-        )
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            None, seen=Seen.EMPTY
-        )
-
-        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
-
-        issue_id = (
-            f"slot_suspended_{lcm_config_entry.entry_id}_{VIRTUAL_LOCK_ENTITY_ID}_1"
-        )
-        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
-
-    async def test_a_repair_from_a_previous_run_waits_for_every_credential(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A persisted repair stays while one of the slot's credentials is not in sync."""
-        issue_id = (
-            f"slot_suspended_{lcm_config_entry.entry_id}_{VIRTUAL_LOCK_ENTITY_ID}_1"
-        )
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=True,
-            is_persistent=True,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="slot_suspended",
-            translation_placeholders={
-                "lock_entity_id": VIRTUAL_LOCK_ENTITY_ID,
-                "lock_name": VIRTUAL_LOCK_ENTITY_ID,
-                "slot_num": "1",
-                "reason": "x",
-            },
-            data={"lock_entity_id": VIRTUAL_LOCK_ENTITY_ID, "slot": 1},
-        )
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        # Set by hand and reconciled at once: nothing awaits in between, so the
-        # worker cannot sync them first. The PIN was resumed and is not on the
-        # lock yet; the password is.
-        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("0000"))
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            None, seen=Seen.EMPTY
-        )
-
-        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
-
-        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
-
-    async def test_a_refusals_repair_is_answered_beside_a_password_that_wants_nothing(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """Re-enabled and on the lock: the PIN wanting a value answers the refusal."""
-        issue_id = f"slot_disabled_{lcm_config_entry.entry_id}_1"
-        ir.async_create_issue(
-            hass,
-            DOMAIN,
-            issue_id,
-            is_fixable=True,
-            is_persistent=True,
-            severity=ir.IssueSeverity.WARNING,
-            translation_key="slot_disabled",
-            translation_placeholders={"slot_num": "1", "reason": "x"},
-        )
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        # Set by hand and reconciled at once: nothing awaits in between, so the
-        # worker cannot sync them first.
-        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("1234"))
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            None, seen=Seen.EMPTY
-        )
-
-        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
-
-        assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
-
-    async def test_a_clear_that_would_not_take_is_the_slots_repair(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A code that may still open the door outranks one that could not be set."""
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        # Set by hand and reconciled at once: nothing awaits in between, so the
-        # worker cannot sync them first.
-        worker.slots[pin_address(1)] = Slot(
-            None, seen=Holds("0000"), hold=Repair.CODE_MAY_REMAIN
-        )
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            "secret", seen=Seen.EMPTY, hold=Repair.CANT_SET
-        )
-
-        async_reconcile_issues(hass, VIRTUAL_LOCK_ENTITY_ID, worker)
-
-        issue = ir.async_get(hass).async_get_issue(
-            DOMAIN,
-            f"slot_suspended_{lcm_config_entry.entry_id}_{VIRTUAL_LOCK_ENTITY_ID}_1",
-        )
-        assert issue is not None
-        assert issue.translation_key == "slot_clear_failed"
-
-
-class TestSlotInSync:
-    """A slot's in-sync state on a lock covers every credential it holds."""
-
-    async def test_the_aggregate_in_sync_covers_every_credential_in_the_slot(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A password out of sync takes the slot out of sync; the code sensor stays the PIN."""
-        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
-        code = code_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
-        assert hass.states.get(in_sync).state == STATE_ON
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-
-        # Wanted and not on the lock, set by hand; the change signal is what the
-        # worker sends after a job.
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            "pw", seen=Seen.EMPTY
-        )
-        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
-        await hass.async_block_till_done()
-
-        assert hass.states.get(in_sync).state == STATE_OFF
-        assert hass.states.get(code).state == "1234"
-
-    async def test_a_hidden_pin_in_sync_shows_beside_a_password_out_of_sync(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """The code sensor trusts the PIN's own sync, not the slot's."""
-        code = code_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-
-        # A PIN the lock will not show, written and so trusted, beside a
-        # password wanted and not on the lock; set by hand, then the change
-        # signal the worker sends after a job.
-        pin = Slot("1234", seen=Seen.MASKED)
-        pin.wrote_want(worker.salt)
-        worker.slots[pin_address(1)] = pin
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            "pw", seen=Seen.EMPTY
-        )
-        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
-        await hass.async_block_till_done()
-
-        assert hass.states.get(code).state == "1234"
-
-    async def test_a_held_password_outranks_an_out_of_sync_pin(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """The aggregate shows the credential furthest from in sync."""
-        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-
-        # Set by hand and shown at once: nothing awaits in between, so the
-        # worker cannot sync them first.
-        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("0000"))
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(
-            "pw", seen=Seen.EMPTY, hold=Repair.CANT_SET
-        )
-        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
-
-        state = hass.states.get(in_sync)
-        assert state.state == STATE_OFF
-        assert state.attributes[ATTR_SYNC_STATUS] == "suspended"
-
-    async def test_a_slot_with_a_credential_never_read_is_unavailable(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """Before the lock first answers, every credential in the slot must be read."""
-        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-
-        # The PIN is read and the password never was; set by hand and shown
-        # at once, so the worker cannot read the password first.
-        worker.slots[pin_address(1)] = Slot("1234", seen=Holds("1234"))
-        worker.slots[CredentialAddress(1, CredentialType.PASSWORD)] = Slot(None)
-        with patch.object(
-            LockWorker, "answered", new_callable=PropertyMock, return_value=False
-        ):
-            async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
-
-            assert hass.states.get(in_sync).state == STATE_UNAVAILABLE
-
-    async def test_a_sync_queued_for_the_password_shows_the_slot_syncing(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A sync of any credential in the slot is the slot syncing."""
-        in_sync = in_sync_entity_id(hass, lcm_config_entry, 1, VIRTUAL_LOCK_ENTITY_ID)
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        password = CredentialAddress(1, CredentialType.PASSWORD)
-
-        # Queued and shown at once: nothing awaits in between, so the worker
-        # cannot run the sync first.
-        worker.slots[password] = Slot(None, seen=Seen.EMPTY)
-        worker.request_sync([password])
-        assert worker.syncing(password)
-        assert not worker.syncing(pin_address(1))
-        async_dispatcher_send(hass, signal_lock_changed(VIRTUAL_LOCK_ENTITY_ID))
-
-        assert hass.states.get(in_sync).attributes[ATTR_SYNC_STATUS] == "syncing"
-
-
-class TestPasswordsKeptPerLock:
-    """A Virtual lock takes passwords: they occupy, are kept, and get a sensor."""
-
-    async def test_a_password_alone_occupies_a_slot(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """Allocation does not hand out a slot that holds only a password."""
-        lock = get_virtual_lock(hass, lcm_config_entry)
-        lock._data["7"] = {"name": None, "password": "pw"}
-
-        occupancy = await async_read_occupancy(
-            hass, lcm_config_entry, [VIRTUAL_LOCK_ENTITY_ID], [6, 7]
-        )
-
-        assert occupancy.locks[0].occupied == frozenset({7})
-
-    async def test_a_lock_that_stops_taking_passwords_lets_its_address_go(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A type the lock no longer takes is dropped at the next want, its value left."""
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        password = CredentialAddress(1, CredentialType.PASSWORD)
-        assert password in worker.slots
-
-        with patch.object(
-            VirtualLock,
-            "writable_credential_types",
-            new_callable=PropertyMock,
-            return_value=frozenset({CredentialType.PIN}),
-        ):
-            async_want(
-                hass,
-                lcm_config_entry,
-                VIRTUAL_LOCK_ENTITY_ID,
-                1,
-                {CredentialType.PIN: "1234"},
-            )
-
-        assert password not in worker.slots
-
-    async def test_a_release_in_flight_is_kept_when_the_lock_stops_taking_its_type(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A type the lock no longer takes is not let go of while its clear is owed."""
-        worker = lock_registry(hass).worker(VIRTUAL_LOCK_ENTITY_ID)
-        assert worker is not None
-        password = CredentialAddress(1, CredentialType.PASSWORD)
-
-        # Given up and wanted again with nothing awaited in between, so the
-        # release clear has not run when the want arrives.
-        async_give_up(hass, lcm_config_entry, VIRTUAL_LOCK_ENTITY_ID, 1)
-        assert worker.slots[password].release
-        with patch.object(
-            VirtualLock,
-            "writable_credential_types",
-            new_callable=PropertyMock,
-            return_value=frozenset({CredentialType.PIN}),
-        ):
-            async_want(
-                hass,
-                lcm_config_entry,
-                VIRTUAL_LOCK_ENTITY_ID,
-                1,
-                {CredentialType.PIN: "1234"},
-            )
-
-        assert worker.slots[password].release
-
-    async def test_password_in_sync_is_registered_but_disabled_by_default(
-        self, hass: HomeAssistant, lcm_config_entry
-    ) -> None:
-        """A lock that takes passwords gets the per-type sensor, off by default."""
-        entity_id = er.async_get(hass).async_get_entity_id(
-            BINARY_SENSOR_DOMAIN,
-            DOMAIN,
-            build_slot_unique_id(
-                lcm_config_entry.entry_id,
-                1,
-                credential_in_sync_key(CredentialType.PASSWORD.value),
-                VIRTUAL_LOCK_ENTITY_ID,
-            ),
-        )
-        assert entity_id is not None
-        entry = er.async_get(hass).async_get(entity_id)
-        assert entry is not None
-        assert entry.disabled_by is er.RegistryEntryDisabler.INTEGRATION
 
 
 class TestOpenBugs:

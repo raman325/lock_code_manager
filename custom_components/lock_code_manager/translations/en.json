@@ -112,19 +112,6 @@
             }
           }
         }
-      },
-      "password_in_sync": {
-        "name": "{lock_name} Password in sync",
-        "state_attributes": {
-          "sync_status": {
-            "state": {
-              "in_sync": "In sync",
-              "out_of_sync": "Out of sync",
-              "syncing": "Syncing",
-              "suspended": "Suspended"
-            }
-          }
-        }
       }
     },
     "event": {

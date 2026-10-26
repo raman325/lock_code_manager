@@ -18,7 +18,7 @@ from ..const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from ..model.config import EntryConfig, async_write_entry_config
-from ..model.credentials import CredentialType
+from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
     CredentialOperation,
     async_fire_credential_used,
@@ -174,23 +174,20 @@ def _slot_coordinator_for(
 
 def _managed_credential_type(credential_type: str) -> CredentialType:
     """
-    Return the credential type, refusing kinds this integration cannot store.
+    Return the credential type, refusing kinds this integration cannot write.
 
     Every member of ``CredentialType`` is accepted by the schema so the
     vocabulary is the providers' rather than this action's, and the ones Lock
-    Code Manager cannot store are refused here instead -- the caller learns
-    that RFID is a real kind it does not store, rather than that the word is
-    invalid.
+    Code Manager cannot yet store are refused here instead -- the caller
+    learns that RFID is a real kind that is not supported yet, rather than
+    that the word is invalid.
     """
     kind = CredentialType(credential_type)
-    # Only a PIN is held in the configuration: any other kind written here
-    # would land in the PIN. A password is managed on the locks and is
-    # coming to the configuration, so its refusal says "yet".
-    if kind is not CredentialType.PIN:
-        pending = " yet" if kind is CredentialType.PASSWORD else ""
+    if kind not in MANAGED_CREDENTIAL_TYPES:
+        supported = ", ".join(sorted(MANAGED_CREDENTIAL_TYPES))
         raise ServiceValidationError(
-            f"Lock Code Manager cannot store a {kind} credential{pending}. "
-            "Supported: pin"
+            f"Lock Code Manager cannot store a {kind} credential. "
+            f"Supported: {supported}"
         )
     return kind
 

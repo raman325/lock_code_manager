@@ -62,7 +62,6 @@ from custom_components.lock_code_manager.const import (
     DOMAIN,
     SERVICE_HARD_REFRESH_USERCODES,
     SUBENTRY_TYPE_USER,
-    credential_in_sync_key,
 )
 from custom_components.lock_code_manager.ha.locks import async_create_lock_instance
 from custom_components.lock_code_manager.ha.runtime import (
@@ -70,7 +69,6 @@ from custom_components.lock_code_manager.ha.runtime import (
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
-    CredentialType,
     SlotCredential,
     pin_address,
 )
@@ -2399,20 +2397,3 @@ async def test_a_condition_change_shows_the_slot_syncing(
     await hass.async_block_till_done()
     assert 1 not in lock.codes
     assert sync_status(hass, in_sync) == "in_sync"
-
-
-async def test_a_lock_without_passwords_has_no_password_in_sync(
-    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
-) -> None:
-    """The per-type sensors follow the lock's types."""
-    unique_id = build_slot_unique_id(
-        lock_code_manager_config_entry.entry_id,
-        1,
-        credential_in_sync_key(CredentialType.PASSWORD.value),
-        LOCK_1_ENTITY_ID,
-    )
-
-    assert (
-        er.async_get(hass).async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
-        is None
-    )

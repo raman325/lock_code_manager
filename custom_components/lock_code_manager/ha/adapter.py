@@ -21,7 +21,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Collection
 import contextlib
 from datetime import datetime, timedelta
-from functools import partial
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -30,7 +29,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.event import async_track_time_interval
 
-from ..model.credentials import CredentialAddress, CredentialType, SlotCredential
+from ..model.credentials import (
+    CredentialAddress,
+    CredentialType,
+    SlotCredential,
+    pin_address,
+)
 from ..model.exceptions import (
     CodeRejectedError,
     DuplicateCodeError,
@@ -110,17 +114,16 @@ class ProviderPort:
         self.polling = polling
         # The worker that owns the lock: set once it is built.
         self.worker: LockWorker[CredentialAddress, ProviderPort] | None = None
-        # The credential a write is in the provider for: its own echo is not
-        # the lock.
-        self._writing: CredentialAddress | None = None
-        # When each credential was last written, on the event loop's clock: a
+        # The slot a write is in the provider for: its own echo is not the lock.
+        self._writing: int | None = None
+        # When each slot was last written, on the event loop's clock: a
         # provider whose reads lag its writes reads it as silent until then.
-        self._written_at: dict[CredentialAddress, float] = {}
+        self._written_at: dict[int, float] = {}
         # Slots given up: clearing one releases it -- nothing untagged is
         # adopted, and a native-user provider deletes the user it tagged.
         self.releasing: set[int] = set()
-        # Of those, the ones the store showed a credential Lock Code Manager
-        # wrote when the release began: the release's own send forgets it.
+        # Of those, the ones the store showed a PIN Lock Code Manager wrote
+        # when the release began: the release's own send forgets it.
         self._written: set[int] = set()
         # What the lock last said of any slot, by read or by push: codes
         # nobody here manages, and the last word on a slot the worker has let
@@ -180,49 +183,22 @@ class ProviderPort:
     async def read(
         self, addresses: Collection[CredentialAddress]
     ) -> dict[CredentialAddress, Reading]:
-        """
-        Ask the lock about ``addresses`` now (see ``_read``), timed for the logs.
+        """Ask the lock about ``addresses`` now (see ``_read``), timed for the logs."""
+        numbers = [self._pin_slot(address) for address in addresses]
+        op = (
+            "read (hard refresh)"
+            if self.provider.fresh_read_is_hard_refresh
+            else "read (get usercodes)"
+        )
+        where = tuple(numbers)
+        readings = await self._timed(
+            op, where[0] if len(where) == 1 else where, lambda: self._read(numbers)
+        )
+        return {pin_address(slot): seen for slot, seen in readings.items()}
 
-        One read per credential type. A type whose read fails is left out,
-        as silent, so a lock that cannot read one type still answers for the
-        rest; the read fails only when every type's does.
+    async def _read(self, slots: Collection[int]) -> dict[int, Reading]:
         """
-        by_type: dict[CredentialType, list[int]] = {}
-        for address in addresses:
-            self._writable(address)
-            by_type.setdefault(address.credential_type, []).append(address.user_ref)
-        readings: dict[CredentialAddress, Reading] = {}
-        failed: list[LockError] = []
-        for credential_type, numbers in by_type.items():
-            if credential_type is not CredentialType.PIN:
-                op = f"read ({credential_type} credentials)"
-            elif self.provider.fresh_read_is_hard_refresh:
-                op = "read (hard refresh)"
-            else:
-                op = "read (get usercodes)"
-            where = numbers[0] if len(numbers) == 1 else tuple(numbers)
-            try:
-                read = await self._timed(
-                    op, where, partial(self._read, numbers, credential_type)
-                )
-            except LockError as err:
-                failed.append(err)
-                continue
-            readings.update(
-                {
-                    CredentialAddress(slot, credential_type): seen
-                    for slot, seen in read.items()
-                }
-            )
-        if len(failed) == len(by_type):
-            raise failed[0]
-        return readings
-
-    async def _read(
-        self, slots: Collection[int], credential_type: CredentialType
-    ) -> dict[int, Reading]:
-        """
-        Ask the lock about ``credential_type`` in ``slots`` now.
+        Ask the lock about ``slots`` now.
 
         Bounded by the provider's own budget for a walk of that many slots.
         A slot the lock said nothing about is left out (silent); a read where
@@ -233,14 +209,8 @@ class ProviderPort:
         A slot it answered it cannot tell of is silent too (#1581), unless a
         read has described some slot of the lock this run: a lock that can
         report its codes and will not report this one holds a code there.
-
-        The PIN view is kept from PIN reads alone: the codes nobody here
-        manages (``others``) and the slots the lock cannot tell of
-        (``not_reported``), which the lock card shows. Capacity follows the
-        slot for a PIN only; the provider places any other type.
         """
         provider = self.provider
-        pin = credential_type is CredentialType.PIN
         if self._managed and not await self._set_up():
             raise LockError(
                 ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
@@ -248,16 +218,15 @@ class ProviderPort:
         await self._available()
         fetch = (
             provider.async_hard_refresh_codes
-            if pin and provider.fresh_read_is_hard_refresh
-            else partial(provider.async_get_slot_credentials, credential_type)
+            if provider.fresh_read_is_hard_refresh
+            else provider.async_get_usercodes
         )
         provider.last_silent_slots = provider.last_foreign_slots = frozenset()
         provider.last_cannot_tell_slots = frozenset()
         # A slot past the lock's capacity is never asked about: no answer
         # would come, and the lock would be taken for gone (#1398). Its write
         # is refused unsent, which holds it.
-        if pin:
-            slots = [slot for slot in slots if await self._within_capacity(slot)]
+        slots = [slot for slot in slots if await self._within_capacity(slot)]
         if not slots:
             # Nothing was asked: not the lock answering, or a probe of a slot
             # past capacity would end an outage's backoff.
@@ -282,19 +251,17 @@ class ProviderPort:
         # Any slot asked about and not silent was described, named in the
         # answer or not: a provider projecting only the slots an entry manages
         # (Z-Wave JS's hard refresh) leaves an empty one it was asked about
-        # out, and that is no lock that cannot report. Said of PINs alone:
-        # the slots a lock cannot tell of are PIN slots.
-        if pin and not self.reports.get(lock) and set(slots) - silent:
+        # out, and that is no lock that cannot report.
+        if not self.reports.get(lock) and set(slots) - silent:
             self.reports[lock] = True
             self.on_reports()
         if self.reports.setdefault(lock, False):
             silent -= cannot_tell
-        if pin:
-            self.not_reported.difference_update(slots)
-            self.not_reported |= cannot_tell
-        # The lock answered, but of a credential written too lately to show
-        # it yet: left out (silent), so the write is trusted until a later read.
-        silent |= self._lagging(slots, credential_type)
+        self.not_reported.difference_update(slots)
+        self.not_reported |= cannot_tell
+        # The lock answered, but of a slot written too lately to show it yet:
+        # left out (silent), so the write is trusted until a later read.
+        silent |= self._lagging(slots)
         # Someone else's code at a slot's index is not the slot's: a slot
         # turned off is clear, and one wanting a PIN writes it, which adopts
         # the user (#1695). It is still a code nobody here manages.
@@ -304,59 +271,49 @@ class ProviderPort:
             for slot in slots
             if slot in codes and slot not in silent
         }
-        if pin:
-            heard = {
-                slot: reading(credential)
-                for slot, credential in codes.items()
-                if slot not in silent
+        heard = {
+            slot: reading(credential)
+            for slot, credential in codes.items()
+            if slot not in silent
+        }
+        if provider.per_exchange_budget is None:
+            # A provider that reads the whole lock in one call tells of every
+            # code on it: one it no longer tells of is gone (deleted at the
+            # keypad, say). What it said nothing about stays as it was.
+            self.others = {
+                **{slot: seen for slot, seen in self.others.items() if slot in silent},
+                **heard,
             }
-            if provider.per_exchange_budget is None:
-                # A provider that reads the whole lock in one call tells of
-                # every code on it: one it no longer tells of is gone (deleted
-                # at the keypad, say). What it said nothing about stays.
-                self.others = {
-                    **{
-                        slot: seen
-                        for slot, seen in self.others.items()
-                        if slot in silent
-                    },
-                    **heard,
-                }
-            else:
-                # One that walks the slots asked for says nothing of the rest.
-                self.others.update(heard)
-        # About the lock, whichever credential type's read answered.
+        else:
+            # One that walks the slots asked for says nothing of the rest.
+            self.others.update(heard)
         self._answered = self._answered or bool(readings)
         return readings
 
-    def _duplicate_of(self, address: CredentialAddress, value: str) -> int | None:
+    def _duplicate_of(self, slot: int, pin: str) -> int | None:
         """
-        Return another slot holding or wanting ``value`` as the same type; None if none.
+        Return another slot ``pin`` is on, or is wanted on; None if none.
 
-        Duplicates are per type: a password may be the same string as a PIN.
         A tracked slot counts by what it wants (one on its way to another
-        value, or out, does not); any other slot by what the lock said of
-        it, which is known for PINs alone.
+        PIN, or out, does not); any other slot by what the lock said of it.
         """
-        slot, credential_type = address
         tracked = (
             {}
             if self.worker is None
             else {
-                other.user_ref: current
-                for other, current in self.worker.slots.items()
-                if other.credential_type is credential_type
+                address.user_ref: current
+                for address, current in self.worker.slots.items()
+                if address.credential_type is CredentialType.PIN
             }
         )
-        if credential_type is CredentialType.PIN:
-            for other, held in self.others.items():
-                if other != slot and other not in tracked and held == Holds(value):
-                    return other
+        for other, held in self.others.items():
+            if other != slot and other not in tracked and held == Holds(pin):
+                return other
         return next(
             (
                 other
                 for other, current in tracked.items()
-                if other != slot and current.want == value and not current.release
+                if other != slot and current.want == pin and not current.release
             ),
             None,
         )
@@ -365,10 +322,8 @@ class ProviderPort:
         """
         Make ``slot``'s next clear a release.
 
-        ``written``: the store shows a credential Lock Code Manager wrote
-        there. Taken now: the worker forgets what it wrote as it sends the
-        clear. The PIN's clear sends the release, which removes every type;
-        another type's is a clear of that type.
+        ``written``: the store shows a PIN Lock Code Manager wrote there.
+        Taken now: the worker forgets what it wrote as it sends the clear.
         """
         self.releasing.add(slot)
         if written:
@@ -378,13 +333,17 @@ class ProviderPort:
 
     async def write(self, address: CredentialAddress, value: str | None) -> bool | None:
         """Put ``value`` at ``address`` or clear it (see ``_write``), timed for logs."""
-        self._writable(address)
+        number = self._pin_slot(address)
         op = "clear" if value is None else "set"
-        return await self._timed(op, address, lambda: self._write(address, value))
+        return await self._timed(op, number, lambda: self._write(number, value))
 
-    def _writable(self, address: CredentialAddress) -> None:
-        """Refuse, unsent, a credential type the provider cannot write."""
-        if address.credential_type not in self.provider.writable_credential_types:
+    def _pin_slot(self, address: CredentialAddress) -> int:
+        """
+        Return ``address``'s slot; refuse, unsent, any type but a PIN.
+
+        The providers write PINs only: another type never reaches them.
+        """
+        if address.credential_type is not CredentialType.PIN:
             raise LockError(
                 ErrorKind.SLOT_REFUSED,
                 sent=False,
@@ -394,75 +353,52 @@ class ProviderPort:
                     f"{self.provider.lock.entity_id}"
                 ),
             )
+        return address.user_ref
 
-    async def _write(
-        self, address: CredentialAddress, value: str | None
-    ) -> bool | None:
+    async def _write(self, slot: int, pin: str | None) -> bool | None:
         """
-        Put ``value`` at ``address``, or clear it for None.
+        Put ``pin`` in ``slot``, or clear it for None.
 
-        Nothing is sent before the provider is set up, or for a PIN in a
-        slot past the lock's capacity (#1398). A slot's release goes with
-        its PIN's clear (``release``), every PIN slot being kept.
+        Nothing is sent before the provider is set up, or for a slot past
+        the lock's capacity (#1398).
         """
         provider = self.provider
-        slot, credential_type = address
-        pin = credential_type is CredentialType.PIN
         if not await self._set_up():
             raise LockError(
                 ErrorKind.NO_ANSWER, sent=False, message="provider not set up"
             )
         await self._available()
-        self._writing = address
-        if value is None:
+        self._writing = slot
+        if pin is None:
             _LOGGER.debug(
-                "Clearing %s on %s slot %s (source=%s)",
-                "usercode" if pin else credential_type,
+                "Clearing usercode on %s slot %s (source=%s)",
                 provider.lock.entity_id,
                 slot,
                 "sync",
             )
-        elif pin:
+        else:
             # Masked: the ``deobfuscate_log`` action decodes it from here.
             _LOGGER.debug(
                 "Setting usercode on %s slot %s (pin=%s, source=%s)",
                 provider.lock.entity_id,
                 slot,
-                provider.mask_pin(value, slot),
-                "sync",
-            )
-        else:
-            _LOGGER.debug(
-                "Setting %s on %s slot %s (value=%s, source=%s)",
-                credential_type,
-                provider.lock.entity_id,
-                slot,
-                provider.mask_pin(value, slot),
+                provider.mask_pin(pin, slot),
                 "sync",
             )
         try:
-            if value is None and pin and slot in self.releasing:
+            if pin is None and slot in self.releasing:
                 await provider.async_release_managed_slot(
                     slot, written=slot in self._written
                 )
-                # It removes every type at once: each is as lately written.
-                now = provider.hass.loop.time()
-                self._written_at.update(
-                    {
-                        CredentialAddress(slot, written_type): now
-                        for written_type in provider.writable_credential_types
-                    }
-                )
-            elif value is None:
+            elif pin is None:
                 # A clear that found nothing says nothing about what is there.
-                return await provider.async_clear_slot_credential(slot, credential_type)
+                return await provider.async_clear_usercode(slot)
             else:
-                if pin:
-                    await self._capacity(slot)
-                if (other := self._duplicate_of(address, value)) is not None:
-                    # Two users sharing a credential: whoever presents it
-                    # opens the door as the other, and turning one off leaves
-                    # it working. Refused unsent: not the lock answering.
+                await self._capacity(slot)
+                if (other := self._duplicate_of(slot, pin)) is not None:
+                    # Two users sharing a PIN: whoever types it opens the door
+                    # as the other, and turning one off leaves it working.
+                    # Refused unsent: not the lock answering.
                     duplicate = DuplicateCodeError(
                         code_slot=slot,
                         lock_entity_id=provider.lock.entity_id,
@@ -472,21 +408,17 @@ class ProviderPort:
                     raise LockError(
                         ErrorKind.VALUE_REFUSED, sent=False, message=str(duplicate)
                     ) from duplicate
-                await provider.async_set_slot_credential(
-                    slot,
-                    credential_type,
-                    value,
-                    name=self.name_for(slot),
-                    source="sync",
+                await provider.async_set_usercode(
+                    slot, pin, self.name_for(slot), source="sync"
                 )
         except LockCodeManagerProviderError as err:
-            if (error := lock_error(err, clearing=value is None)) is None:
+            if (error := lock_error(err, clearing=pin is None)) is None:
                 raise
             raise error from err
         finally:
             self._writing = None
             # It may have landed, whatever came back.
-            self._written_at[address] = provider.hass.loop.time()
+            self._written_at[slot] = provider.hass.loop.time()
         return None
 
     async def _set_up(self) -> bool:
@@ -506,22 +438,15 @@ class ProviderPort:
                 await provider.async_internal_is_reachable()
         return provider.provider_setup_succeeded
 
-    def _lagging(
-        self, slots: Collection[int], credential_type: CredentialType
-    ) -> set[int]:
-        """Return the slots whose ``credential_type`` was written more lately than reads catch up."""
+    def _lagging(self, slots: Collection[int]) -> set[int]:
+        """Return the slots written more lately than the provider's reads catch up."""
         if not (lag := self.provider.read_lag):
             return set()
         now = self.provider.hass.loop.time()
         return {
             slot
             for slot in slots
-            if (
-                written := self._written_at.get(
-                    CredentialAddress(slot, credential_type)
-                )
-            )
-            is not None
+            if (written := self._written_at.get(slot)) is not None
             and now - written < lag
         }
 
@@ -608,17 +533,14 @@ class ProviderPort:
 
     # What the provider pushes and asks for -------------------------------------
 
-    def pushed(self, address: CredentialAddress, credential: SlotCredential) -> None:
-        """Hand the worker what the lock reported on its own about ``address``."""
-        if self.worker is None or address == self._writing:
+    def pushed(self, slot: int, credential: SlotCredential) -> None:
+        """Hand the worker what the lock reported on its own about ``slot``."""
+        if self.worker is None or slot == self._writing:
             # A provider echoing the write it is making is not the lock.
             return
-        pin = address.credential_type is CredentialType.PIN
-        if pin:
-            self.not_reported.discard(address.user_ref)
-        if address not in self.worker.slots:
-            if pin:
-                self.others[address.user_ref] = reading(credential)
+        self.not_reported.discard(slot)
+        if (address := pin_address(slot)) not in self.worker.slots:
+            self.others[slot] = reading(credential)
             return
         self.worker.push(address, reading(credential))
 
@@ -631,9 +553,11 @@ class ProviderPort:
                 self._read_tracked(), f"Poll {self.provider.lock.entity_id}"
             )
 
-    def wants(self, address: CredentialAddress) -> bool:
-        """Return whether ``address`` should hold a value."""
-        current = None if self.worker is None else self.worker.slots.get(address)
+    def wants_pin(self, slot: int) -> bool:
+        """Return whether ``slot`` should hold a PIN."""
+        current = (
+            None if self.worker is None else self.worker.slots.get(pin_address(slot))
+        )
         return current is not None and current.want is not None
 
     async def _read_tracked(self) -> None:
@@ -703,21 +627,21 @@ class _Coordinator:
         self._port = port
 
     def push_update(self, updates: dict[int, SlotCredential]) -> None:
-        """Hand each pushed slot's PIN to the worker."""
+        """Hand each pushed slot to the worker."""
         for slot, credential in updates.items():
-            self._port.pushed(CredentialAddress(slot, CredentialType.PIN), credential)
+            self._port.pushed(slot, credential)
 
     def observe_push(
         self, address: CredentialAddress, observed: SlotCredential
     ) -> None:
-        """Hand a push about one credential to the worker."""
-        self._port.pushed(address, observed)
+        """Hand a push about one slot to the worker."""
+        self._port.pushed(address.user_ref, observed)
 
     def desired_credential(
         self, address: CredentialAddress, *, owner: Any = None
     ) -> SlotCredential:
-        """Say whether a value is wanted at ``address`` (only that it is, not which)."""
-        if self._port.wants(address):
+        """Say whether a PIN is wanted at ``address`` (only that it is, not which)."""
+        if self._port.wants_pin(address.user_ref):
             return SlotCredential.unreadable()
         return SlotCredential.empty()
 
