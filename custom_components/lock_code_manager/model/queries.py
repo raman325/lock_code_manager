@@ -16,6 +16,9 @@ entry's:
   operation budgets, confirmation scope, the websocket's ``managed`` flag,
   the unmanaged-code sweep, and the numbers allocation treats as claimed by
   other entries.
+- ``users_sharing_a_lock``: the users of the entries listing any of a set of
+  locks. Their PINs are on the same keypads, so a PIN one of them holds is
+  refused to anybody else.
 - ``configured_owner``: the entry holding one slot, the oldest if old storage
   has two. Which entry writes the slot on the lock (a younger one never does,
   even while the oldest is disabled or reloading), duplicate-code
@@ -30,7 +33,8 @@ Entries that are not ignored, in any load state, disabled ones included:
   is kept for these alone.
 """
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant
@@ -141,6 +145,30 @@ def entries_configuring(
     its slots does not build that view a second time.
     """
     return _configuring(_every_entry(hass), lock_entity_id)
+
+
+def users_sharing_a_lock(
+    hass: HomeAssistant,
+    locks: Iterable[str],
+    *,
+    excluding: ConfigEntry | None = None,
+) -> list[Mapping[str, Any]]:
+    """
+    Return the users of every entry listing any of ``locks``.
+
+    In any state, disabled included: an entry switched off puts its users'
+    PINs back on the keypad when it is switched on, turned-off users and
+    users with no slot number included. ``excluding`` leaves out the entry
+    asking, whose own users the caller already has.
+    """
+    wanted = set(locks)
+    return [
+        user
+        for entry in _every_entry(hass)
+        if entry is not excluding
+        and not wanted.isdisjoint((config := get_entry_config(entry)).locks)
+        for user in config.users.values()
+    ]
 
 
 def slots_configured_on(

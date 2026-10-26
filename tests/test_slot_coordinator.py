@@ -61,7 +61,11 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_PIN_ENTITY,
+    TURNED_OFF_USERS_PIN,
+    UNNUMBERED_USERS_PIN,
+    async_setup_lcm_entry,
     async_write_slot_pin,
+    entry_holding_pins_on,
     unnumbered_user_subentry,
     user_subentries,
     write_entry_config,
@@ -1289,3 +1293,44 @@ async def test_a_pin_longer_than_a_state_is_refused(
     assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == (
         "1" * 255
     )
+
+
+# Another entry on the lock this test's entry has, or on a lock it does not.
+SHARES_A_LOCK = [
+    pytest.param([LOCK_1_ENTITY_ID], True, id="shares a lock"),
+    pytest.param([LOCK_2_ENTITY_ID], False, id="no lock in common"),
+]
+
+
+@pytest.mark.parametrize(("other_locks", "refused"), SHARES_A_LOCK)
+@pytest.mark.parametrize("pin", [TURNED_OFF_USERS_PIN, UNNUMBERED_USERS_PIN])
+async def test_a_pin_held_in_another_entry_on_a_shared_lock_is_refused(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    other_locks: list[str],
+    refused: bool,
+    pin: str,
+) -> None:
+    """
+    Two entries on one lock put their PINs on the same keypad.
+
+    So a PIN a user of the other entry holds is refused, turned off or
+    without a slot number as within an entry. An entry with no lock in
+    common is a different door.
+    """
+    other = entry_holding_pins_on(other_locks)
+    other.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(other.entry_id)
+    entry = await async_setup_lcm_entry(hass, unique_id="mine")
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    if refused:
+        with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$"):
+            await coordinator.async_request_pin_update(pin)
+        assert get_entry_config(entry).slot(1)[CONF_PIN] == "1234"
+    else:
+        await coordinator.async_request_pin_update(pin)
+        assert get_entry_config(entry).slot(1)[CONF_PIN] == pin
+
+    for loaded in (entry, other):
+        await hass.config_entries.async_unload(loaded.entry_id)

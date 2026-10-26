@@ -1996,6 +1996,43 @@ def unnumbered_user_subentry(name: str, **fields) -> ConfigSubentryData:
     )
 
 
+# The PINs ``entry_holding_pins_on`` gives its users, every way a PIN can be
+# held: by a turned-off user, and by one with no slot number.
+TURNED_OFF_USERS_PIN = "2468"
+UNNUMBERED_USERS_PIN = "1357"
+
+
+def entry_holding_pins_on(locks: list[str]) -> MockConfigEntry:
+    """
+    Build another entry on ``locks`` whose users hold two PINs.
+
+    Ann is turned off, at slot 5 so she collides with no fixture's numbers,
+    and Unplaced has no slot number: each still holds their PIN. The caller
+    adds it to Home Assistant, and sets it up if the test needs it loaded.
+    """
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: locks},
+        subentries_data=[
+            *user_subentries(
+                {
+                    5: {
+                        CONF_NAME: "Ann",
+                        CONF_ENABLED: False,
+                        CONF_PIN: TURNED_OFF_USERS_PIN,
+                    }
+                }
+            ),
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_ENABLED: True, CONF_PIN: UNNUMBERED_USERS_PIN}
+            ),
+        ],
+        unique_id="another-entry",
+        title="another entry",
+        version=CONFIG_ENTRY_VERSION,
+    )
+
+
 async def async_configure_flow(
     hass: HomeAssistant, flow_id: str, user_input: dict[str, Any] | None = None
 ) -> Any:

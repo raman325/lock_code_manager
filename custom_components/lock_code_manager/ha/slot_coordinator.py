@@ -50,7 +50,7 @@ from ..model.config import (
 )
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
-from ..model.queries import get_entry_config
+from ..model.queries import get_entry_config, users_sharing_a_lock
 from .runtime import async_want
 
 if TYPE_CHECKING:
@@ -312,16 +312,23 @@ class SlotEntityCoordinator:
 
     def _refuse_duplicate_pin(self, value: str) -> None:
         """
-        Refuse ``value`` if another user in the entry holds it.
+        Refuse ``value`` if another user holds it on one of the entry's locks.
 
-        The PIN this user already holds is not checked again, so a duplicate
-        saved before this rule refuses only a change to it.
+        Its own other users count, and the users of every other entry on one
+        of its locks: their PINs are on the same keypads. The PIN this user
+        already holds is not checked again, so a duplicate saved before this
+        rule refuses only a change to it.
         """
         config = get_entry_config(self._config_entry)
         if value == stored_pin(self._slot_config()):
             return
         own = config.name_for(self._slot_num)
-        others = (user for name, user in config.users.items() if name != own)
+        others = [
+            *(user for name, user in config.users.items() if name != own),
+            *users_sharing_a_lock(
+                self._hass, config.locks, excluding=self._config_entry
+            ),
+        ]
         if pin_taken(others, value):
             raise ServiceValidationError(PIN_TAKEN_ERROR)
 

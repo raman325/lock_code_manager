@@ -61,7 +61,11 @@ from .model.names import (
     normalize_name,
     validate_user_names,
 )
-from .model.queries import entries_configuring, get_entry_config
+from .model.queries import (
+    entries_configuring,
+    get_entry_config,
+    users_sharing_a_lock,
+)
 from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
@@ -328,8 +332,12 @@ async def _async_validate_users_yaml(
             return None, {"base": "name_not_unique"}, {"name": name}
 
     # Its own message: a block has no field to mark, so it names which of
-    # the pasted users it is -- never who already has the PIN.
-    seen: list[Mapping[str, Any]] = [*taken.values()]
+    # the pasted users it is -- never who already has the PIN. The entries
+    # sharing a lock count: their PINs are on the same keypads.
+    seen: list[Mapping[str, Any]] = [
+        *taken.values(),
+        *users_sharing_a_lock(hass, locks, excluding=config_entry),
+    ]
     for name, fields in parsed_users.items():
         if pin_taken(seen, fields.get(CONF_PIN) or ""):
             return None, {"base": "pin_not_unique_in_block"}, {"name": name}
@@ -431,6 +439,8 @@ def _validate_user_form(
     user_input: dict[str, Any],
     taken: Mapping[str, Mapping[str, Any]],
     previous: Mapping[str, Any] = MappingProxyType({}),
+    *,
+    shared: Iterable[Mapping[str, Any]] = (),
 ) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
     """
     Validate one user's submitted form against the users already there.
@@ -444,6 +454,9 @@ def _validate_user_form(
     whose fields as the configuration reads them are ``previous``. A PIN
     equal to the one they already hold is not checked again, so a duplicate
     saved before that check refuses only an edit that changes it.
+
+    ``shared`` is the users of the other entries on the same locks, whose
+    PINs a submission must not take either.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, Any] = {}
@@ -454,7 +467,7 @@ def _validate_user_form(
         errors[CONF_PIN] = "missing_pin_if_enabled"
     elif pin_error(pin):
         errors[CONF_PIN] = "invalid_pin"
-    elif pin != stored_pin(previous) and pin_taken(taken.values(), pin):
+    elif pin != stored_pin(previous) and pin_taken([*taken.values(), *shared], pin):
         errors[CONF_PIN] = "pin_not_unique"
 
     name: str | None = None
@@ -714,7 +727,10 @@ class LockCodeManagerFlowHandler(
 
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, self.data[CONF_USERS]
+                self.hass,
+                user_input,
+                self.data[CONF_USERS],
+                shared=users_sharing_a_lock(self.hass, self.data[CONF_LOCKS]),
             )
             description_placeholders.update(placeholders)
 
@@ -1098,7 +1114,10 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
 
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, config.users
+                self.hass,
+                user_input,
+                config.users,
+                shared=users_sharing_a_lock(self.hass, config.locks, excluding=entry),
             )
             description_placeholders.update(placeholders)
 
@@ -1271,7 +1290,11 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
             # Compared with the user as read, PIN stripped: one stored with
             # padding is the same PIN submitted without it.
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, others, config.users.get(held, subentry.data)
+                self.hass,
+                user_input,
+                others,
+                config.users.get(held, subentry.data),
+                shared=users_sharing_a_lock(self.hass, config.locks, excluding=entry),
             )
             description_placeholders.update(placeholders)
 

@@ -95,11 +95,15 @@ from tests.providers.helpers import register_mock_service
 
 from .common import (
     LOCK_1_ENTITY_ID,
+    LOCK_2_ENTITY_ID,
+    TURNED_OFF_USERS_PIN,
+    UNNUMBERED_USERS_PIN,
     async_advance_clock,
     async_advance_sync_ticks,
     async_set_slot_pin,
     async_setup_lcm_entry,
     async_tick_until,
+    entry_holding_pins_on,
     mock_lock,
     reading_for,
     unnumbered_user_subentry,
@@ -2568,3 +2572,39 @@ async def test_add_user_refuses_a_pin_longer_than_a_state(
     await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "1" * 255}])
 
     assert get_entry_config(entry).users["A"][CONF_PIN] == "1" * 255
+
+
+# Another entry on the lock this test's entry has, or on a lock it does not.
+SHARES_A_LOCK = [
+    pytest.param([LOCK_1_ENTITY_ID], True, id="shares a lock"),
+    pytest.param([LOCK_2_ENTITY_ID], False, id="no lock in common"),
+]
+
+
+@pytest.mark.parametrize(("other_locks", "refused"), SHARES_A_LOCK)
+@pytest.mark.parametrize("pin", [TURNED_OFF_USERS_PIN, UNNUMBERED_USERS_PIN])
+async def test_add_user_refuses_a_pin_held_in_another_entry_on_a_shared_lock(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    other_locks: list[str],
+    refused: bool,
+    pin: str,
+) -> None:
+    """
+    Another entry on one of this entry's locks counts, in any load state.
+
+    Its PINs go on the same keypad whenever it is loaded. An entry with no
+    lock in common is a different door.
+    """
+    entry_holding_pins_on(other_locks).add_to_hass(hass)
+    entry = await async_setup_lcm_entry(hass, unique_id="mine")
+
+    if refused:
+        with pytest.raises(
+            ServiceValidationError, match="^'A': Another user already has this PIN$"
+        ):
+            await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: pin}])
+        assert "A" not in get_entry_config(entry).users
+    else:
+        await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: pin}])
+        assert get_entry_config(entry).users["A"][CONF_PIN] == pin
