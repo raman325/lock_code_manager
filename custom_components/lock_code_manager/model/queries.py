@@ -19,6 +19,8 @@ entry's:
 - ``users_sharing_a_lock``: the users of the entries listing any of a set of
   locks. Their PINs are on the same keypads, so a PIN one of them holds is
   refused to anybody else.
+- ``users_on_the_locks_of``: an entry's own users and those. What a PIN
+  added to the entry must clear.
 - ``configured_owner``: the entry holding one slot, the oldest if old storage
   has two. Which entry writes the slot on the lock (a younger one never does,
   even while the oldest is disabled or reloading), duplicate-code
@@ -168,6 +170,22 @@ def users_sharing_a_lock(
         if entry is not excluding
         and not wanted.isdisjoint((config := get_entry_config(entry)).locks)
         for user in config.users.values()
+    ]
+
+
+def users_on_the_locks_of(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> list[Mapping[str, Any]]:
+    """
+    Return the entry's users, and those of every other entry on its locks.
+
+    Read as the configuration stands now: a caller that waited on the locks
+    asks again rather than reusing what it read before.
+    """
+    config = get_entry_config(entry)
+    return [
+        *config.users.values(),
+        *users_sharing_a_lock(hass, config.locks, excluding=entry),
     ]
 
 

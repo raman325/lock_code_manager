@@ -73,12 +73,16 @@ from custom_components.lock_code_manager.const import (
     SERVICE_USE_CREDENTIAL,
 )
 from custom_components.lock_code_manager.ha import services
-from custom_components.lock_code_manager.ha.allocation import SlotAllocationError
+from custom_components.lock_code_manager.ha.allocation import (
+    SlotAllocationError,
+    async_allocate_for,
+)
 from custom_components.lock_code_manager.ha.runtime import (
     lock_registry,
 )
 from custom_components.lock_code_manager.ha.services import async_set_usercode
 from custom_components.lock_code_manager.model.config import (
+    async_write_entry_config,
     build_slot_unique_id,
 )
 from custom_components.lock_code_manager.model.credentials import CredentialType
@@ -2608,3 +2612,60 @@ async def test_add_user_refuses_a_pin_held_in_another_entry_on_a_shared_lock(
     else:
         await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: pin}])
         assert get_entry_config(entry).users["A"][CONF_PIN] == pin
+
+
+async def test_add_user_checks_pins_again_once_the_locks_are_read(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A PIN another user is given while the locks are read is refused.
+
+    Reading the locks for numbers can take minutes, and the PIN entity stays
+    usable meanwhile: the batch is checked again just before it is written.
+    """
+    entry = lock_code_manager_config_entry
+
+    async def _allocate_while_test2_takes_the_pin(*args, **kwargs):
+        async_write_entry_config(
+            hass,
+            entry,
+            get_entry_config(entry).with_user_field_set("test2", CONF_PIN, "2468"),
+        )
+        return await async_allocate_for(*args, **kwargs)
+
+    with (
+        patch.object(
+            services, "async_allocate_for", _allocate_while_test2_takes_the_pin
+        ),
+        pytest.raises(
+            ServiceValidationError, match="^'A': Another user already has this PIN$"
+        ),
+    ):
+        await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "2468"}])
+
+    config = get_entry_config(entry)
+    assert "A" not in config.users
+    assert config.users["test2"][CONF_PIN] == "2468"
+
+
+async def test_add_user_refuses_a_taken_pin_without_reading_the_locks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A batch known to be refused is refused before minutes of lock reads."""
+    allocate = AsyncMock()
+
+    with (
+        patch.object(services, "async_allocate_for", allocate),
+        pytest.raises(ServiceValidationError),
+    ):
+        await _async_add_users(
+            hass,
+            lock_code_manager_config_entry,
+            [{CONF_NAME: "A", CONF_PIN: "1234"}],
+        )
+
+    allocate.assert_not_called()

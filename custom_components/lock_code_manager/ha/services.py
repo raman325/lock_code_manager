@@ -21,8 +21,8 @@ from ..model.config import (
     PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
+    first_with_a_taken_pin,
     pin_error,
-    pin_taken,
 )
 from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
@@ -33,7 +33,7 @@ from ..model.names import identity, name_error, normalize_name
 from ..model.queries import (
     get_entry_config,
     get_loaded_config_entry,
-    users_sharing_a_lock,
+    users_on_the_locks_of,
 )
 from ..sync.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
@@ -483,6 +483,26 @@ async def async_disable_user(
     await coordinator.async_request_active_toggle(False)
 
 
+def _refuse_taken_pins(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    additions: dict[str, dict[str, Any]],
+) -> None:
+    """
+    Refuse a batch in which a user's PIN another user already has.
+
+    Checked against the batch as well as the entry and the entries sharing
+    its locks, turned-off users included: a PIN two users share opens the
+    door as either of them.
+    """
+    if (
+        name := first_with_a_taken_pin(
+            users_on_the_locks_of(hass, config_entry), additions
+        )
+    ) is not None:
+        raise ServiceValidationError(f"{name!r}: {PIN_TAKEN_ERROR}")
+
+
 async def async_add_users(
     hass: HomeAssistant,
     users: list[dict[str, Any]],
@@ -506,9 +526,6 @@ async def async_add_users(
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
-    # The users of the other entries on these locks: their PINs are on the
-    # same keypads.
-    shared = users_sharing_a_lock(hass, config.locks, excluding=config_entry)
     additions: dict[str, dict[str, Any]] = {}
     for entry in users:
         name = entry[CONF_NAME]
@@ -533,13 +550,6 @@ async def async_add_users(
             raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
         if pin and (error := pin_error(pin)):
             raise ServiceValidationError(f"{name!r}: {error}")
-        # Checked against the batch as well as the entry and the entries
-        # sharing its locks, turned-off users included: a PIN two users share
-        # opens the door as either of them.
-        if pin and pin_taken(
-            [*config.users.values(), *shared, *additions.values()], pin
-        ):
-            raise ServiceValidationError(f"{name!r}: {PIN_TAKEN_ERROR}")
         if condition:
             _async_validate_condition(hass, condition)
 
@@ -550,6 +560,7 @@ async def async_add_users(
             user[CONF_CONDITION] = condition
         additions[name] = user
 
+    _refuse_taken_pins(hass, config_entry, additions)
     try:
         # One read of the locks for the whole batch, sized to what the entry
         # will hold once it lands.
@@ -570,6 +581,9 @@ async def async_add_users(
             },
         ) from err
 
+    # Asked again: the read can take minutes, and a PIN may have been given
+    # to somebody else meanwhile.
+    _refuse_taken_pins(hass, config_entry, additions)
     # Reconciled against the whole set rather than issued directly: everyone
     # already here keeps their number by tenure, and only the newcomers are
     # given one.
