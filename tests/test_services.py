@@ -2604,3 +2604,24 @@ async def test_add_user_refuses_a_pin_held_in_another_entry_on_a_shared_lock(
     else:
         await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: pin}])
         assert get_entry_config(entry).users["A"][CONF_PIN] == pin
+
+
+async def test_add_user_refuses_a_taken_pin_without_reading_the_locks(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """A batch known to be refused is refused before minutes of lock reads."""
+    allocate = AsyncMock()
+
+    with (
+        patch.object(services, "async_allocate_for", allocate),
+        pytest.raises(ServiceValidationError),
+    ):
+        await _async_add_users(
+            hass,
+            lock_code_manager_config_entry,
+            [{CONF_NAME: "A", CONF_PIN: "1234"}],
+        )
+
+    allocate.assert_not_called()
