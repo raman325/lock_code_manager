@@ -4153,3 +4153,147 @@ def test_a_pasted_duplicates_message_names_the_user(section: str):
 
     assert set(re.findall(r"\{(\w+)\}", errors["pin_not_unique_in_block"])) == {"name"}
     assert "pin_not_unique" in errors
+
+
+# A PIN one character over Home Assistant's state limit, marked so a leak of
+# it into an error or the log can be found.
+LEAK_MARKER = "leak-marker-77ab"
+OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
+
+
+async def test_adding_a_user_refuses_a_pin_longer_than_a_state(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+):
+    """Refused on its field, at most Home Assistant's 255-character state."""
+    _, entry = await _start_options_flow(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry)
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: OVERLONG_PIN}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_PIN: "invalid_pin"}
+    assert LEAK_MARKER not in caplog.text
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_NAME: "User 2", CONF_ENABLED: True, CONF_PIN: "1" * 255}
+        )
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_PIN] == "1" * 255
+
+
+async def test_editing_a_user_refuses_a_pin_longer_than_a_state(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The edit dialog applies the same limit."""
+    entry = _entry_holding_three_pins(hass)
+
+    result = await _async_edit_user(
+        hass,
+        entry,
+        "Ann",
+        {CONF_NAME: "Ann", CONF_ENABLED: True, CONF_PIN: OVERLONG_PIN},
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_PIN: "invalid_pin"}
+
+    result = await _async_edit_user(
+        hass, entry, "Ann", {CONF_NAME: "Ann", CONF_ENABLED: True, CONF_PIN: "1" * 255}
+    )
+
+    assert result["type"] == "abort"
+
+
+async def test_the_setup_flow_refuses_a_pin_longer_than_a_state(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """The setup flow's form applies the same limit."""
+    flow_id = await _start_ui_config_flow(hass)
+
+    result = await async_configure_flow(
+        hass,
+        flow_id,
+        {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: OVERLONG_PIN},
+    )
+
+    assert result["errors"] == {CONF_PIN: "invalid_pin"}
+    assert result["description_placeholders"]["user_num"] == 1
+
+    result = await async_configure_flow(
+        hass, flow_id, {CONF_NAME: "User 1", CONF_ENABLED: True, CONF_PIN: "1" * 255}
+    )
+
+    assert result["errors"] == {}
+    assert result["description_placeholders"]["user_num"] == 2
+
+
+async def test_pasted_users_refuse_a_pin_longer_than_a_state(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+):
+    """
+    The block is invalid, and the log says why without the value.
+
+    The pasted block's schema is never rendered, so the limit sits in it.
+    """
+    entry = _entry_holding_three_pins(hass)
+    flow_id = await _start_user_subentry_flow(hass, entry, path="several")
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: {"A": {CONF_PIN: OVERLONG_PIN}}}
+        )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "invalid_config"}
+    assert "PIN may be at most 255 characters" in caplog.text
+    assert LEAK_MARKER not in caplog.text
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_USERS: {"A": {CONF_PIN: "1" * 255}}}
+        )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "users_added"
+
+
+async def test_the_setup_yaml_refuses_a_pin_longer_than_a_state(
+    hass: HomeAssistant, mock_lock_config_entry, caplog: pytest.LogCaptureFixture
+):
+    """The setup flow's pasted block applies the same limit."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with _holding():
+        result = await async_configure_flow(
+            hass, flow_id, {CONF_USERS: {"User 1": {CONF_PIN: OVERLONG_PIN}}}
+        )
+
+    assert result["errors"] == {"base": "invalid_config"}
+    assert LEAK_MARKER not in caplog.text
+
+    with _holding():
+        result = await async_configure_flow(
+            hass, flow_id, {CONF_USERS: {"User 1": {CONF_PIN: "1" * 255}}}
+        )
+
+    assert result["type"] == "create_entry"
+
+
+@pytest.mark.parametrize("section", ["config", "config_subentries"])
+def test_an_overlong_pin_has_a_message(section: str):
+    """Both sections whose forms take a PIN can say why one was refused."""
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+    errors = (
+        strings["config"]["error"]
+        if section == "config"
+        else strings["config_subentries"]["user"]["error"]
+    )
+
+    assert "255" in errors["invalid_pin"]

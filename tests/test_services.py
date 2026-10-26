@@ -2503,3 +2503,66 @@ async def test_add_user_refuses_a_pin_a_user_with_no_slot_number_has(
     await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "4321"}])
     assert get_entry_config(entry).users["A"][CONF_PIN] == "4321"
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+# A PIN one character over Home Assistant's state limit, marked so a leak of
+# it into an error or the log can be found.
+LEAK_MARKER = "leak-marker-77ab"
+OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
+
+
+async def test_set_credential_refuses_a_pin_longer_than_a_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Refused through the coordinator, without the value in the error or log."""
+    entry = lock_code_manager_config_entry
+    with pytest.raises(
+        ServiceValidationError, match="^PIN may be at most 255 characters$"
+    ) as refused:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CREDENTIAL,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_NAME: "test1",
+                ATTR_CREDENTIAL_TYPE: "pin",
+                ATTR_VALUE: OVERLONG_PIN,
+            },
+            blocking=True,
+        )
+    await hass.async_block_till_done()
+
+    assert get_entry_config(entry).users["test1"][CONF_PIN] == "1234"
+    assert LEAK_MARKER not in str(refused.value)
+    assert LEAK_MARKER not in caplog.text
+
+
+async def test_add_user_refuses_a_pin_longer_than_a_state(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    At most 255 characters, Home Assistant's state limit.
+
+    The error names the rule, never the value, and the log does not carry it.
+    """
+    entry = lock_code_manager_config_entry
+
+    with pytest.raises(
+        ServiceValidationError, match="^'A': PIN may be at most 255 characters$"
+    ) as refused:
+        await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: OVERLONG_PIN}])
+    await hass.async_block_till_done()
+
+    assert "A" not in get_entry_config(entry).users
+    assert LEAK_MARKER not in str(refused.value)
+    assert LEAK_MARKER not in caplog.text
+
+    await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "1" * 255}])
+
+    assert get_entry_config(entry).users["A"][CONF_PIN] == "1" * 255

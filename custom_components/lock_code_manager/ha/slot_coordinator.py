@@ -40,7 +40,12 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
-from ..model.config import EntryConfig, async_write_entry_config, credential_holder
+from ..model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    credential_holder,
+    pin_error,
+)
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
 from ..model.queries import get_entry_config
@@ -288,6 +293,8 @@ class SlotEntityCoordinator:
         value = value.strip()
 
         if value:
+            if error := pin_error(value):
+                raise ServiceValidationError(error)
             self._validate_credential_length(value, CredentialType.PIN)
             self._refuse_duplicate_pin(value)
 

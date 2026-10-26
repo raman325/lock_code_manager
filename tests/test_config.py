@@ -24,6 +24,7 @@ from custom_components.lock_code_manager.model.config import (
     credential_holder,
     parse_slot_device_identifier,
     parse_slot_unique_id,
+    pin_error,
 )
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
@@ -857,3 +858,17 @@ def test_credential_holder_finds_nobody_for_no_pin(submitted: str) -> None:
     users = {"Ann": {CONF_PIN: ""}, "Bob": {CONF_PIN: "   "}, "Cy": {}}
 
     assert credential_holder(users, submitted) is None
+
+
+def test_a_pin_fits_in_a_state() -> None:
+    """
+    At most Home Assistant's 255-character state limit.
+
+    A longer PIN would make its text entity's state raise, quoting it.
+    """
+    assert pin_error("1" * 255) is None
+
+    error = pin_error("1" * 256)
+
+    assert error == "PIN may be at most 255 characters"
+    assert "1" * 256 not in error

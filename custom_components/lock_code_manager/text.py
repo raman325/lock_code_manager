@@ -100,6 +100,12 @@ class LockCodeManagerText(BaseLockCodeManagerEntity, TextEntity):
         field simply refuses to grow and nothing says why. The coordinator
         refuses the write instead, naming the lock and the range it claims,
         which is what somebody needs to see to recognise a bad advertisement.
+
+        Home Assistant caps it at 255 whatever this returns, and
+        ``text.set_value`` refuses a longer value before this entity sees it,
+        with an error that quotes the value. That refusal is Home Assistant's
+        and cannot be reworded here; the coordinator refuses a longer PIN
+        arriving any other way.
         """
         return self._DEFAULT_MAX
 

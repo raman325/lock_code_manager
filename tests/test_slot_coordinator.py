@@ -1247,3 +1247,41 @@ async def test_a_pin_held_by_a_user_with_no_slot_number_is_refused(
 
     assert get_entry_config(entry).slot(1)[CONF_PIN] == "4321"
     await hass.config_entries.async_unload(entry.entry_id)
+
+
+# A PIN one character over Home Assistant's state limit, marked so a leak of
+# it into an error or the log can be found.
+LEAK_MARKER = "leak-marker-77ab"
+OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
+
+
+async def test_a_pin_longer_than_a_state_is_refused(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Over Home Assistant's 255-character state limit, refused before it is kept.
+
+    Kept, it would make every later state write of its entity raise, quoting
+    it. Home Assistant's ``text.set_value`` refuses it before the entity sees
+    it, so this is the gate for every other way in.
+    """
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(
+        ServiceValidationError, match="^PIN may be at most 255 characters$"
+    ) as refused:
+        await coordinator.async_request_pin_update(OVERLONG_PIN)
+    await hass.async_block_till_done()
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
+    assert LEAK_MARKER not in str(refused.value)
+    assert LEAK_MARKER not in caplog.text
+
+    await coordinator.async_request_pin_update("1" * 255)
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == (
+        "1" * 255
+    )

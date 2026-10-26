@@ -11,7 +11,7 @@ from homeassistant.config_entries import (
     ConfigSubentry,
     ConfigSubentryData,
 )
-from homeassistant.const import CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_NAME, CONF_PIN, MAX_LENGTH_STATE_STATE
 from homeassistant.core import HomeAssistant, callback
 
 from ..const import CONF_LOCKS, CONF_SLOT, CONF_SLOTS, CONF_USERS, SUBENTRY_TYPE_USER
@@ -54,6 +54,20 @@ def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(pin := normalized.get(CONF_PIN), str):
         normalized[CONF_PIN] = pin.strip()
     return normalized
+
+
+def pin_error(pin: str) -> str | None:
+    """
+    Return why ``pin`` cannot be stored, or None if it can.
+
+    The reason names the rule and never the value: it reaches errors and
+    logs. A PIN is shown as a Home Assistant state -- its text entity and
+    each lock's PIN sensor -- and a state longer than Home Assistant allows
+    is refused with an error that quotes it.
+    """
+    if len(pin) > MAX_LENGTH_STATE_STATE:
+        return f"PIN may be at most {MAX_LENGTH_STATE_STATE} characters"
+    return None
 
 
 def credential_holder(users: Mapping[str, Mapping[str, Any]], pin: str) -> str | None:

@@ -48,7 +48,12 @@ from .ha.allocation import (
     async_read_occupancy,
 )
 from .ha.runtime import locks_that_cannot_report
-from .model.config import EntryConfig, async_write_entry_config, credential_holder
+from .model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    credential_holder,
+    pin_error,
+)
 from .model.names import (
     identity,
     name_error,
@@ -94,13 +99,22 @@ def enabled_requires_pin(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _pin_fits(pin: str) -> str:
+    """Refuse a PIN too long to store; the reason is logged, so not the PIN."""
+    if error := pin_error(pin):
+        raise vol.Invalid(error)
+    return pin
+
+
 # The editor's shape: users keyed by name, with no slot number anywhere. The
 # name is the key rather than a field, so a duplicate is unrepresentable
 # rather than rejected -- the same reason the stored configuration is keyed
 # that way.
 USER_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_PIN): STRIPPED_PIN,
+        # A callable is fine here: this schema validates a pasted block and
+        # is never rendered.
+        vol.Optional(CONF_PIN): vol.All(STRIPPED_PIN, _pin_fits),
         vol.Required(CONF_ENABLED, default=True): cv.boolean,
         vol.Optional(CONF_CONDITION): sel.EntitySelector(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
@@ -436,6 +450,8 @@ def _validate_user_form(
 
     if _slot_enabled_without_pin(user_input):
         errors[CONF_PIN] = "missing_pin_if_enabled"
+    elif pin_error(pin):
+        errors[CONF_PIN] = "invalid_pin"
     elif pin != previous.get(CONF_PIN) and credential_holder(taken, pin) is not None:
         errors[CONF_PIN] = "pin_not_unique"
 

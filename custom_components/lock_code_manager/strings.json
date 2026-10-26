@@ -9,6 +9,7 @@
       "existing_codes": "Lock {error_lock} already has codes in slots this configuration uses: {slots}. Adding the lock would overwrite them. Clear those slots on the lock, then add it again.",
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
+      "invalid_pin": "PIN may be at most 255 characters.",
       "missing_pin_if_enabled": "A PIN must be set for any user who is enabled.",
       "pin_not_unique": "Another user already has this PIN.",
       "pin_not_unique_in_block": "{name} has a PIN another user already has.",
@@ -592,6 +593,7 @@
         }
       },
       "error": {
+        "invalid_pin": "PIN may be at most 255 characters.",
         "missing_pin_if_enabled": "A PIN must be set for any user who is enabled.",
         "pin_not_unique": "Another user already has this PIN.",
         "pin_not_unique_in_block": "{name} has a PIN another user already has.",
