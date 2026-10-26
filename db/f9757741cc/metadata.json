@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "dbf9757741cc",
+  "strategy": "manual-commit",
+  "branch": "fix/zha-failed-operations",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/db/f9757741cc/0/metadata.json",
+      "transcript": "/db/f9757741cc/0/full.jsonl",
+      "compact_transcript": "/db/f9757741cc/0/transcript.jsonl",
+      "content_hash": "/db/f9757741cc/0/content_hash.txt",
+      "prompt": "/db/f9757741cc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 3646,
+    "cache_read_tokens": 405616,
+    "output_tokens": 848,
+    "api_call_count": 2,
+    "subagent_tokens": {
+      "input_tokens": 34,
+      "cache_creation_tokens": 34122,
+      "cache_read_tokens": 1477866,
+      "output_tokens": 7143,
+      "api_call_count": 17
+    }
+  }
+}
