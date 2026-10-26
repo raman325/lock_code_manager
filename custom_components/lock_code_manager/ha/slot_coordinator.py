@@ -453,10 +453,9 @@ class SlotEntityCoordinator:
         Whether the slot is active depends on what the entry offers (spec
         decision 4), so a lock arriving or leaving can turn it on or off with
         nothing in its configuration changed. Its locks hear the new wants only
-        if they changed.
+        if they changed. Only a started coordinator is asked: the entry holds
+        no other.
         """
-        if not self._started:
-            return
         before = self.wants
         self._recompute_active()
         if self.wants != before:
