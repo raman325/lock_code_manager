@@ -53,6 +53,7 @@ from .model.config import (
     async_write_entry_config,
     pin_error,
     pin_taken,
+    stored_pin,
 )
 from .model.names import (
     identity,
@@ -453,7 +454,7 @@ def _validate_user_form(
         errors[CONF_PIN] = "missing_pin_if_enabled"
     elif pin_error(pin):
         errors[CONF_PIN] = "invalid_pin"
-    elif pin != previous.get(CONF_PIN) and pin_taken(taken.values(), pin):
+    elif pin != stored_pin(previous) and pin_taken(taken.values(), pin):
         errors[CONF_PIN] = "pin_not_unique"
 
     name: str | None = None

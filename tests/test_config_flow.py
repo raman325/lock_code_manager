@@ -4297,3 +4297,37 @@ def test_an_overlong_pin_has_a_message(section: str):
     )
 
     assert "255" in errors["invalid_pin"]
+
+
+async def test_a_pin_stored_as_a_number_is_held(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """
+    A legacy PIN stored as a number blocks the same PIN typed as text.
+
+    And it is still its own user's: editing them without changing it is not
+    refused for a duplicate.
+    """
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "Ann": {CONF_ENABLED: True, CONF_PIN: 1234},
+            "Bob": {CONF_ENABLED: True, CONF_PIN: "1234"},
+        },
+        unique_id="numeric-pin",
+    )
+    flow_id = await _start_user_subentry_flow(hass, entry)
+
+    with _holding():
+        result = await hass.config_entries.subentries.async_configure(
+            flow_id, {CONF_NAME: "Cy", CONF_ENABLED: True, CONF_PIN: "1234"}
+        )
+
+    assert result["errors"] == {CONF_PIN: "pin_not_unique"}
+
+    result = await _async_edit_user(
+        hass, entry, "Ann", {CONF_NAME: "Annie", CONF_ENABLED: True, CONF_PIN: "1234"}
+    )
+
+    assert result["type"] == "abort"

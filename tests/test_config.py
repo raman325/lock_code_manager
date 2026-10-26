@@ -873,3 +873,9 @@ def test_a_pin_fits_in_a_state() -> None:
 
     assert error == "PIN may be at most 255 characters"
     assert "1" * 256 not in error
+
+
+def test_pin_taken_reads_a_pin_stored_as_a_number() -> None:
+    """A legacy PIN stored as a number is the PIN typed as text."""
+    assert pin_taken([{CONF_PIN: 1234}], "1234")
+    assert not pin_taken([{CONF_PIN: None}], "None")

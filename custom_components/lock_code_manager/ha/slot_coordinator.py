@@ -46,6 +46,7 @@ from ..model.config import (
     async_write_entry_config,
     pin_error,
     pin_taken,
+    stored_pin,
 )
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
@@ -316,9 +317,9 @@ class SlotEntityCoordinator:
         The PIN this user already holds is not checked again, so a duplicate
         saved before this rule refuses only a change to it.
         """
-        if value == self.pin_value:
-            return
         config = get_entry_config(self._config_entry)
+        if value == stored_pin(self._slot_config()):
+            return
         own = config.name_for(self._slot_num)
         others = (user for name, user in config.users.items() if name != own)
         if pin_taken(others, value):

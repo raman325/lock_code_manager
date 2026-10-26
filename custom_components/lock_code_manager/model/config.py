@@ -70,6 +70,17 @@ def pin_error(pin: str) -> str | None:
     return None
 
 
+def stored_pin(user: Mapping[str, Any]) -> str:
+    """
+    Return a user's stored PIN as the text it would be typed as.
+
+    Stripped, and a legacy PIN stored as a number read as its digits: it is
+    compared with what somebody types. No PIN reads as empty.
+    """
+    pin = user.get(CONF_PIN)
+    return "" if pin is None else str(pin).strip()
+
+
 # The one refusal for a PIN another user has. It names nobody: see pin_taken.
 PIN_TAKEN_ERROR = "Another user already has this PIN"
 
@@ -88,7 +99,7 @@ def pin_taken(users: Iterable[Mapping[str, Any]], pin: str) -> bool:
     """
     if not (pin := pin.strip()):
         return False
-    return any(_normalized_user(user).get(CONF_PIN) == pin for user in users)
+    return any(stored_pin(user) == pin for user in users)
 
 
 @dataclass(frozen=True, slots=True)
