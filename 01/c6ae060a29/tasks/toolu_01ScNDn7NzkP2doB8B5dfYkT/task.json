@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_01ScNDn7NzkP2doB8B5dfYkT",
+  "agent_id": "a346a064a68ad4ca1",
+  "subagent_type": "general-purpose",
+  "task_description": "Fix ZHA failed ops counted as use",
+  "started_at": "2026-10-26T14:15:29.141975-04:00"
+}
