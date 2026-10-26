@@ -1140,6 +1140,10 @@ async def test_unload_clears_registry_when_coordinator_stop_raises_before_cleanu
     )
 
 
+# The one refusal for a PIN another user has, naming nobody.
+PIN_TAKEN = "Another user already has this PIN"
+
+
 async def _async_set_pin(hass: HomeAssistant, entity_id: str, value: str) -> None:
     """Set a PIN through its text entity, as the dashboard does."""
     await hass.services.async_call(
@@ -1161,15 +1165,15 @@ async def test_another_users_pin_is_refused(
     """
     Two users sharing a PIN: whoever types it opens the door as either.
 
-    Compared stripped, as the PIN is stored. The error names the other user,
-    never the value.
+    Compared stripped, as the PIN is stored. The error names neither the
+    other user nor the value: anyone who can set a PIN could otherwise learn
+    whose PIN a guess is.
     """
-    with pytest.raises(
-        ServiceValidationError, match="^test2 already has this PIN$"
-    ) as refused:
+    with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$") as refused:
         await _async_set_pin(hass, SLOT_1_PIN_ENTITY, value)
 
     assert "5678" not in str(refused.value)
+    assert "test2" not in str(refused.value)
     assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
 
 
@@ -1191,7 +1195,7 @@ async def test_a_turned_off_users_pin_is_refused(
     assert config.slot(1)[CONF_ENABLED] is False
     assert config.slot(1)[CONF_PIN] == "1234"
 
-    with pytest.raises(ServiceValidationError, match="^test1 already has this PIN$"):
+    with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$"):
         await _async_set_pin(hass, SLOT_2_PIN_ENTITY, "1234")
 
     assert get_entry_config(lock_code_manager_config_entry).slot(2)[CONF_PIN] == "5678"
@@ -1241,7 +1245,7 @@ async def test_a_pin_held_by_a_user_with_no_slot_number_is_refused(
     await hass.async_block_till_done()
     coordinator = entry.runtime_data.slot_coordinators[1]
 
-    with pytest.raises(ServiceValidationError, match="^Unplaced already has this PIN$"):
+    with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$"):
         await coordinator.async_request_pin_update("1234")
     await coordinator.async_request_pin_update("4321")
 

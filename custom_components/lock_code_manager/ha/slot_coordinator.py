@@ -41,10 +41,11 @@ from homeassistant.helpers.issue_registry import (
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
 from ..model.config import (
+    PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
-    credential_holder,
     pin_error,
+    pin_taken,
 )
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
@@ -313,16 +314,15 @@ class SlotEntityCoordinator:
         Refuse ``value`` if another user in the entry holds it.
 
         The PIN this user already holds is not checked again, so a duplicate
-        saved before this rule refuses only a change to it. Names the other
-        user, never the value.
+        saved before this rule refuses only a change to it.
         """
         if value == self.pin_value:
             return
         config = get_entry_config(self._config_entry)
         own = config.name_for(self._slot_num)
-        others = {name: user for name, user in config.users.items() if name != own}
-        if (holder := credential_holder(others, value)) is not None:
-            raise ServiceValidationError(f"{holder} already has this PIN")
+        others = (user for name, user in config.users.items() if name != own)
+        if pin_taken(others, value):
+            raise ServiceValidationError(PIN_TAKEN_ERROR)
 
     def _validate_credential_length(
         self, value: str, credential_type: CredentialType

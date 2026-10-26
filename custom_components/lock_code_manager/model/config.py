@@ -1,6 +1,6 @@
 """Config entry data types for lock_code_manager."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 import logging
 from types import MappingProxyType
@@ -70,25 +70,25 @@ def pin_error(pin: str) -> str | None:
     return None
 
 
-def credential_holder(users: Mapping[str, Mapping[str, Any]], pin: str) -> str | None:
+# The one refusal for a PIN another user has. It names nobody: see pin_taken.
+PIN_TAKEN_ERROR = "Another user already has this PIN"
+
+
+def pin_taken(users: Iterable[Mapping[str, Any]], pin: str) -> bool:
     """
-    Return the name of a user in ``users`` who holds ``pin``, if any.
+    Return whether any of ``users`` holds ``pin``.
 
     Two users sharing a PIN: whoever types it is recorded as either, and
     turning one off leaves it working for the other. So a turned-off user
     still holds their PIN, as does one with no slot number. Both sides are
     compared stripped, as every stored PIN is read.
+
+    Answers yes or no, never who: whoever can set a PIN could otherwise
+    learn whose PIN a guess is.
     """
     if not (pin := pin.strip()):
-        return None
-    return next(
-        (
-            name
-            for name, user in users.items()
-            if _normalized_user(user).get(CONF_PIN) == pin
-        ),
-        None,
-    )
+        return False
+    return any(_normalized_user(user).get(CONF_PIN) == pin for user in users)
 
 
 @dataclass(frozen=True, slots=True)

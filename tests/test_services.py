@@ -1635,7 +1635,7 @@ async def test_set_credential_refuses_a_pin_another_user_has(
     """The action goes through the same check the PIN entity does."""
     entry = lock_code_manager_config_entry
     with pytest.raises(
-        ServiceValidationError, match="^test2 already has this PIN$"
+        ServiceValidationError, match="^Another user already has this PIN$"
     ) as refused:
         await hass.services.async_call(
             DOMAIN,
@@ -1650,6 +1650,7 @@ async def test_set_credential_refuses_a_pin_another_user_has(
         )
 
     assert "5678" not in str(refused.value)
+    assert "test2" not in str(refused.value)
     assert get_entry_config(entry).users["test1"][CONF_PIN] == "1234"
 
 
@@ -2422,12 +2423,12 @@ async def _async_add_users(
     [
         pytest.param(
             [{CONF_NAME: "A", CONF_PIN: " 1234 "}],
-            "'A': test1 already has this PIN",
+            "'A': Another user already has this PIN",
             id="enabled user",
         ),
         pytest.param(
             [{CONF_NAME: "A", CONF_PIN: "5678"}],
-            "'A': test2 already has this PIN",
+            "'A': Another user already has this PIN",
             id="turned-off user",
         ),
         pytest.param(
@@ -2435,7 +2436,7 @@ async def _async_add_users(
                 {CONF_NAME: "A", CONF_PIN: "2468"},
                 {CONF_NAME: "B", CONF_PIN: "2468"},
             ],
-            "'B': A already has this PIN",
+            "'B': Another user already has this PIN",
             id="in the batch",
         ),
         pytest.param(
@@ -2443,7 +2444,7 @@ async def _async_add_users(
                 {CONF_NAME: "A", CONF_PIN: "2468", CONF_ENABLED: False},
                 {CONF_NAME: "B", CONF_PIN: "2468"},
             ],
-            "'B': A already has this PIN",
+            "'B': Another user already has this PIN",
             id="turned-off in the batch",
         ),
     ],
@@ -2458,8 +2459,8 @@ async def test_add_user_refuses_a_pin_another_user_has(
     """
     Checked within the batch and against the entry, turned-off users included.
 
-    All or nothing: nobody in a refused batch is added. The error names the
-    other user, never the value.
+    All or nothing: nobody in a refused batch is added. The error names only
+    the user being added: neither the one who has the PIN nor the PIN.
     """
     entry = lock_code_manager_config_entry
     await hass.services.async_call(
@@ -2473,6 +2474,7 @@ async def test_add_user_refuses_a_pin_another_user_has(
         await _async_add_users(hass, entry, users)
 
     assert not any(pin in str(refused.value) for pin in ("1234", "5678", "2468"))
+    assert not any(other in str(refused.value) for other in ("test1", "test2"))
     assert set(get_entry_config(entry).users) == {"test1", "test2"}
 
 
@@ -2496,7 +2498,7 @@ async def test_add_user_refuses_a_pin_a_user_with_no_slot_number_has(
     await hass.async_block_till_done()
 
     with pytest.raises(
-        ServiceValidationError, match="^'A': Unplaced already has this PIN$"
+        ServiceValidationError, match="^'A': Another user already has this PIN$"
     ):
         await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "1234"}])
 

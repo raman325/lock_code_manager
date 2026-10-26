@@ -51,8 +51,8 @@ from .ha.runtime import locks_that_cannot_report
 from .model.config import (
     EntryConfig,
     async_write_entry_config,
-    credential_holder,
     pin_error,
+    pin_taken,
 )
 from .model.names import (
     identity,
@@ -326,12 +326,13 @@ async def _async_validate_users_yaml(
         if identity(name) in spoken_for:
             return None, {"base": "name_not_unique"}, {"name": name}
 
-    # Its own message: a block has no field to mark, so it names whose PIN.
-    seen: dict[str, Mapping[str, Any]] = dict(taken)
+    # Its own message: a block has no field to mark, so it names which of
+    # the pasted users it is -- never who already has the PIN.
+    seen: list[Mapping[str, Any]] = [*taken.values()]
     for name, fields in parsed_users.items():
-        if credential_holder(seen, fields.get(CONF_PIN) or "") is not None:
+        if pin_taken(seen, fields.get(CONF_PIN) or ""):
             return None, {"base": "pin_not_unique_in_block"}, {"name": name}
-        seen[name] = fields
+        seen.append(fields)
 
     # The same refusal the guided path gives. Both write the one field, so a
     # condition entity this integration cannot read must fail on both routes
@@ -452,7 +453,7 @@ def _validate_user_form(
         errors[CONF_PIN] = "missing_pin_if_enabled"
     elif pin_error(pin):
         errors[CONF_PIN] = "invalid_pin"
-    elif pin != previous.get(CONF_PIN) and credential_holder(taken, pin) is not None:
+    elif pin != previous.get(CONF_PIN) and pin_taken(taken.values(), pin):
         errors[CONF_PIN] = "pin_not_unique"
 
     name: str | None = None

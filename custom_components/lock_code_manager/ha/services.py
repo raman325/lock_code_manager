@@ -18,10 +18,11 @@ from ..const import (
     EXCLUDED_CONDITION_PLATFORMS,
 )
 from ..model.config import (
+    PIN_TAKEN_ERROR,
     EntryConfig,
     async_write_entry_config,
-    credential_holder,
     pin_error,
+    pin_taken,
 )
 from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
@@ -527,8 +528,8 @@ async def async_add_users(
             raise ServiceValidationError(f"{name!r}: {error}")
         # Checked against the batch as well as the entry, turned-off users
         # included: a PIN two users share opens the door as either of them.
-        if pin and (holder := credential_holder({**config.users, **additions}, pin)):
-            raise ServiceValidationError(f"{name!r}: {holder} already has this PIN")
+        if pin and pin_taken([*config.users.values(), *additions.values()], pin):
+            raise ServiceValidationError(f"{name!r}: {PIN_TAKEN_ERROR}")
         if condition:
             _async_validate_condition(hass, condition)
 
