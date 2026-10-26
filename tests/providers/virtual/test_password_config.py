@@ -21,6 +21,7 @@ from homeassistant.helpers import (
     entity_registry as er,
     issue_registry as ir,
 )
+from homeassistant.helpers.entity_platform import EntityPlatform
 
 from custom_components.lock_code_manager.const import (
     ATTR_CREDENTIAL_TYPE,
@@ -1321,5 +1322,36 @@ async def test_the_pass_that_removes_the_last_password_lock_follows_it(
     assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
     assert coordinator.is_enabled is True
     assert "credential" in coordinator.inactive_because_of
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_one_password_entity_failing_to_add_leaves_the_others(
+    hass: HomeAssistant,
+    virtual_lock_entity,
+    mock_lock_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A slot whose entity cannot be added is logged; the other slots get theirs."""
+    entry = await _set_up_entry(hass, [LOCK_1_ENTITY_ID])
+    assert _password_entity(hass, entry, 1) is None
+    add_entities = EntityPlatform.async_add_entities
+
+    async def _add(platform, entities, *args, **kwargs):
+        if any(
+            entity.slot_num == 1 and entity.key == CredentialType.PASSWORD.value
+            for entity in entities
+        ):
+            raise RuntimeError("add failed")
+        return await add_entities(platform, entities, *args, **kwargs)
+
+    with patch.object(EntityPlatform, "async_add_entities", _add):
+        await _submit_locks(hass, entry, [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID])
+
+    assert _password_entity(hass, entry, 1) is None
+    entity_id = _password_entity(hass, entry, 2)
+    assert entity_id is not None
+    assert hass.states.get(entity_id) is not None
+    assert "could not add the password entity of slot 1" in caplog.text
 
     await hass.config_entries.async_unload(entry.entry_id)

@@ -53,7 +53,8 @@ async def async_setup_entry(
         that exist with what the entry offers now and acts on the difference.
         Removals are awaited before the additions, so a pass that swaps one
         password lock for another never adds beside an entity still leaving;
-        the additions are independent and run concurrently. A removed
+        the additions are independent and run concurrently, and one that
+        fails is logged without keeping the other slots from theirs. A removed
         entity's stored password stays (spec decision 10).
         """
         slot_numbers = get_entry_config(config_entry).slot_numbers
@@ -73,22 +74,34 @@ async def async_setup_entry(
                 removal_uid(slot_num, CredentialType.PASSWORD.value)
             )
         ent_reg = er.async_get(hass)
-        async with asyncio.TaskGroup() as tg:
-            for slot_num in sorted(wanted - present):
-                tg.create_task(
-                    platform.async_add_entities(
-                        [
-                            LockCodeManagerCredentialText(
-                                hass,
-                                ent_reg,
-                                config_entry,
-                                slot_num,
-                                CredentialType.PASSWORD,
-                            )
-                        ],
-                        True,
-                        config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
-                    )
+        adding = sorted(wanted - present)
+        results = await asyncio.gather(
+            *(
+                platform.async_add_entities(
+                    [
+                        LockCodeManagerCredentialText(
+                            hass,
+                            ent_reg,
+                            config_entry,
+                            slot_num,
+                            CredentialType.PASSWORD,
+                        )
+                    ],
+                    True,
+                    config_subentry_id=subentry_id_for_slot(config_entry, slot_num),
+                )
+                for slot_num in adding
+            ),
+            return_exceptions=True,
+        )
+        for slot_num, result in zip(adding, results, strict=True):
+            if isinstance(result, BaseException):
+                _LOGGER.error(
+                    "%s (%s): could not add the password entity of slot %s",
+                    config_entry.entry_id,
+                    config_entry.title,
+                    slot_num,
+                    exc_info=result,
                 )
 
     config_entry.async_on_unload(
