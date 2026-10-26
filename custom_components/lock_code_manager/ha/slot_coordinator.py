@@ -409,8 +409,10 @@ class SlotEntityCoordinator:
         Disable is unconditional. Enable needs a credential of a type some lock
         in the entry takes (spec decision 4) and raises
         ``CredentialRequiredError`` without one (the switch translates
-        that into ``HomeAssistantError``). The repairs an enable answers are
-        deleted by ``_recompute_active``, which sees every route back on.
+        that into ``HomeAssistantError``). An enable that succeeds answers the
+        repairs asking for it, even on a user already enabled -- one refused
+        for want of a credential, say, who now has one. ``_recompute_active``
+        answers them too, for the routes back on that do not come through here.
         """
         if not enabled:
             self._write_config_fields({CONF_ENABLED: False})
@@ -425,6 +427,7 @@ class SlotEntityCoordinator:
             )
 
         self._write_config_fields({CONF_ENABLED: True})
+        self._answer_enable_repairs()
 
     # -- Config change hook (called by async_update_listener) ----------------
 

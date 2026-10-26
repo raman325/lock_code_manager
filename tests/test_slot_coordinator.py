@@ -1260,6 +1260,38 @@ async def test_a_disabled_user_reads_as_disabled_alone(
     assert coordinator.inactive_because_of == [CONF_ENABLED]
 
 
+async def test_an_enable_answers_a_repair_raised_while_enabled(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    Enabling a user who was already on still answers ``credential_required``.
+
+    Refused for want of a credential the entry offers, the user gets a PIN and
+    enables again: no off-to-on transition is seen, but the repair is answered.
+    """
+    entry = lock_code_manager_config_entry
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    await _store_slot1_password(hass, entry)
+    async_write_entry_config(
+        hass, entry, get_entry_config(entry).with_slot_field_removed(1, CONF_PIN)
+    )
+    await hass.async_block_till_done()
+    assert coordinator.is_enabled is True
+    assert coordinator.is_active is False
+    issue_id = f"credential_required_{entry.entry_id}_1"
+
+    with pytest.raises(CredentialRequiredError):
+        await coordinator.async_request_active_toggle(True)
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is not None
+
+    await coordinator.async_request_credential_update(CredentialType.PIN, "1357")
+    await coordinator.async_request_active_toggle(True)
+    await hass.async_block_till_done()
+
+    assert coordinator.is_active is True
+    assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id) is None
+
+
 async def test_a_leftover_pin_required_issue_is_deleted_at_setup(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ) -> None:
