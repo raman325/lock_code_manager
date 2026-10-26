@@ -21,6 +21,7 @@ from custom_components.lock_code_manager.model.config import (
     EntryConfigDiff,
     build_slot_device_identifier,
     build_slot_unique_id,
+    credential_holder,
     parse_slot_device_identifier,
     parse_slot_unique_id,
 )
@@ -838,3 +839,21 @@ def test_a_non_string_stored_pin_is_left_alone() -> None:
     )
     assert config.slot(1)["pin"] == 1234
     assert not isinstance(config.slot(1)["pin"], str)
+
+
+@pytest.mark.parametrize(
+    ("stored", "submitted"), [("1234", " 1234 "), (" 1234 ", "1234")]
+)
+def test_credential_holder_compares_stripped_pins(stored: str, submitted: str) -> None:
+    """Padding on either side is not part of the PIN."""
+    users = {"Ann": {CONF_PIN: "9999"}, "Bob": {CONF_PIN: stored}}
+
+    assert credential_holder(users, submitted) == "Bob"
+
+
+@pytest.mark.parametrize("submitted", ["", "   "])
+def test_credential_holder_finds_nobody_for_no_pin(submitted: str) -> None:
+    """No PIN is not a PIN two users can share."""
+    users = {"Ann": {CONF_PIN: ""}, "Bob": {CONF_PIN: "   "}, "Cy": {}}
+
+    assert credential_holder(users, submitted) is None

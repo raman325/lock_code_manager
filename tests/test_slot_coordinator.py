@@ -47,7 +47,10 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
 )
-from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.queries import (
+    get_entry_config,
+    subentry_id_for_slot,
+)
 
 from .common import (
     LOCK_1_ENTITY_ID,
@@ -58,6 +61,9 @@ from .common import (
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_PIN_ENTITY,
+    async_write_slot_pin,
+    unnumbered_user_subentry,
+    user_subentries,
     write_entry_config,
 )
 
@@ -1132,3 +1138,112 @@ async def test_unload_clears_registry_when_coordinator_stop_raises_before_cleanu
         for record in caplog.records
         if record.levelname == "ERROR"
     )
+
+
+async def _async_set_pin(hass: HomeAssistant, entity_id: str, value: str) -> None:
+    """Set a PIN through its text entity, as the dashboard does."""
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: value},
+        target={ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+
+
+@pytest.mark.parametrize("value", ["5678", " 5678 "])
+async def test_another_users_pin_is_refused(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    value: str,
+) -> None:
+    """
+    Two users sharing a PIN: whoever types it opens the door as either.
+
+    Compared stripped, as the PIN is stored. The error names the other user,
+    never the value.
+    """
+    with pytest.raises(
+        ServiceValidationError, match="^test2 already has this PIN$"
+    ) as refused:
+        await _async_set_pin(hass, SLOT_1_PIN_ENTITY, value)
+
+    assert "5678" not in str(refused.value)
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
+
+
+async def test_a_turned_off_users_pin_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A turned-off user's PIN is still theirs, so it is still a duplicate.
+
+    Nothing checks for duplicates again when the user is turned back on.
+    """
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    config = get_entry_config(lock_code_manager_config_entry)
+    assert config.slot(1)[CONF_ENABLED] is False
+    assert config.slot(1)[CONF_PIN] == "1234"
+
+    with pytest.raises(ServiceValidationError, match="^test1 already has this PIN$"):
+        await _async_set_pin(hass, SLOT_2_PIN_ENTITY, "1234")
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(2)[CONF_PIN] == "5678"
+
+
+@pytest.mark.parametrize("stored", ["1234", " 1234 "])
+async def test_an_unchanged_pin_shared_with_another_user_is_left_alone(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    stored: str,
+) -> None:
+    """
+    A duplicate saved before this rule is not refused until it changes.
+
+    The user's own PIN is compared as it is read, stripped, so one stored
+    with padding is the same PIN submitted without it.
+    """
+    entry = lock_code_manager_config_entry
+    await async_write_slot_pin(hass, entry, 2, "1234")
+    await async_write_slot_pin(hass, entry, 1, stored)
+    assert entry.subentries[subentry_id_for_slot(entry, 1)].data[CONF_PIN] == stored
+
+    await _async_set_pin(hass, SLOT_1_PIN_ENTITY, "1234")
+
+    assert get_entry_config(entry).slot(1)[CONF_PIN] == "1234"
+
+
+async def test_a_pin_held_by_a_user_with_no_slot_number_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Every user in the entry counts, numbered or not."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            *user_subentries({1: {CONF_NAME: "Ann", CONF_ENABLED: False}}),
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_PIN: "1234", CONF_ENABLED: True}
+            ),
+        ],
+        unique_id="unplaced-duplicate",
+        version=5,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError, match="^Unplaced already has this PIN$"):
+        await coordinator.async_request_pin_update("1234")
+    await coordinator.async_request_pin_update("4321")
+
+    assert get_entry_config(entry).slot(1)[CONF_PIN] == "4321"
+    await hass.config_entries.async_unload(entry.entry_id)

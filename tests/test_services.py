@@ -1626,6 +1626,32 @@ async def test_set_credential_updates_the_user_not_just_the_device(
     assert config.users["test1"][CONF_PIN] == "4321"
 
 
+async def test_set_credential_refuses_a_pin_another_user_has(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """The action goes through the same check the PIN entity does."""
+    entry = lock_code_manager_config_entry
+    with pytest.raises(
+        ServiceValidationError, match="^test2 already has this PIN$"
+    ) as refused:
+        await hass.services.async_call(
+            DOMAIN,
+            SERVICE_SET_CREDENTIAL,
+            {
+                "config_entry_id": entry.entry_id,
+                CONF_NAME: "test1",
+                ATTR_CREDENTIAL_TYPE: "pin",
+                ATTR_VALUE: "5678",
+            },
+            blocking=True,
+        )
+
+    assert "5678" not in str(refused.value)
+    assert get_entry_config(entry).users["test1"][CONF_PIN] == "1234"
+
+
 async def test_set_credential_matches_a_name_the_way_it_is_said(
     hass: HomeAssistant,
     mock_lock_config_entry,

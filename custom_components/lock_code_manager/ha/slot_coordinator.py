@@ -40,7 +40,7 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
-from ..model.config import EntryConfig, async_write_entry_config
+from ..model.config import EntryConfig, async_write_entry_config, credential_holder
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
 from ..model.queries import get_entry_config
@@ -289,6 +289,7 @@ class SlotEntityCoordinator:
 
         if value:
             self._validate_credential_length(value, CredentialType.PIN)
+            self._refuse_duplicate_pin(value)
 
         updates: dict[str, Any] = {CONF_PIN: value}
         if not value and self.is_enabled:
@@ -299,6 +300,22 @@ class SlotEntityCoordinator:
             updates[CONF_ENABLED] = False
 
         self._write_config_fields(updates)
+
+    def _refuse_duplicate_pin(self, value: str) -> None:
+        """
+        Refuse ``value`` if another user in the entry holds it.
+
+        The PIN this user already holds is not checked again, so a duplicate
+        saved before this rule refuses only a change to it. Names the other
+        user, never the value.
+        """
+        if value == self.pin_value:
+            return
+        config = get_entry_config(self._config_entry)
+        own = config.name_for(self._slot_num)
+        others = {name: user for name, user in config.users.items() if name != own}
+        if (holder := credential_holder(others, value)) is not None:
+            raise ServiceValidationError(f"{holder} already has this PIN")
 
     def _validate_credential_length(
         self, value: str, credential_type: CredentialType

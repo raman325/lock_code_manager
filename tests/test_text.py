@@ -164,7 +164,7 @@ async def test_pin_entity_surfaces_lock_bounds(
     await hass.services.async_call(
         TEXT_DOMAIN,
         SERVICE_SET_VALUE,
-        service_data={ATTR_VALUE: "1234"},
+        service_data={ATTR_VALUE: "4321"},
         target={ATTR_ENTITY_ID: SLOT_2_PIN_ENTITY},
         blocking=True,
     )

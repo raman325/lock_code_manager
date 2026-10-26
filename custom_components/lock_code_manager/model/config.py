@@ -56,6 +56,27 @@ def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def credential_holder(users: Mapping[str, Mapping[str, Any]], pin: str) -> str | None:
+    """
+    Return the name of a user in ``users`` who holds ``pin``, if any.
+
+    Two users sharing a PIN: whoever types it is recorded as either, and
+    turning one off leaves it working for the other. So a turned-off user
+    still holds their PIN, as does one with no slot number. Both sides are
+    compared stripped, as every stored PIN is read.
+    """
+    if not (pin := pin.strip()):
+        return None
+    return next(
+        (
+            name
+            for name, user in users.items()
+            if _normalized_user(user).get(CONF_PIN) == pin
+        ),
+        None,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class EntryConfig:
     """
