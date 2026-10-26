@@ -27,7 +27,12 @@ from ..model.credentials import (
 )
 from ..model.exceptions import LockDisconnected, LockOperationFailed
 from ._mqtt import CANNOT_TELL, BaseMqttLock, SlotAnswer
-from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
+from ._util import (
+    credential_named_by_source,
+    is_masked_code,
+    parse_slot_num,
+    resolve_discovery_payload,
+)
 from .const import LOGGER
 
 # Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
@@ -55,16 +60,39 @@ _Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
 )
 _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
-# The credential an operation event's ``action_source_name`` says was
-# presented (zigbee-herdsman-converters ``lockSourceName``). Every other
-# source -- keypad, radio frequency remote, manual -- reports PIN.
+# A use counts as the credential its ``action_source_name`` names. The standard
+# converter's names (zigbee-herdsman-converters ``lockSourceName``): ``keypad``
+# a Personal Identification Number, ``rfid`` a card, and ``fingerprint`` for
+# source 4, which the Yale Lia sends for a fingerprint unlock (``yale.ts``
+# ``lia_action``). Vendor converters' names that say which credential was
+# presented: the Nimly locks' ``fingerprintsensor`` (``onesti.ts``) and the
+# Javis lock's ``rfid_card_unlock`` (``javis.ts``). A radio frequency source
+# (``_Z2M_RADIO_SOURCES``) names a Personal Identification Number only when
+# the use names the user whose code it carried. Every other name --
+# ``manual``, none at all (the cluster's indeterminate source has none), or a
+# vendor name that does not say which credential, such as the Javis lock's
+# ``touch_unlock`` -- names no credential, so the use is not reported.
 _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
+    "keypad": CredentialType.PIN,
     "rfid": CredentialType.RFID,
     "fingerprint": CredentialType.FINGERPRINT,
+    "fingerprintsensor": CredentialType.FINGERPRINT,
+    "rfid_card_unlock": CredentialType.RFID,
 }
+_Z2M_RF_SOURCE = "rf"
+# The radio frequency sources: the standard converter's ``rf``, and the Nimly
+# locks' ``zigbee`` for a Zigbee command (``onesti.ts`` attribute 0x0100's
+# source octet 00).
+_Z2M_RADIO_SOURCES = frozenset({_Z2M_RF_SOURCE, "zigbee"})
 
-# Nothing here asks the lock which readers it has, so every kind an operation
-# event's source can name is reported, and the keypad's PIN.
+# An action whose name carries its source (``keypad_unlock``, ``rf_lock``)
+# says where it came from when the payload has no ``action_source_name``.
+_Z2M_ACTION_PREFIX_TO_SOURCE = (("keypad_", "keypad"), ("rf_", _Z2M_RF_SOURCE))
+
+
+# Nothing here asks the lock which readers it has, so every kind a source can
+# name is reported: the table's, and the Personal Identification Number a
+# radio frequency command naming its user carries.
 _Z2M_REPORTED_CREDENTIAL_TYPES = frozenset(
     {CredentialType.PIN, *_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values()}
 )
@@ -265,8 +293,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
         """Apply device-topic JSON on the Home Assistant event loop."""
         action = payload.get("action")
 
-        # Handle lock/unlock actions with user identification (a PIN, card or
-        # fingerprint, by action_source_name)
+        # Handle lock/unlock actions with user identification (the credential
+        # named by action_source_name, or by the action's own prefix)
         if isinstance(action, str) and action in _Z2M_LOCK_ACTIONS:
             action_user = payload.get("action_user")
             if action_user is not None and not isinstance(action_user, bool):
@@ -279,13 +307,44 @@ class Zigbee2MQTTLock(BaseMqttLock):
                         self.lock.entity_id,
                     )
                     return
-                to_locked = action in _Z2M_LOCK_ACTIONS_LOCKED
+                named_source = payload.get("action_source_name")
+                source_name = named_source
+                if named_source is None:
+                    source_name = next(
+                        (
+                            source
+                            for prefix, source in _Z2M_ACTION_PREFIX_TO_SOURCE
+                            if action.startswith(prefix)
+                        ),
+                        None,
+                    )
+                credential_type = credential_named_by_source(
+                    str(source_name),
+                    code_slot,
+                    names=_Z2M_SOURCE_TO_CREDENTIAL_TYPE,
+                    radio=_Z2M_RADIO_SOURCES,
+                )
+                if credential_type is None:
+                    if named_source is None and source_name is not None:
+                        LOGGER.debug(
+                            "Lock %s: source %r (from action %r) names no "
+                            "credential, so the use is not reported",
+                            self.lock.entity_id,
+                            source_name,
+                            action,
+                        )
+                    else:
+                        LOGGER.debug(
+                            "Lock %s: action_source_name %r names no credential, "
+                            "so the use is not reported",
+                            self.lock.entity_id,
+                            source_name,
+                        )
+                    return
                 self.async_fire_code_slot_event(
                     code_slot=code_slot,
-                    to_locked=to_locked,
-                    credential_type=_Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(
-                        str(payload.get("action_source_name")), CredentialType.PIN
-                    ),
+                    to_locked=action in _Z2M_LOCK_ACTIONS_LOCKED,
+                    credential_type=credential_type,
                 )
             return
 

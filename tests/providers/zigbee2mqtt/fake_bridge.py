@@ -210,15 +210,21 @@ class FakeZ2MBridge:
         self.hass.loop.call_later(self.answer_after, self._publish_entity_state, update)
 
     def _publish_event(self, action: str, user: Any, source: int) -> None:
-        """Publish an event's ``action`` fields, as both event converters build them."""
-        self._publish_entity_state(
-            {
-                "action": action,
-                "action_user": user,
-                "action_source": source,
-                "action_source_name": _SOURCE_NAMES.get(source),
-            }
-        )
+        """
+        Publish an event's ``action`` fields, as both event converters build them.
+
+        A source ``lockSourceName`` has no name for, such as the cluster's
+        indeterminate 0xFF, leaves ``action_source_name`` undefined, which
+        the published JSON omits.
+        """
+        update: dict[str, Any] = {
+            "action": action,
+            "action_user": user,
+            "action_source": source,
+        }
+        if (name := _SOURCE_NAMES.get(source)) is not None:
+            update["action_source_name"] = name
+        self._publish_entity_state(update)
 
     def _publish_entity_state(self, update: dict[str, Any]) -> None:
         """Merge into the cache and publish the whole of it (``Z2M`` controller.ts:382-391)."""

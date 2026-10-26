@@ -95,6 +95,7 @@ from custom_components.lock_code_manager.ha.runtime import (
 )
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
     SlotCode,
     SlotCredential,
     pin_address,
@@ -1174,7 +1175,7 @@ async def test_subscribe_code_slot_names_what_the_credential_was_used_on(
     assert data.get(ATTR_LAST_USED_LOCK) is None
 
     lock: BaseLock = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
-    lock.async_fire_code_slot_event(2, False)
+    lock.async_fire_code_slot_event(2, False, credential_type=CredentialType.PIN)
     await hass.async_block_till_done()
 
     event_state = hass.states.get(SLOT_2_EVENT_ENTITY)

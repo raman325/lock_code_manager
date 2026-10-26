@@ -217,7 +217,9 @@ class TestEvents:
         lock_schlage_be469.receive_event(event)
         await hass.async_block_till_done()
 
-        fired.assert_called_once_with(code_slot=1, to_locked=True)
+        fired.assert_called_once_with(
+            code_slot=1, to_locked=True, credential_type=CredentialType.PIN
+        )
 
     async def test_push_credential_added_reaches_the_worker(
         self,
