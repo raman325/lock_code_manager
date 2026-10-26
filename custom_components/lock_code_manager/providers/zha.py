@@ -149,7 +149,8 @@ def _status_text(status: Any) -> str:
 
 
 # The operations that count as a use, and whether each locked the door: the
-# ones Zigbee2MQTT counts (``_Z2M_LOCK_ACTIONS``). Every other operation is not
+# ones Zigbee2MQTT's standard converter reports as an action it counts
+# (``_Z2M_LOCK_ACTIONS``). Every other operation is not
 # a use: a refused Personal Identification Number, card or schedule left the
 # door as it was, and an unknown or non-access user operation says nothing
 # about it. The one-touch, key, automatic and scheduled operations did move
