@@ -1467,6 +1467,20 @@ def _async_push_wants(
             coordinator.async_push_want(lock_entity_ids)
 
 
+@callback
+def _async_follow_offered_types(
+    runtime_data: LockCodeManagerConfigEntryRuntimeData,
+) -> None:
+    """
+    Have every slot follow the credential types the entry's locks now take.
+
+    A slot is active only with a credential of a type the entry offers (spec
+    decision 4), so a lock arriving or leaving can turn a slot on or off.
+    """
+    for coordinator in runtime_data.slot_coordinators.values():
+        coordinator.notify_offered_types_changed()
+
+
 async def _async_shutdown_slots(
     runtime_data: LockCodeManagerConfigEntryRuntimeData,
     slot_nums: Collection[int],
@@ -1826,8 +1840,15 @@ async def _async_setup_new_locks(
         finally:
             still_waiting.cancel()
         runtime_data.locks[lock_entity_id] = lock
+        # What the lock takes counts from here, before its worker first runs
+        # (nothing is awaited since the hold). It was held with wants taken
+        # while the entry did not offer those types yet: a user enabled on a
+        # type only this lock takes would be cleared off it, then written back
+        # once the pass ends.
+        _async_follow_offered_types(runtime_data)
         # A want that changed while the hold waited -- a condition entity
-        # turning, say -- was told only to the locks the entry held then.
+        # turning, say, or the follow just above -- was told only to the locks
+        # the entry held then.
         for slot_num, coordinator in runtime_data.slot_coordinators.items():
             if coordinator.wants != wants.get(slot_num):
                 coordinator.async_push_want([lock_entity_id])
@@ -2102,9 +2123,11 @@ async def _async_apply_entry_update_locked(
             hass, config_entry, locks_to_add, new_config, callbacks, ent_reg
         )
 
-    # Last, once the locks and the slots are what the entry says: an entity
-    # that follows what the locks take is decided against the settled set,
-    # never against one lock's arrival or departure.
+    # Last, once the locks and the slots are what the entry says: what follows
+    # what the locks take -- a slot's active state, an entity -- is decided
+    # against the settled set. A lock arriving was followed as it was held,
+    # below its hold; a lock leaving is followed here.
+    _async_follow_offered_types(runtime_data)
     await callbacks.async_reconcile_entities()
 
     _LOGGER.info(

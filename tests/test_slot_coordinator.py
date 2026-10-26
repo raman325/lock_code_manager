@@ -1247,6 +1247,19 @@ async def test_a_password_no_lock_takes_cannot_enable_a_user(
     )
 
 
+async def test_a_disabled_user_reads_as_disabled_alone(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """Holding nothing an entry's lock takes adds no reason to a disabled user."""
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+    await _store_slot1_password(hass, lock_code_manager_config_entry)
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
+    await hass.async_block_till_done()
+
+    assert coordinator.is_enabled is False
+    assert coordinator.inactive_because_of == [CONF_ENABLED]
+
+
 async def test_a_leftover_pin_required_issue_is_deleted_at_setup(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ) -> None:

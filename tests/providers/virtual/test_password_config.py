@@ -1207,3 +1207,119 @@ async def test_re_enabling_in_the_edit_form_answers_slot_disabled(
     await _settled(hass)
     assert get_virtual_lock(hass, lcm_config_entry)._data["1"]["code"] == "2468"
     assert _disabled_issue(hass, lcm_config_entry) is None
+
+
+async def _make_password_only(hass: HomeAssistant, entry) -> None:
+    """Give slot 1 a password and take its PIN: an enabled password-only user."""
+    coordinator = entry.runtime_data.slot_coordinators[1]
+    await coordinator.async_request_credential_update(CredentialType.PASSWORD, "pw")
+    await coordinator.async_request_credential_update(CredentialType.PIN, "")
+    await _settled(hass)
+    assert coordinator.is_enabled is True
+    assert coordinator.is_active is True
+
+
+async def test_a_reload_never_clears_a_password_only_users_password(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """
+    The entry offers passwords once its lock is held, before that lock hears any want.
+
+    Held before the entry lists it, the lock would otherwise be told the
+    password-only user is inactive -- clearing their password -- and then,
+    once the pass ends, told to write it again.
+    """
+    await _make_password_only(hass, lcm_config_entry)
+    delete_credential = VirtualLock.async_delete_credential
+    set_credential = VirtualLock.async_set_credential
+
+    with (
+        patch.object(
+            VirtualLock,
+            "async_delete_credential",
+            autospec=True,
+            side_effect=delete_credential,
+        ) as delete,
+        patch.object(
+            VirtualLock,
+            "async_set_credential",
+            autospec=True,
+            side_effect=set_credential,
+        ) as write,
+    ):
+        assert await hass.config_entries.async_reload(lcm_config_entry.entry_id)
+        await hass.async_block_till_done()
+        await _settled(hass)
+
+    assert not [
+        call
+        for call in delete.call_args_list
+        if call.args[1].slot == 1 and call.args[1].type is CredentialType.PASSWORD
+    ]
+    # Nor written back: it never left.
+    assert not [
+        call
+        for call in write.call_args_list
+        if call.args[2].slot == 1 and call.args[2].type is CredentialType.PASSWORD
+    ]
+    coordinator = lcm_config_entry.runtime_data.slot_coordinators[1]
+    assert coordinator.is_active is True
+    assert get_virtual_lock(hass, lcm_config_entry)._data["1"]["password"] == "pw"
+
+
+async def test_a_user_whose_only_credential_no_lock_takes_is_inactive_not_disabled(
+    hass: HomeAssistant, virtual_lock_entity, mock_lock_config_entry
+) -> None:
+    """
+    The last password lock leaving keeps a password-only user enabled, but inactive.
+
+    Their configuration is untouched, nothing is wanted of their slot, and
+    they are active again, their password written, once a password lock is
+    back (spec decision 4).
+    """
+    entry = await _set_up_entry(hass, [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID])
+    await _make_password_only(hass, entry)
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    await _submit_locks(hass, entry, [LOCK_1_ENTITY_ID])
+
+    assert coordinator.is_enabled is True
+    assert coordinator.is_active is False
+    assert "credential" in coordinator.inactive_because_of
+    assert set(coordinator.wants.values()) == {None}
+    assert get_entry_config(entry).slot(1)["password"] == "pw"
+
+    await _submit_locks(hass, entry, [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID])
+    await _settled(hass)
+
+    assert coordinator.is_active is True
+    assert coordinator.inactive_because_of == []
+    assert coordinator.wants[CredentialType.PASSWORD] == "pw"
+    assert get_virtual_lock(hass, entry)._data["1"]["password"] == "pw"
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_the_pass_that_removes_the_last_password_lock_follows_it(
+    hass: HomeAssistant, virtual_lock_entity, mock_lock_config_entry
+) -> None:
+    """
+    The user is inactive once the removing pass ends, not once a later one runs.
+
+    Written straight to the entry's data, the removal wakes one pass and no
+    settling write follows it.
+    """
+    entry = await _set_up_entry(hass, [VIRTUAL_LOCK_ENTITY_ID, LOCK_1_ENTITY_ID])
+    await _make_password_only(hass, entry)
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+    await hass.async_block_till_done()
+
+    assert list(entry.runtime_data.locks) == [LOCK_1_ENTITY_ID]
+    assert coordinator.is_enabled is True
+    assert "credential" in coordinator.inactive_because_of
+
+    await hass.config_entries.async_unload(entry.entry_id)

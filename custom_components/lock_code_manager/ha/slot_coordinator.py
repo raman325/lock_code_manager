@@ -45,6 +45,7 @@ from ..const import (
     CREDENTIAL_LABELS,
     DOMAIN,
     EVENT_CREDENTIAL_USED,
+    INACTIVE_NO_OFFERED_CREDENTIAL,
     credential_noun,
 )
 from ..model.config import (
@@ -309,10 +310,10 @@ class SlotEntityCoordinator:
         per-lock error built here -- whose errors would quote the value.
 
         A clear that leaves an enabled slot no credential of a type some lock
-        in the entry takes turns it off: a user with nothing a lock is given
-        would read as active (spec decision 4). A stored value no lock takes
-        is kept but does not count. Otherwise, clearing a credential the user
-        does not hold writes nothing.
+        in the entry takes turns it off (spec decision 4): the user removed
+        what they had, unlike one whose lock left, who stays enabled but
+        inactive. A stored value no lock takes is kept but does not count.
+        Otherwise, clearing a credential the user does not hold writes nothing.
         """
         if credential_type is CredentialType.PIN:
             value = value.strip()
@@ -444,6 +445,23 @@ class SlotEntityCoordinator:
         self._notify_state_subscribers()
         self.async_push_want()
 
+    @callback
+    def notify_offered_types_changed(self) -> None:
+        """
+        React to the entry's locks taking a different set of credential types.
+
+        Whether the slot is active depends on what the entry offers (spec
+        decision 4), so a lock arriving or leaving can turn it on or off with
+        nothing in its configuration changed. Its locks hear the new wants only
+        if they changed.
+        """
+        if not self._started:
+            return
+        before = self.wants
+        self._recompute_active()
+        if self.wants != before:
+            self.async_push_want()
+
     # -- Internal helpers ----------------------------------------------------
 
     def _slot_config(self) -> dict[str, Any]:
@@ -528,6 +546,12 @@ class SlotEntityCoordinator:
         ``off`` is False and any other state (unknown, unavailable,
         missing) is None and treated as inactive.
 
+        An enabled slot also needs a credential of a type some lock in the
+        entry takes (spec decision 4): without one it is inactive for
+        ``INACTIVE_NO_OFFERED_CREDENTIAL``, stays enabled, and is kept clear on
+        every lock until a lock taking a type it holds is in the entry. Only
+        an enabled slot names it, so a disabled one reads as disabled alone.
+
         Every change of the slot's configuration passes through here, so it
         is where the slot being turned back on is seen, by whatever route.
         """
@@ -558,6 +582,10 @@ class SlotEntityCoordinator:
                     states[key] = None
                 continue
             states[key] = bool(value)
+        if enabled and not has_credential(
+            slot_config, available_credential_types(self._config_entry)
+        ):
+            states[INACTIVE_NO_OFFERED_CREDENTIAL] = False
 
         inactive_because_of = [k for k, v in states.items() if not v]
         new_active = not inactive_because_of

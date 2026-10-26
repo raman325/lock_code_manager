@@ -163,6 +163,12 @@ REASON_PRECEDENCE = (
     REASON_USER_DISABLED,
 )
 
+# An ``inactive_because_of`` key beside the slot's own config keys: an enabled
+# user holding no credential of a type some lock in the entry takes (spec
+# decision 4). Their configuration is kept; they are active again once a lock
+# taking a type they hold is in the entry.
+INACTIVE_NO_OFFERED_CREDENTIAL = "credential"
+
 # Event data constants
 
 # Event entity event type

@@ -272,8 +272,8 @@ async def async_clear_credential(
     with it.
 
     **This disables the user when it was their last credential**, which is
-    the same thing emptying the field on the dashboard does: a user with no
-    credential and nothing disabled would read as active while holding
+    the same thing emptying the field on the dashboard does: they removed
+    what they had, so they are turned off rather than left enabled with
     nothing anybody could present.
     """
     kind = _managed_credential_type(credential_type)

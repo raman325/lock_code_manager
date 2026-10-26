@@ -37,8 +37,9 @@ def _failure_reason(matches: list[SlotEntityCoordinator]) -> str:
     Explain why no matched slot accepted the credential.
 
     The most restrictive reason wins: a slot held back by anything beyond
-    its condition entity (the enabled flag, for one) reads as disabled even
-    if another slot with the same code is merely waiting on its condition.
+    its condition entity -- the enabled flag, or holding no credential of a
+    type the entry offers -- reads as disabled even if another slot with the
+    same code is merely waiting on its condition.
     """
     if not matches:
         return REASON_UNKNOWN_CODE
