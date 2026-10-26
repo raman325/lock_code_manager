@@ -25,7 +25,6 @@ from zwave_js_server.const.command_class.lock import (
     CodeSlotStatus,
 )
 from zwave_js_server.const.command_class.notification import (
-    AccessControlNotificationEvent,
     NotificationType,
 )
 from zwave_js_server.exceptions import BaseZwaveJSServerError, NotFoundError
@@ -72,6 +71,11 @@ from ..model.exceptions import (
 )
 from ._base import BaseLock
 from ._util import is_masked_code, parse_tag, refuses_write_in_flight
+from ._zwave import (
+    ACCESS_CONTROL_DUPLICATE,
+    ACCESS_CONTROL_PIN_USES,
+    access_control_user,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -166,26 +170,6 @@ _ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE: dict[UserCredentialType, CredentialType] = {
     UserCredentialType.NFC: CredentialType.NFC,
     UserCredentialType.FACE_BIOMETRIC: CredentialType.FACE,
     UserCredentialType.FINGER_BIOMETRIC: CredentialType.FINGERPRINT,
-}
-
-
-# A use counts as the credential its Access Control event names, and belongs
-# to the user the event names; an event naming no user is not a use. The keypad
-# operations and the version 8 operations "with User Code" name a Personal
-# Identification Number, and so does a radio frequency operation (a Z-Wave
-# command) naming the user whose code it carried. Every other event -- manual,
-# auto-lock, a failed or invalid-code attempt, or a programming event such as a
-# duplicate refusal -- names no credential, so it is not reported. The version
-# 8 credential operations would name theirs, but the driver does not parse
-# their parameters, so no credential type reaches the provider. Each entry
-# says whether the operation left the lock locked.
-ACCESS_CONTROL_PIN_USE_TO_LOCKED: dict[AccessControlNotificationEvent, bool] = {
-    AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION: True,
-    AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE: True,
-    AccessControlNotificationEvent.RF_LOCK_OPERATION: True,
-    AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION: False,
-    AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE: False,
-    AccessControlNotificationEvent.RF_UNLOCK_OPERATION: False,
 }
 
 
@@ -1176,35 +1160,29 @@ class ZWaveJSLock(BaseLock):
             )
             return
 
-        params = evt.data.get(ATTR_PARAMETERS) or {}
-        code_slot = params.get("userId", 0)
+        user = access_control_user(evt.data.get(ATTR_PARAMETERS))
         event = evt.data[ATTR_EVENT]
 
-        duplicate = (
-            AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-        )
-        if event == duplicate and refuses_write_in_flight(
-            self._uc_write_slot, code_slot
+        if event == ACCESS_CONTROL_DUPLICATE and refuses_write_in_flight(
+            self._uc_write_slot, user
         ):
             self._uc_write_refused = True
             return
 
-        if (to_locked := ACCESS_CONTROL_PIN_USE_TO_LOCKED.get(event)) is None or (
-            code_slot <= 0
-        ):
+        if (use := ACCESS_CONTROL_PIN_USES.get(event)) is None or user is None:
             _LOGGER.debug(
                 "Lock %s: Access Control event %s (%s) naming user %s is not a "
                 "credential use, so it is not reported",
                 self.lock.entity_id,
                 event,
                 evt.data.get(ATTR_EVENT_LABEL),
-                code_slot,
+                user,
             )
             return
 
         self.async_fire_code_slot_event(
-            code_slot=code_slot,
-            to_locked=to_locked,
+            code_slot=user,
+            to_locked=use.to_locked,
             credential_type=CredentialType.PIN,
         )
 

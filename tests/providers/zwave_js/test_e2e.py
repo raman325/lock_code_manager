@@ -114,6 +114,11 @@ from tests.common import (
     user_subentries,
 )
 from tests.conftest import async_trigger_sync_tick
+from tests.providers.zwave_access_control import (
+    NOT_A_USE_CASES,
+    PIN_USE_CASES,
+    USER,
+)
 from tests.providers.zwave_js.conftest import (
     ZWAVE_JS_LCM_CONFIG_SLOTS,
     get_zwave_lock,
@@ -292,64 +297,33 @@ class TestEvents:
 
 ZWAVE_JS_LOGGER = ZWaveJSLock.__module__
 
-# The parameters the driver hands on for a user an Access Control event names:
-# a User Code Report's ``userId`` (UCC:1626-1628), or the lone User ID byte some
-# locks send instead (NCC:1480-1493). The lock-operation events (manual, radio
-# frequency, auto-lock) and the failed-attempt events define no parameters
-# (NOTIF:651-672, 745, 797-809), so a user on one of those is the worst case:
-# what a lock sending more than the registry defines would produce.
-_USER_1 = {"userId": 1}
-
 
 class TestCredentialUses:
     """
     A use counts as the credential its Access Control event names.
 
-    Only a keypad operation, or a radio frequency (Z-Wave command) operation
-    naming the user whose code it carried, is a Personal Identification
-    Number use. Nothing else the lock reports is a use at all.
+    Only a keypad operation or an operation with User Code naming its user
+    is a Personal Identification Number use. Nothing else the lock reports
+    is a use at all. The cases are shared with Z-Wave JS UI's tests.
     """
 
-    @pytest.mark.parametrize(
-        ("event", "operation"),
-        [
-            pytest.param(
-                AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION,
-                CredentialOperation.LOCK,
-                id="keypad_lock",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION,
-                CredentialOperation.UNLOCK,
-                id="keypad_unlock",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.RF_LOCK_OPERATION,
-                CredentialOperation.LOCK,
-                id="rf_lock_with_user",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.RF_UNLOCK_OPERATION,
-                CredentialOperation.UNLOCK,
-                id="rf_unlock_with_user",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("event", "parameters", "to_locked"), PIN_USE_CASES)
     async def test_a_pin_use_is_reported_as_a_pin(
         self,
         hass: HomeAssistant,
         fake_zwave_lock: FakeZWaveLock,
         fake_zwave_lock_entry: MockConfigEntry,
         event: AccessControlNotificationEvent,
-        operation: CredentialOperation,
+        parameters: dict[str, Any],
+        to_locked: bool,
     ) -> None:
-        """A keypad operation, or a command naming its user, is that user's PIN use."""
+        """A keypad operation, or one with User Code, is its user's PIN use."""
         event_entity = slot_entity_id(
-            hass, EVENT_DOMAIN, fake_zwave_lock_entry, 1, EVENT_CREDENTIAL_USED
+            hass, EVENT_DOMAIN, fake_zwave_lock_entry, USER, EVENT_CREDENTIAL_USED
         )
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
-        fake_zwave_lock.notify_access_control(event, _USER_1)
+        fake_zwave_lock.notify_access_control(event, parameters)
         await hass.async_block_till_done()
 
         assert [
@@ -359,91 +333,16 @@ class TestCredentialUses:
                 fired.data[ATTR_OPERATION],
             )
             for fired in used
-        ] == [("slot1", CredentialType.PIN, operation)]
+        ] == [
+            (
+                f"slot{USER}",
+                CredentialType.PIN,
+                CredentialOperation.from_to_locked(to_locked),
+            )
+        ]
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == "pin"
 
-    @pytest.mark.parametrize(
-        ("event", "parameters"),
-        [
-            # Turned by hand, or locked by the lock's own timer: no credential.
-            pytest.param(
-                AccessControlNotificationEvent.MANUAL_LOCK_OPERATION,
-                _USER_1,
-                id="manual_lock",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.MANUAL_UNLOCK_OPERATION,
-                _USER_1,
-                id="manual_unlock",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.AUTO_LOCK_LOCKED_OPERATION,
-                _USER_1,
-                id="auto_lock",
-            ),
-            # A command naming no user carried no code: the registry's shape.
-            pytest.param(
-                AccessControlNotificationEvent.RF_UNLOCK_OPERATION,
-                None,
-                id="rf_unlock_without_user",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.RF_LOCK_OPERATION,
-                {"userId": 0},
-                id="rf_lock_user_0",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION,
-                {"userId": 0},
-                id="keypad_unlock_user_0",
-            ),
-            # Failed attempts.
-            pytest.param(
-                AccessControlNotificationEvent.UNLOCK_BY_RF_WITH_INVALID_USER_CODE,
-                _USER_1,
-                id="unlock_by_rf_with_invalid_user_code",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.LOCKED_BY_RF_WITH_INVALID_USER_CODE,
-                _USER_1,
-                id="locked_by_rf_with_invalid_user_code",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.INVALID_CREDENTIAL_USED,
-                None,
-                id="invalid_credential_used",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.MANUALLY_ENTER_USER_ACCESS_CODE_EXCEEDS_CODE_LIMIT,
-                None,
-                id="code_limit_exceeded",
-            ),
-            # Programming: no write in flight, so nothing else answers these.
-            pytest.param(
-                AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE,
-                _USER_1,
-                id="duplicate",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.NEW_USER_CODE_ADDED,
-                _USER_1,
-                id="code_added",
-            ),
-            pytest.param(
-                AccessControlNotificationEvent.SINGLE_USER_CODE_DELETED,
-                _USER_1,
-                id="code_deleted",
-            ),
-            # The driver parses a version 8 credential operation's parameters
-            # only as a Command Class (NCC:1474-1593), which its Credential
-            # Usage Data is not, so no credential type reaches the provider.
-            pytest.param(
-                AccessControlNotificationEvent.CREDENTIAL_UNLOCK_CLOSE_OPERATION,
-                None,
-                id="credential_unlock_unparsed",
-            ),
-        ],
-    )
+    @pytest.mark.parametrize(("event", "parameters"), NOT_A_USE_CASES)
     async def test_an_event_naming_no_credential_use_is_not_reported(
         self,
         hass: HomeAssistant,
@@ -458,16 +357,17 @@ class TestCredentialUses:
         Nothing records a use the lock did not report as a credential's.
 
         No event on the bus and none on the user's event entity, rather than
-        a PIN nobody typed. The debug record, naming the event, is what tells
-        a notification left unreported from one reported for no slot, which
-        announces nothing either.
+        a PIN nobody typed, and nothing raised in the listener. The debug
+        record, naming the event, is what tells a notification left
+        unreported from one reported for no slot, which announces nothing
+        either.
         """
         event_entity = slot_entity_id(
-            hass, EVENT_DOMAIN, fake_zwave_lock_entry, 1, EVENT_CREDENTIAL_USED
+            hass, EVENT_DOMAIN, fake_zwave_lock_entry, USER, EVENT_CREDENTIAL_USED
         )
         before = hass.states.get(event_entity)
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-        caplog.set_level(logging.DEBUG, logger=ZWAVE_JS_LOGGER)
+        caplog.set_level(logging.DEBUG)
 
         fake_zwave_lock.notify_access_control(event, parameters)
         await hass.async_block_till_done()
@@ -475,6 +375,9 @@ class TestCredentialUses:
         assert used == []
         after = hass.states.get(event_entity)
         assert (after.state, after.attributes) == (before.state, before.attributes)
+        assert [
+            record for record in caplog.records if record.levelno >= logging.ERROR
+        ] == []
         assert (logging.DEBUG, (lock_entity.entity_id, int(event))) in [
             (record.levelno, record.args[:2])
             for record in caplog.records
@@ -1412,7 +1315,9 @@ class TestDuplicateRefusedByUserCodeLock:
         return len(fake_zwave_lock.sets)
 
     @pytest.mark.parametrize(
-        "parameters", [None, {"userId": 0}, {"userId": 2}], ids=["none", "0", "2"]
+        "parameters",
+        [None, {"userId": 0}, {"userId": None}, {"userId": 2}],
+        ids=["none", "0", "null", "2"],
     )
     async def test_a_refused_pin_disables_the_slot(
         self,
@@ -2418,44 +2323,6 @@ class TestDuplicateRefusedByUserCredentialLock:
 
 class TestOpenBugs:
     """Open Z-Wave JS bugs, each pinned by a strict xfail."""
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "the provider reads the user as userId, but the driver names the "
-            "user of a lock or unlock operation with User Code 'user ID'"
-        ),
-    )
-    @pytest.mark.parametrize(
-        "event",
-        [
-            AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE,
-            AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE,
-        ],
-        ids=["lock", "unlock"],
-    )
-    async def test_an_operation_with_a_user_code_is_its_user_s_pin_use(
-        self,
-        hass: HomeAssistant,
-        fake_zwave_lock: FakeZWaveLock,
-        fake_zwave_lock_entry: MockConfigEntry,
-        event: AccessControlNotificationEvent,
-    ) -> None:
-        """
-        A version 8 operation with User Code is a use of that user's PIN.
-
-        Its parameter is the User Code user identifier, which the driver
-        hands on under the registry's ``user ID`` name (NOTIF:833-855,
-        NCC:1594-1612).
-        """
-        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
-
-        fake_zwave_lock.notify_access_control(event, {"user ID": 1})
-        await hass.async_block_till_done()
-
-        assert [
-            (fired.data[ATTR_NAME], fired.data[ATTR_CREDENTIAL_TYPE]) for fired in used
-        ] == [("slot1", CredentialType.PIN)]
 
     async def test_a_joining_entry_s_slots_come_up_though_the_lock_pushes(
         self,

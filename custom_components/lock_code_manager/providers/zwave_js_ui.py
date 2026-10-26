@@ -42,6 +42,12 @@ from ._util import (
     refuses_write_in_flight,
     resolve_discovery_payload,
 )
+from ._zwave import (
+    ACCESS_CONTROL_DUPLICATE,
+    ACCESS_CONTROL_EVENT_LABELS,
+    ACCESS_CONTROL_PIN_USES,
+    access_control_user,
+)
 from .const import LOGGER
 
 # Tail of the HA discovery device identifier zwave-js-ui publishes
@@ -138,14 +144,28 @@ NOTIFICATION_CC_SEGMENTS = frozenset({str(int(CC_NOTIFICATION)), "notification"}
 # Notification CC label for lock operations, sanitized into a topic segment
 # (whitespace becomes ``_``); compared case-insensitively.
 NOTIFICATION_ACCESS_CONTROL = "access_control"
-# The two Access Control events that name the code slot that operated the
-# lock. Everything else under the label (manual, RF, jams) names no slot.
-KEYPAD_EVENT_TO_LOCKED = {
-    "keypad_lock_operation": True,
-    "keypad_unlock_operation": False,
+
+
+def _gateway_segment(label: str) -> str:
+    """
+    Return a label as the gateway spells it in a topic, lowercased.
+
+    Slashes become dashes, whitespace underscores, and other punctuation is
+    dropped (zwave-js-ui api/lib/Gateway.ts ``removeSlash`` then
+    api/lib/utils.ts ``sanitizeTopic``).
+    """
+    segment = re.sub(r"\s", "_", label.replace("/", "-"))
+    return re.sub(r"[^A-Za-z0-9\-_À-ÖØ-öø-ÿ/]", "", segment).lower()
+
+
+# The Access Control events a provider acts on, by the topic segment the
+# gateway publishes each under, compared case-insensitively. An event not
+# here is ignored.
+ACCESS_CONTROL_EVENT_BY_SEGMENT = {
+    _gateway_segment(label): event
+    for event, label in ACCESS_CONTROL_EVENT_LABELS.items()
 }
-# Access Control event 15: the lock refused a PIN another slot holds.
-DUPLICATE_CODE_EVENT = "new_user_code_not_added_due_to_duplicate_code"
+
 # Where the gateways found by scanning a topic prefix live, keyed by
 # ``(prefix, home hex)``. Deliberately in ``hass.data`` rather than on the
 # instance: the scan answers a question about a gateway, not about a lock, and
@@ -688,12 +708,12 @@ class ZWaveJSUILock(BaseMqttLock):
         payload: bytes | str,
     ) -> None:
         """
-        Fire a code slot event for a keypad lock or unlock operation.
+        Fire a code slot event for an Access Control event that is a PIN use.
 
-        The value is the notification's parsed User Code Report, whose
-        ``userId`` is the slot that operated the lock. Raw-buffer parameters
-        arrive as a hex string instead and name nobody, so anything that is
-        not a dict with a numeric user id is dropped rather than guessed at.
+        The value is the notification's parameters, which name the slot that
+        operated the lock (``access_control_user``). Raw-buffer parameters
+        arrive as a hex string instead and name nobody, so anything that does
+        not name a user is dropped rather than guessed at.
 
         A duplicate refusal is no use of a code: it marks the write in
         flight refused when it answers that write, and is dropped otherwise.
@@ -701,16 +721,15 @@ class ZWaveJSUILock(BaseMqttLock):
         if label.lower() != NOTIFICATION_ACCESS_CONTROL:
             return
         value = _unwrap_mqtt_value(payload)
-        user_id = value.get("userId") if isinstance(value, dict) else None
-        if event_label.lower() == DUPLICATE_CODE_EVENT:
-            if refuses_write_in_flight(self._write_slot, parse_slot_num(user_id)):
+        user = access_control_user(value)
+        event = ACCESS_CONTROL_EVENT_BY_SEGMENT.get(event_label.lower())
+        if event == ACCESS_CONTROL_DUPLICATE:
+            if refuses_write_in_flight(self._write_slot, user):
                 self._write_refused = True
             return
-        # ``False`` is a valid mapping value (an unlock), so this compares
-        # against None -- a truthiness test would drop every unlock event.
-        if (to_locked := KEYPAD_EVENT_TO_LOCKED.get(event_label.lower())) is None:
+        if event is None or (use := ACCESS_CONTROL_PIN_USES.get(event)) is None:
             return
-        if (code_slot := parse_slot_num(user_id)) is None:
+        if user is None:
             LOGGER.debug(
                 "Lock %s: ignoring %s notification naming no code slot: %r",
                 self.lock.entity_id,
@@ -718,11 +737,9 @@ class ZWaveJSUILock(BaseMqttLock):
                 value,
             )
             return
-        # Only the keypad's lock and unlock operations reach here, so the
-        # credential is a Personal Identification Number.
         self.async_fire_code_slot_event(
-            code_slot=code_slot,
-            to_locked=to_locked,
+            code_slot=user,
+            to_locked=use.to_locked,
             credential_type=CredentialType.PIN,
         )
 

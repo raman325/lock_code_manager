@@ -18,8 +18,6 @@ and line. References, read at:
   ``UCC`` = cc/src/cc/UserCodeCC.ts, ``U3CC`` = cc/src/cc/UserCredentialCC.ts,
   ``U3CH`` = zwave-js/src/lib/node/CCHandlers/UserCredentialCC.ts,
   ``NCH`` = zwave-js/src/lib/node/CCHandlers/NotificationCC.ts,
-  ``NCC`` = cc/src/cc/NotificationCC.ts,
-  ``NOTIF`` = core/src/registries/Notifications.ts,
   ``DRV`` = zwave-js/src/lib/driver/Driver.ts,
   ``SM`` = zwave-js/src/lib/driver/StateMachineShared.ts,
   ``STAT`` = zwave-js/src/lib/driver/Statistics.ts,
@@ -79,6 +77,7 @@ from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.node import Node
 
 from tests.common import async_run_until_quiet, track_fault, untrack_fault
+from tests.providers.zwave_access_control import ACCESS_CONTROL_EVENT_LABELS
 
 
 class UserIDStatus(IntEnum):
@@ -710,16 +709,16 @@ class FakeZWaveLock:
         Deliver an Access Control (type 6) notification the lock sends.
 
         The driver emits a ``notification`` node event with the registry's
-        labels (NCH:262-321), forwarded as the schema-32+ endpoint event
-        (SRV_FWD:563-574); Home Assistant turns it into a
-        ``zwave_js_notification`` bus event. Parameters are omitted when the
-        lock sends none, as JSON drops an undefined field.
+        labels (NCH:262-321; ``ACCESS_CONTROL_EVENT_LABELS``), forwarded as
+        the schema-32+ endpoint event (SRV_FWD:563-574); Home Assistant turns
+        it into a ``zwave_js_notification`` bus event. Parameters are omitted
+        when the lock sends none, as JSON drops an undefined field.
         """
         args: dict[str, Any] = {
             "type": NotificationType.ACCESS_CONTROL,
             "event": event,
             "label": "Access Control",
-            "eventLabel": _ACCESS_CONTROL_EVENT_LABELS.get(event, event.name),
+            "eventLabel": ACCESS_CONTROL_EVENT_LABELS.get(event, event.name),
         }
         if parameters is not None:
             args["parameters"] = parameters
@@ -2200,47 +2199,6 @@ def _driver_type_name(kind: int) -> str:
     return _DRIVER_CREDENTIAL_TYPE_NAMES.get(
         kind, f"unknown (0x{'0' * (len(digits) % 2)}{digits})"
     )
-
-
-# The driver's labels for the Access Control events (NOTIF:651-846).
-_ACCESS_CONTROL_EVENT_LABELS: dict[int, str] = {
-    AccessControlNotificationEvent.MANUAL_LOCK_OPERATION: "Manual lock operation",
-    AccessControlNotificationEvent.MANUAL_UNLOCK_OPERATION: "Manual unlock operation",
-    AccessControlNotificationEvent.RF_LOCK_OPERATION: "RF lock operation",
-    AccessControlNotificationEvent.RF_UNLOCK_OPERATION: "RF unlock operation",
-    AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION: "Keypad lock operation",
-    AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION: "Keypad unlock operation",
-    AccessControlNotificationEvent.CREDENTIAL_LOCK_OPEN_OPERATION: (
-        "Credential lock/open operation"
-    ),
-    AccessControlNotificationEvent.CREDENTIAL_UNLOCK_CLOSE_OPERATION: (
-        "Credential unlock/close operation"
-    ),
-    AccessControlNotificationEvent.AUTO_LOCK_LOCKED_OPERATION: (
-        "Auto lock locked operation"
-    ),
-    AccessControlNotificationEvent.SINGLE_USER_CODE_DELETED: "Single user code deleted",
-    AccessControlNotificationEvent.NEW_USER_CODE_ADDED: "New user code added",
-    AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE: (
-        "New user code not added due to duplicate code"
-    ),
-    AccessControlNotificationEvent.INVALID_CREDENTIAL_USED: "Invalid credential used",
-    AccessControlNotificationEvent.MANUALLY_ENTER_USER_ACCESS_CODE_EXCEEDS_CODE_LIMIT: (
-        "Manually enter user access code exceeds code limit"
-    ),
-    AccessControlNotificationEvent.UNLOCK_BY_RF_WITH_INVALID_USER_CODE: (
-        "Unlock by RF with invalid user code"
-    ),
-    AccessControlNotificationEvent.LOCKED_BY_RF_WITH_INVALID_USER_CODE: (
-        "Locked by RF with invalid user code"
-    ),
-    AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE: (
-        "Lock operation with User Code"
-    ),
-    AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE: (
-        "Unlock operation with User Code"
-    ),
-}
 
 
 def _value_flags(prop: str) -> dict[str, bool]:

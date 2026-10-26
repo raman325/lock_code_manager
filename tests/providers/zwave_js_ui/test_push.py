@@ -2,6 +2,7 @@
 
 import json
 from logging import ERROR
+import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,6 +20,12 @@ from custom_components.lock_code_manager.model.credentials import (
 )
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
 from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from tests.providers.zwave_access_control import (
+    ACCESS_CONTROL_EVENT_LABELS,
+    NOT_A_USE_CASES,
+    PIN_USE_CASES,
+    USER,
+)
 
 from .conftest import (
     ZUI_NODE_TOPIC,
@@ -402,6 +409,82 @@ class TestStatusGatedCodes:
         lock.coordinator.observe_push.assert_called_once_with(
             pin_address(3), SlotCredential.known("1234")
         )
+
+
+def access_control_topic(event: int) -> str:
+    """
+    Return the node-topic suffix the gateway publishes an Access Control event under.
+
+    The event's label is the property key, its slashes made dashes and its
+    whitespace underscores, other punctuation dropped (zwave-js-ui
+    ``d10a1c5d`` api/lib/Gateway.ts:609-612 and 641, api/lib/utils.ts:201-221).
+    """
+    label = ACCESS_CONTROL_EVENT_LABELS[event].replace("/", "-")
+    segment = re.sub(r"[^A-Za-z0-9\-_À-ÖØ-öø-ÿ/]", "", re.sub(r"\s", "_", label))
+    return f"notification/endpoint_0/Access_Control/{segment}"
+
+
+def access_control_payload(parameters: dict[str, Any] | None) -> str:
+    """
+    Build the payload the gateway publishes for an event's parameters.
+
+    The parameters are the value (``_parseNotification``,
+    api/lib/ZwaveClient.ts:9330-9338); an event with none leaves the value
+    undefined, which JSON drops from the envelope.
+    """
+    if parameters is None:
+        return json.dumps({"time": 1700000000000})
+    return wrapped(parameters)
+
+
+class TestAccessControlEvents:
+    """
+    A use counts as the credential its Access Control event names.
+
+    The cases are Z-Wave JS's, so both providers reach the same verdict on
+    the same notification.
+    """
+
+    @pytest.mark.parametrize(("event", "parameters", "to_locked"), PIN_USE_CASES)
+    async def test_a_pin_use_fires_a_code_slot_event(
+        self,
+        hass: HomeAssistant,
+        zui_lock_subscribed: ZWaveJSUILock,
+        event: int,
+        parameters: dict[str, Any],
+        to_locked: bool,
+    ) -> None:
+        """A keypad operation, or one with User Code, is its user's PIN use."""
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
+
+        fire_node_value(
+            hass, access_control_topic(event), access_control_payload(parameters)
+        )
+        await hass.async_block_till_done()
+
+        fired.assert_called_once_with(
+            code_slot=USER, to_locked=to_locked, credential_type=CredentialType.PIN
+        )
+
+    @pytest.mark.parametrize(("event", "parameters"), NOT_A_USE_CASES)
+    async def test_an_event_naming_no_credential_use_fires_nothing(
+        self,
+        hass: HomeAssistant,
+        zui_lock_subscribed: ZWaveJSUILock,
+        event: int,
+        parameters: dict[str, Any] | None,
+    ) -> None:
+        """Nothing records a use the lock did not report as a credential's."""
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
+
+        fire_node_value(
+            hass, access_control_topic(event), access_control_payload(parameters)
+        )
+        await hass.async_block_till_done()
+
+        fired.assert_not_called()
 
 
 class TestKeypadEvents:
