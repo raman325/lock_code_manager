@@ -77,6 +77,7 @@ from zwave_js_server.exceptions import FailedZWaveCommand
 from zwave_js_server.model.node import Node
 
 from tests.common import async_run_until_quiet, track_fault, untrack_fault
+from tests.providers.zwave_access_control import DRIVER_EVENT_LABELS
 
 
 class UserIDStatus(IntEnum):
@@ -708,16 +709,16 @@ class FakeZWaveLock:
         Deliver an Access Control (type 6) notification the lock sends.
 
         The driver emits a ``notification`` node event with the registry's
-        labels (NCH:262-321), forwarded as the schema-32+ endpoint event
-        (SRV_FWD:563-574); Home Assistant turns it into a
-        ``zwave_js_notification`` bus event. Parameters are omitted when the
-        lock sends none, as JSON drops an undefined field.
+        labels (NCH:262-321; ``DRIVER_EVENT_LABELS``), forwarded as
+        the schema-32+ endpoint event (SRV_FWD:563-574); Home Assistant turns
+        it into a ``zwave_js_notification`` bus event. Parameters are omitted
+        when the lock sends none, as JSON drops an undefined field.
         """
         args: dict[str, Any] = {
             "type": NotificationType.ACCESS_CONTROL,
             "event": event,
             "label": "Access Control",
-            "eventLabel": _ACCESS_CONTROL_EVENT_LABELS.get(event, event.name),
+            "eventLabel": DRIVER_EVENT_LABELS.get(event, event.name),
         }
         if parameters is not None:
             args["parameters"] = parameters
@@ -2198,16 +2199,6 @@ def _driver_type_name(kind: int) -> str:
     return _DRIVER_CREDENTIAL_TYPE_NAMES.get(
         kind, f"unknown (0x{'0' * (len(digits) % 2)}{digits})"
     )
-
-
-_ACCESS_CONTROL_EVENT_LABELS: dict[int, str] = {
-    AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION: "Keypad lock operation",
-    AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION: "Keypad unlock operation",
-    AccessControlNotificationEvent.NEW_USER_CODE_ADDED: "New user code added",
-    AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE: (
-        "New user code not added due to duplicate code"
-    ),
-}
 
 
 def _value_flags(prop: str) -> dict[str, bool]:

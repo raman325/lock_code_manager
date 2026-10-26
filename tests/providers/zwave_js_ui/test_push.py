@@ -1,12 +1,15 @@
 """Tests for the zwave-js-ui node subscription, push updates, and keypad events."""
 
 import json
-from logging import ERROR
+from logging import DEBUG, ERROR
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
+from zwave_js_server.const.command_class.notification import (
+    AccessControlNotificationEvent as Event,
+)
 
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -18,7 +21,18 @@ from custom_components.lock_code_manager.model.credentials import (
     pin_address,
 )
 from custom_components.lock_code_manager.model.exceptions import LockDisconnected
-from custom_components.lock_code_manager.providers.zwave_js_ui import ZWaveJSUILock
+from custom_components.lock_code_manager.providers._zwave import (
+    ACCESS_CONTROL_PIN_USE_TO_LOCKED,
+)
+from custom_components.lock_code_manager.providers.zwave_js_ui import (
+    ACCESS_CONTROL_EVENT_BY_SEGMENT,
+    ZWaveJSUILock,
+)
+from tests.providers.zwave_access_control import (
+    NOT_A_USE_CASES,
+    PIN_USE_CASES,
+    USER,
+)
 
 from .conftest import (
     ZUI_NODE_TOPIC,
@@ -28,6 +42,8 @@ from .conftest import (
 )
 
 MODULE = "custom_components.lock_code_manager.providers.zwave_js_ui"
+# Both Z-Wave providers log a notification that is no use here.
+PROVIDERS_LOGGER = "custom_components.lock_code_manager.providers"
 
 # The two topic shapes a gateway publishes the same value under: VALUEID
 # spells the command class and endpoint numerically, NAMED spells both out.
@@ -401,6 +417,129 @@ class TestStatusGatedCodes:
 
         lock.coordinator.observe_push.assert_called_once_with(
             pin_address(3), SlotCredential.known("1234")
+        )
+
+
+# Where the gateway publishes each Access Control event: its label as the
+# property key, slashes made dashes and whitespace underscores, other
+# punctuation dropped (zwave-js-ui ``d10a1c5d`` api/lib/Gateway.ts:609-612 and
+# 639-642, ``removeSlash`` and ``sanitizeTopic`` at api/lib/utils.ts:201-221),
+# spelled out by hand from the driver's labels.
+_ACCESS_CONTROL = "notification/endpoint_0/Access_Control"
+ACCESS_CONTROL_TOPICS: dict[int, str] = {
+    Event.MANUAL_LOCK_OPERATION: f"{_ACCESS_CONTROL}/Manual_lock_operation",
+    Event.MANUAL_UNLOCK_OPERATION: f"{_ACCESS_CONTROL}/Manual_unlock_operation",
+    Event.RF_LOCK_OPERATION: f"{_ACCESS_CONTROL}/RF_lock_operation",
+    Event.RF_UNLOCK_OPERATION: f"{_ACCESS_CONTROL}/RF_unlock_operation",
+    Event.KEYPAD_LOCK_OPERATION: f"{_ACCESS_CONTROL}/Keypad_lock_operation",
+    Event.KEYPAD_UNLOCK_OPERATION: f"{_ACCESS_CONTROL}/Keypad_unlock_operation",
+    Event.CREDENTIAL_UNLOCK_CLOSE_OPERATION: (
+        f"{_ACCESS_CONTROL}/Credential_unlock-close_operation"
+    ),
+    Event.AUTO_LOCK_LOCKED_OPERATION: f"{_ACCESS_CONTROL}/Auto_lock_locked_operation",
+    Event.SINGLE_USER_CODE_DELETED: f"{_ACCESS_CONTROL}/Single_user_code_deleted",
+    Event.NEW_USER_CODE_ADDED: f"{_ACCESS_CONTROL}/New_user_code_added",
+    Event.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE: (
+        f"{_ACCESS_CONTROL}/New_user_code_not_added_due_to_duplicate_code"
+    ),
+    Event.INVALID_CREDENTIAL_USED: f"{_ACCESS_CONTROL}/Invalid_credential_used",
+    Event.MANUALLY_ENTER_USER_ACCESS_CODE_EXCEEDS_CODE_LIMIT: (
+        f"{_ACCESS_CONTROL}/Manually_enter_user_access_code_exceeds_code_limit"
+    ),
+    Event.UNLOCK_BY_RF_WITH_INVALID_USER_CODE: (
+        f"{_ACCESS_CONTROL}/Unlock_by_RF_with_invalid_user_code"
+    ),
+    Event.LOCKED_BY_RF_WITH_INVALID_USER_CODE: (
+        f"{_ACCESS_CONTROL}/Locked_by_RF_with_invalid_user_code"
+    ),
+    Event.LOCK_OPERATION_WITH_USER_CODE: (
+        f"{_ACCESS_CONTROL}/Lock_operation_with_User_Code"
+    ),
+    Event.UNLOCK_OPERATION_WITH_USER_CODE: (
+        f"{_ACCESS_CONTROL}/Unlock_operation_with_User_Code"
+    ),
+}
+
+
+def access_control_payload(parameters: dict[str, Any] | None) -> str:
+    """
+    Build the payload the gateway publishes for an event's parameters.
+
+    The parameters are the value (``_parseNotification``,
+    api/lib/ZwaveClient.ts:9330-9338); an event with none leaves the value
+    undefined, which JSON drops from the envelope.
+    """
+    if parameters is None:
+        return json.dumps({"time": 1700000000000})
+    return wrapped(parameters)
+
+
+class TestAccessControlEvents:
+    """
+    A use counts as the credential its Access Control event names.
+
+    The cases are Z-Wave JS's, so both providers reach the same verdict on
+    the same notification.
+    """
+
+    def test_every_event_the_shared_rule_reports_is_recognized(self) -> None:
+        """An event Z-Wave JS reports as a use is one the gateway's topic names."""
+        assert set(ACCESS_CONTROL_PIN_USE_TO_LOCKED) <= set(
+            ACCESS_CONTROL_EVENT_BY_SEGMENT.values()
+        )
+
+    @pytest.mark.parametrize(("event", "parameters", "to_locked"), PIN_USE_CASES)
+    async def test_a_pin_use_fires_a_code_slot_event(
+        self,
+        hass: HomeAssistant,
+        zui_lock_subscribed: ZWaveJSUILock,
+        event: int,
+        parameters: dict[str, Any],
+        to_locked: bool,
+    ) -> None:
+        """A keypad operation, or one with User Code, is its user's PIN use."""
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
+
+        fire_node_value(
+            hass, ACCESS_CONTROL_TOPICS[event], access_control_payload(parameters)
+        )
+        await hass.async_block_till_done()
+
+        fired.assert_called_once_with(
+            code_slot=USER, to_locked=to_locked, credential_type=CredentialType.PIN
+        )
+
+    @pytest.mark.parametrize(("event", "parameters"), NOT_A_USE_CASES)
+    async def test_an_event_naming_no_credential_use_fires_nothing(
+        self,
+        hass: HomeAssistant,
+        zui_lock_subscribed: ZWaveJSUILock,
+        caplog: pytest.LogCaptureFixture,
+        event: int,
+        parameters: dict[str, Any] | None,
+    ) -> None:
+        """
+        Nothing records a use the lock did not report as a credential's.
+
+        The debug record naming the event is the one Z-Wave JS writes.
+        """
+        fired = MagicMock()
+        zui_lock_subscribed.async_fire_code_slot_event = fired
+        caplog.set_level(DEBUG)
+
+        fire_node_value(
+            hass, ACCESS_CONTROL_TOPICS[event], access_control_payload(parameters)
+        )
+        await hass.async_block_till_done()
+
+        fired.assert_not_called()
+        segment = ACCESS_CONTROL_TOPICS[event].rsplit("/", 1)[1]
+        assert any(
+            record.name == PROVIDERS_LOGGER
+            and record.levelno == DEBUG
+            and segment in record.getMessage()
+            for record in caplog.records
         )
 
 

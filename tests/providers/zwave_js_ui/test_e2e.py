@@ -1731,7 +1731,13 @@ class TestDuplicateRefusedByUserCodeLock:
 
         assert held_codes(hass, lock_entity_id).get(unmanaged_slot) == SlotCode.EMPTY
 
-    @pytest.mark.parametrize("parameters", [{"userId": HIDDEN_SLOT}], ids=["5"])
+    # A user that is no user identifier names neither the written slot nor
+    # no slot: 3.7 is not slot 3.
+    @pytest.mark.parametrize(
+        "parameters",
+        [{"userId": HIDDEN_SLOT}, {"userId": -1}, {"userId": "x"}, {"userId": 3.7}],
+        ids=["5", "negative", "text", "not_whole"],
+    )
     async def test_a_refusal_naming_another_slot_is_not_the_writes(
         self,
         hass: HomeAssistant,

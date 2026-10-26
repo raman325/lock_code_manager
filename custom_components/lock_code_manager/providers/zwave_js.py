@@ -36,6 +36,7 @@ from zwave_js_server.util.lock import get_code_slot_value, get_usercodes
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
+    ATTR_EVENT_LABEL,
     ATTR_HOME_ID,
     ATTR_NODE_ID,
     ATTR_PARAMETERS,
@@ -70,7 +71,13 @@ from ..model.exceptions import (
     LockOperationUnsupported,
 )
 from ._base import BaseLock
-from ._util import is_masked_code, parse_tag, refuses_write_in_flight
+from ._util import is_masked_code, parse_tag
+from ._zwave import (
+    ACCESS_CONTROL_PIN_USE_TO_LOCKED,
+    access_control_user,
+    answers_write_in_flight,
+    log_not_a_use,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -165,27 +172,6 @@ _ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE: dict[UserCredentialType, CredentialType] = {
     UserCredentialType.NFC: CredentialType.NFC,
     UserCredentialType.FACE_BIOMETRIC: CredentialType.FACE,
     UserCredentialType.FINGER_BIOMETRIC: CredentialType.FINGERPRINT,
-}
-
-
-# All known Access Control Notification CC events that indicate the lock is locked
-# or unlocked
-ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
-    True: (
-        AccessControlNotificationEvent.AUTO_LOCK_LOCKED_OPERATION,
-        AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION,
-        AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE,
-        AccessControlNotificationEvent.LOCKED_BY_RF_WITH_INVALID_USER_CODE,
-        AccessControlNotificationEvent.MANUAL_LOCK_OPERATION,
-        AccessControlNotificationEvent.RF_LOCK_OPERATION,
-    ),
-    False: (
-        AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION,
-        AccessControlNotificationEvent.MANUAL_UNLOCK_OPERATION,
-        AccessControlNotificationEvent.RF_UNLOCK_OPERATION,
-        AccessControlNotificationEvent.UNLOCK_BY_RF_WITH_INVALID_USER_CODE,
-        AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE,
-    ),
 }
 
 
@@ -1176,28 +1162,28 @@ class ZWaveJSLock(BaseLock):
             )
             return
 
-        params = evt.data.get(ATTR_PARAMETERS) or {}
-        code_slot = params.get("userId", 0)
+        named = access_control_user(evt.data.get(ATTR_PARAMETERS))
+        event = evt.data[ATTR_EVENT]
 
-        duplicate = (
+        if event == (
             AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
-        )
-        if evt.data[ATTR_EVENT] == duplicate and refuses_write_in_flight(
-            self._uc_write_slot, code_slot
-        ):
+        ) and answers_write_in_flight(self._uc_write_slot, named):
             self._uc_write_refused = True
             return
 
+        if (
+            to_locked := ACCESS_CONTROL_PIN_USE_TO_LOCKED.get(event)
+        ) is None or named.user is None:
+            log_not_a_use(
+                self.lock.entity_id,
+                f"{event} ({evt.data.get(ATTR_EVENT_LABEL)})",
+                named,
+            )
+            return
+
         self.async_fire_code_slot_event(
-            code_slot=code_slot,
-            to_locked=next(
-                (
-                    to_locked
-                    for to_locked, codes in ACCESS_CONTROL_NOTIFICATION_TO_LOCKED.items()
-                    if evt.data[ATTR_EVENT] in codes
-                ),
-                None,
-            ),
+            code_slot=named.user,
+            to_locked=to_locked,
             credential_type=CredentialType.PIN,
         )
 

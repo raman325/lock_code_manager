@@ -29,7 +29,11 @@ from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
 
-from homeassistant.components.event import ATTR_EVENT_TYPES, DOMAIN as EVENT_DOMAIN
+from homeassistant.components.event import (
+    ATTR_EVENT_TYPE,
+    ATTR_EVENT_TYPES,
+    DOMAIN as EVENT_DOMAIN,
+)
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import (
     ATTR_VALUE,
@@ -61,6 +65,8 @@ from homeassistant.helpers import entity_registry as er, issue_registry as ir
 from homeassistant.helpers.event import async_track_state_change_event
 
 from custom_components.lock_code_manager.const import (
+    ATTR_CREDENTIAL_TYPE,
+    ATTR_OPERATION,
     BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
@@ -108,6 +114,12 @@ from tests.common import (
     user_subentries,
 )
 from tests.conftest import async_trigger_sync_tick
+from tests.providers.zwave_access_control import (
+    DRIVER_EVENT_LABELS,
+    NOT_A_USE_CASES,
+    PIN_USE_CASES,
+    USER,
+)
 from tests.providers.zwave_js.conftest import (
     ZWAVE_JS_LCM_CONFIG_SLOTS,
     get_zwave_lock,
@@ -282,6 +294,97 @@ class TestEvents:
         after = hass.states.get(event_entity)
         assert after.state == before.state == STATE_UNKNOWN
         assert after.attributes == before.attributes
+
+
+# Both Z-Wave providers log a notification that is no use here.
+PROVIDERS_LOGGER = "custom_components.lock_code_manager.providers"
+
+
+class TestCredentialUses:
+    """
+    A use counts as the credential its Access Control event names.
+
+    Only a keypad operation or an operation with User Code naming its user
+    is a Personal Identification Number use. Nothing else the lock reports
+    is a use at all. The cases are shared with Z-Wave JS UI's tests.
+    """
+
+    @pytest.mark.parametrize(("event", "parameters", "to_locked"), PIN_USE_CASES)
+    async def test_a_pin_use_is_reported_as_a_pin(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        event: AccessControlNotificationEvent,
+        parameters: dict[str, Any],
+        to_locked: bool,
+    ) -> None:
+        """A keypad operation, or one with User Code, is its user's PIN use."""
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, fake_zwave_lock_entry, USER, EVENT_CREDENTIAL_USED
+        )
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_zwave_lock.notify_access_control(event, parameters)
+        await hass.async_block_till_done()
+
+        assert [
+            (
+                fired.data[ATTR_NAME],
+                fired.data[ATTR_CREDENTIAL_TYPE],
+                fired.data[ATTR_OPERATION],
+            )
+            for fired in used
+        ] == [
+            (
+                f"slot{USER}",
+                CredentialType.PIN,
+                CredentialOperation.from_to_locked(to_locked),
+            )
+        ]
+        assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == "pin"
+
+    @pytest.mark.parametrize(("event", "parameters"), NOT_A_USE_CASES)
+    async def test_an_event_naming_no_credential_use_is_not_reported(
+        self,
+        hass: HomeAssistant,
+        fake_zwave_lock: FakeZWaveLock,
+        fake_zwave_lock_entry: MockConfigEntry,
+        caplog: pytest.LogCaptureFixture,
+        event: AccessControlNotificationEvent,
+        parameters: dict[str, Any] | None,
+    ) -> None:
+        """
+        Nothing records a use the lock did not report as a credential's.
+
+        No event on the bus and none on the user's event entity, rather than
+        a PIN nobody typed, and nothing raised in the listener. The debug
+        record, naming the event, is what tells a notification left
+        unreported from one reported for no slot, which announces nothing
+        either.
+        """
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, fake_zwave_lock_entry, USER, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        caplog.set_level(logging.DEBUG)
+
+        fake_zwave_lock.notify_access_control(event, parameters)
+        await hass.async_block_till_done()
+
+        assert used == []
+        after = hass.states.get(event_entity)
+        assert (after.state, after.attributes) == (before.state, before.attributes)
+        assert [
+            record for record in caplog.records if record.levelno >= logging.ERROR
+        ] == []
+        assert any(
+            record.name == PROVIDERS_LOGGER
+            and record.levelno == logging.DEBUG
+            and DRIVER_EVENT_LABELS[event] in record.getMessage()
+            for record in caplog.records
+        )
 
 
 # A push lock is read only when asked, and Home Assistant debounces the asking:
@@ -1214,7 +1317,9 @@ class TestDuplicateRefusedByUserCodeLock:
         return len(fake_zwave_lock.sets)
 
     @pytest.mark.parametrize(
-        "parameters", [None, {"userId": 0}, {"userId": 2}], ids=["none", "0", "2"]
+        "parameters",
+        [None, {"userId": 0}, {"userId": None}, {"userId": 2}],
+        ids=["none", "0", "null", "2"],
     )
     async def test_a_refused_pin_disables_the_slot(
         self,
@@ -1370,13 +1475,6 @@ class TestDuplicateRefusedByUserCodeLock:
         )
         assert fake_zwave_lock.sets[written:] == [(2, "4321")]
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "#1655: a duplicate refusal the provider cannot pin on a write is "
-            "announced as a use of the slot it names"
-        ),
-    )
     async def test_a_refusal_is_never_a_use_of_a_code(
         self,
         hass: HomeAssistant,
@@ -1404,19 +1502,27 @@ class TestDuplicateRefusedByUserCodeLock:
 
         assert used == []
 
+    @pytest.mark.parametrize(
+        "parameters",
+        [{"userId": 5}, {"userId": -1}, {"userId": "x"}, {"userId": 2.7}],
+        ids=["5", "negative", "text", "not_whole"],
+    )
     async def test_a_refusal_naming_another_slot_is_not_the_writes(
         self,
         hass: HomeAssistant,
         fake_zwave_lock: FakeZWaveLock,
         fake_e2e_lock: ZWaveJSLock,
+        parameters: dict[str, Any],
     ) -> None:
         """
         A refusal naming a slot other than the one written is not pinned on it.
 
         Writes to a lock run one at a time, but a slot named outright is not
-        the written one: disabling it would guess.
+        the written one: disabling it would guess. A user that is no user
+        identifier is not the written slot either, nor is it a refusal
+        naming no slot: 2.7 is not slot 2.
         """
-        fake_zwave_lock.duplicate_parameters = {"userId": 5}
+        fake_zwave_lock.duplicate_parameters = parameters
 
         result = await fake_e2e_lock.async_set_usercode(2, "5555")
 
