@@ -161,16 +161,26 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.ScheduleUnlock: False,
 }
 
-# A use counts as the credential its operation event source names, and only
-# two sources name one: the keypad a Personal Identification Number, the Radio
-# Frequency Identification reader a card. Every other source -- a radio
-# frequency command, manual, indeterminate, or one outside the Door Lock
-# cluster such as the vendor extension 4 that zigbee-herdsman-converters names
-# "fingerprint" -- names no credential, so the use is not reported.
+# A use counts as the credential its operation event source names. The keypad
+# names a Personal Identification Number and the Radio Frequency
+# Identification reader a card. A radio frequency command names a PIN only
+# when it names the user whose PIN it carried (an unlock command sent with a
+# code); without a user it carried none. Every other source -- manual,
+# indeterminate, or one outside the Door Lock cluster such as the vendor
+# extension 4 that zigbee-herdsman-converters names "fingerprint" -- names no
+# credential, so the use is not reported.
 SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
     DoorLock.OperationEventSource.Keypad: CredentialType.PIN,
     DoorLock.OperationEventSource.RFID: CredentialType.RFID,
 }
+
+
+def _credential_presented(source: int, user_id: int) -> CredentialType | None:
+    """Return the credential an operation event's source names, or None."""
+    if source == DoorLock.OperationEventSource.RF:
+        return CredentialType.PIN if user_id > 0 else None
+    return SOURCE_TO_CREDENTIAL_TYPE.get(source)
+
 
 # Every kind an operation event can report.
 _REPORTABLE_CREDENTIAL_TYPES = frozenset(SOURCE_TO_CREDENTIAL_TYPE.values())
@@ -862,9 +872,9 @@ class ZHALock(BaseLock):
             user_id,
         )
 
-        if (credential_type := SOURCE_TO_CREDENTIAL_TYPE.get(source)) is None:
+        if (credential_type := _credential_presented(source, user_id)) is None:
             _LOGGER.debug(
-                "Lock %s: operation event source %d names no credential, so "
+                "Lock %s: operation event source %s names no credential, so "
                 "the use is not reported",
                 self.lock.entity_id,
                 source,

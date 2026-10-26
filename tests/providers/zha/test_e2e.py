@@ -1333,14 +1333,14 @@ class TestLockThatCannotReport:
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-def _unlock_from(door_lock: DoorLockStandIn, source: int) -> None:
-    """Deliver the lock's operation event: slot 1's user unlocked it from ``source``."""
+def _unlock_from(door_lock: DoorLockStandIn, source: int, user_id: int = 1) -> None:
+    """Deliver the lock's operation event: ``user_id`` unlocked it from ``source``."""
     event = lock_frame(
         door_lock.cluster,
         "operation_event_notification",
         operation_event_source=source,
         operation_event_code=DoorLock.OperationEvent.Unlock,
-        user_id=1,
+        user_id=user_id,
         pin="",
         local_time=0,
     )
@@ -1359,6 +1359,8 @@ class TestCredentialPresented:
         ("source", "expected"),
         [
             pytest.param(DoorLock.OperationEventSource.Keypad, "pin", id="keypad"),
+            # A PIN sent over the radio, naming the user whose PIN it is.
+            pytest.param(DoorLock.OperationEventSource.RF, "pin", id="rf_with_user"),
             pytest.param(DoorLock.OperationEventSource.RFID, "rfid", id="rfid"),
         ],
     )
@@ -1395,16 +1397,17 @@ class TestCredentialPresented:
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == expected
 
     @pytest.mark.parametrize(
-        "source",
+        ("source", "user_id"),
         [
-            pytest.param(DoorLock.OperationEventSource.RF, id="rf"),
-            pytest.param(DoorLock.OperationEventSource.Manual, id="manual"),
+            # A radio frequency command naming no user carried no PIN.
+            pytest.param(DoorLock.OperationEventSource.RF, 0, id="rf_without_user"),
+            pytest.param(DoorLock.OperationEventSource.Manual, 1, id="manual"),
             pytest.param(
-                DoorLock.OperationEventSource.Indeterminate, id="indeterminate"
+                DoorLock.OperationEventSource.Indeterminate, 1, id="indeterminate"
             ),
             # A vendor extension zigbee-herdsman-converters names "fingerprint"
             # (``lockSourceName``); the cluster does not define it.
-            pytest.param(4, id="vendor_4"),
+            pytest.param(4, 1, id="vendor_4"),
         ],
     )
     async def test_a_use_from_a_source_naming_no_credential_is_not_reported(
@@ -1414,15 +1417,18 @@ class TestCredentialPresented:
         door_lock: DoorLockStandIn,
         caplog: pytest.LogCaptureFixture,
         source: int,
+        user_id: int,
     ) -> None:
         """
         A use counts only as the credential its source names.
 
-        A radio frequency command, the thumb-turn and an indeterminate source
-        name no credential, and a source outside the Door Lock cluster's
-        names nothing this integration can classify, so none records a use:
-        no event on the bus and none on the user's event entity, rather than
-        a PIN the lock never said was typed.
+        A radio frequency command naming no user, the thumb-turn and an
+        indeterminate source name no credential, and a source outside the
+        Door Lock cluster's names nothing this integration can classify, so
+        none records a use: no event on the bus and none on the user's event
+        entity, rather than a PIN the lock never said was typed. The debug
+        record is what tells a use left unreported from one reported for no
+        slot, which announces nothing either.
         """
         await _run_ticks(hass)
         event_entity = slot_entity_id(
@@ -1432,7 +1438,7 @@ class TestCredentialPresented:
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
         caplog.set_level(logging.DEBUG, logger=ZHA_LOGGER)
 
-        _unlock_from(door_lock, source)
+        _unlock_from(door_lock, source, user_id)
         await hass.async_block_till_done()
 
         assert used == []
