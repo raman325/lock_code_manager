@@ -142,7 +142,7 @@ def _fire_pin_used(
     unlocked the door, True for one that locked it.
     """
     lock: BaseLock = config_entry.runtime_data.locks[lock_entity_id]
-    lock.async_fire_code_slot_event(slot, to_locked)
+    lock.async_fire_code_slot_event(slot, to_locked, credential_type=CredentialType.PIN)
 
 
 # A keypad and a gate Lock Code Manager manages neither of, which is the
@@ -813,7 +813,7 @@ async def test_limiter_spends_a_use_only_on_a_pin(
         "reported_credential_types",
         property(lambda _: frozenset({credential_type})),
     )
-    lock.async_fire_code_slot_event(1, False, credential_type)
+    lock.async_fire_code_slot_event(1, False, credential_type=credential_type)
     await hass.async_block_till_done()
     assert hass.states.get(SLOT_1_EVENT_ENTITY).attributes[ATTR_EVENT_TYPE] == (
         credential_type

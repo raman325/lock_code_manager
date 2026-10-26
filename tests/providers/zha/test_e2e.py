@@ -1,6 +1,7 @@
 """End-to-end tests for the ZHA provider through a real Lock Code Manager entry."""
 
 from datetime import timedelta
+import logging
 import re
 from typing import Any
 
@@ -85,6 +86,8 @@ from .helpers import (
     default_response,
     lock_frame,
 )
+
+ZHA_LOGGER = ZHALock.__module__
 
 CONFIGURED_PINS = {slot: config["pin"] for slot, config in ZHA_LCM_CONFIG_SLOTS.items()}
 # A PIN for slot 1 that differs from the one it is configured with.
@@ -1330,14 +1333,14 @@ class TestLockThatCannotReport:
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-def _unlock_from(door_lock: DoorLockStandIn, source: int) -> None:
-    """Deliver the lock's operation event: slot 1's user unlocked it from ``source``."""
+def _unlock_from(door_lock: DoorLockStandIn, source: int, user_id: int = 1) -> None:
+    """Deliver the lock's operation event: ``user_id`` unlocked it from ``source``."""
     event = lock_frame(
         door_lock.cluster,
         "operation_event_notification",
         operation_event_source=source,
         operation_event_code=DoorLock.OperationEvent.Unlock,
-        user_id=1,
+        user_id=user_id,
         pin="",
         local_time=0,
     )
@@ -1356,10 +1359,9 @@ class TestCredentialPresented:
         ("source", "expected"),
         [
             pytest.param(DoorLock.OperationEventSource.Keypad, "pin", id="keypad"),
-            pytest.param(DoorLock.OperationEventSource.RF, "pin", id="rf"),
+            # A PIN sent over the radio, naming the user whose PIN it is.
+            pytest.param(DoorLock.OperationEventSource.RF, "pin", id="rf_with_user"),
             pytest.param(DoorLock.OperationEventSource.RFID, "rfid", id="rfid"),
-            # A vendor extension zigbee-herdsman-converters names fingerprint.
-            pytest.param(4, "fingerprint", id="fingerprint"),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -1384,7 +1386,6 @@ class TestCredentialPresented:
             hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
         )
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPES] == [
-            "fingerprint",
             "pin",
             "rfid",
         ]
@@ -1394,6 +1395,61 @@ class TestCredentialPresented:
 
         assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == [expected]
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == expected
+
+    @pytest.mark.parametrize(
+        ("source", "user_id"),
+        [
+            # A radio frequency command naming no user carried no PIN.
+            pytest.param(DoorLock.OperationEventSource.RF, 0, id="rf_without_user"),
+            pytest.param(DoorLock.OperationEventSource.Manual, 1, id="manual"),
+            pytest.param(
+                DoorLock.OperationEventSource.Indeterminate, 1, id="indeterminate"
+            ),
+            # A vendor extension zigbee-herdsman-converters names "fingerprint"
+            # (``lockSourceName``); the cluster does not define it.
+            pytest.param(4, 1, id="vendor_4"),
+        ],
+    )
+    async def test_a_use_from_a_source_naming_no_credential_is_not_reported(
+        self,
+        hass: HomeAssistant,
+        lcm_config_entry: MockConfigEntry,
+        door_lock: DoorLockStandIn,
+        caplog: pytest.LogCaptureFixture,
+        source: int,
+        user_id: int,
+    ) -> None:
+        """
+        A use counts only as the credential its source names.
+
+        A radio frequency command naming no user, the thumb-turn and an
+        indeterminate source name no credential, and a source outside the
+        Door Lock cluster's names nothing this integration can classify, so
+        none records a use: no event on the bus and none on the user's event
+        entity, rather than a PIN the lock never said was typed. The debug
+        record is what tells a use left unreported from one reported for no
+        slot, which announces nothing either.
+        """
+        await _run_ticks(hass)
+        event_entity = slot_entity_id(
+            hass, EVENT_DOMAIN, lcm_config_entry, 1, EVENT_CREDENTIAL_USED
+        )
+        before = hass.states.get(event_entity)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+        caplog.set_level(logging.DEBUG, logger=ZHA_LOGGER)
+
+        _unlock_from(door_lock, source, user_id)
+        await hass.async_block_till_done()
+
+        assert used == []
+        after = hass.states.get(event_entity)
+        assert (after.state, after.attributes) == (before.state, before.attributes)
+        lock_id = _zha_lock(lcm_config_entry).lock.entity_id
+        assert (logging.DEBUG, (lock_id, int(source))) in [
+            (record.levelno, record.args)
+            for record in caplog.records
+            if record.name == ZHA_LOGGER
+        ]
 
 
 def _no_answer(request: Any) -> Frame | None:
@@ -1453,8 +1509,7 @@ class TestCardReader:
         announced on the bus. A zero is the lock not saying, as with its PIN
         count; that and no answer keep the reader listed, because recording
         a kind the lock cannot produce costs nothing and dropping a real card
-        use would not. A fingerprint has no attribute to ask about and is
-        always listed.
+        use would not.
 
         Asked in the same read as the programming event masks, and each
         answer stands on its own: a lock refusing one says nothing of the
@@ -1474,7 +1529,7 @@ class TestCardReader:
         )
         before = hass.states.get(event_entity)
         assert before.attributes[ATTR_EVENT_TYPES] == (
-            ["fingerprint", "pin", "rfid"] if reads_cards else ["fingerprint", "pin"]
+            ["pin", "rfid"] if reads_cards else ["pin"]
         )
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 

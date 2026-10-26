@@ -735,6 +735,8 @@ class ZWaveJSUILock(BaseMqttLock):
         ):
             log_not_a_use(self.lock.entity_id, event_label, named)
             return
+        # Only the keypad's lock and unlock operations reach here, so the
+        # credential is a Personal Identification Number.
         self.async_fire_code_slot_event(
             code_slot=named.user,
             to_locked=to_locked,

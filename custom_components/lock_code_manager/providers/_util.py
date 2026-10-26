@@ -2,8 +2,10 @@
 Shared helpers for provider implementations.
 
 Provider-internal utilities that don't belong in the integration-wide
-``util.py``: withheld-code recognition, and MQTT discovery lookups shared
-by the providers that reach their locks through an MQTT bridge, plus the
+``util.py``: withheld-code recognition, the rule the Zigbee providers share
+for which credential a Door Lock operation event's source names, and MQTT
+discovery lookups shared by the providers that reach their locks through an
+MQTT bridge, plus the
 slot-tagging used by providers whose lock APIs identify codes by user-name
 rather than by slot number (Schlage, Akuvox, and -- once the unified-user
 migration lands -- Matter and Z-Wave User Credential CC).
@@ -43,7 +45,7 @@ with ``parse_full_tag``, which recognizes only the canonical and legacy
 formats.
 """
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Hashable, Iterable, Mapping
 import re
 from typing import Any
 
@@ -51,7 +53,7 @@ from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ..model.credentials import User
+from ..model.credentials import CredentialType, User
 from .const import LOGGER
 
 _LEGACY_SLOT_TAG_RE = re.compile(r"^\[LCM:(\d+)\]\s*(.*)")
@@ -192,6 +194,29 @@ def refuses_write_in_flight(write_slot: int | None, named_slot: int | None) -> b
     ours to pin on a slot.
     """
     return write_slot is not None and named_slot in (None, 0, write_slot)
+
+
+def credential_named_by_source[S: Hashable](
+    source: S,
+    user_id: int,
+    *,
+    names: Mapping[S, CredentialType],
+    radio: Collection[S],
+) -> CredentialType | None:
+    """
+    Return the credential a Zigbee lock use's source names, or None for none.
+
+    A use counts as the credential its source names, and is not reported
+    when that is none. ``names`` holds the sources that name a credential on
+    their own, such as the keypad a Personal Identification Number. A
+    ``radio`` source, a radio frequency command, names a Personal
+    Identification Number only when it names the user whose code it carried
+    (an unlock command sent with one); without a user it carried none. Each
+    provider keeps its own table, in the numbers or names its lock reports.
+    """
+    if source in radio:
+        return CredentialType.PIN if user_id > 0 else None
+    return names.get(source)
 
 
 def is_masked_code(code: str) -> bool:

@@ -43,7 +43,7 @@ from ..model.exceptions import (
     LockOperationFailed,
 )
 from ._base import BaseLock
-from ._util import is_masked_code
+from ._util import credential_named_by_source, is_masked_code
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -161,18 +161,24 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.ScheduleUnlock: False,
 }
 
-# The credential an operation event's source says was presented. Radio
-# Frequency Identification is the Door Lock cluster's own; 4 is a vendor
-# extension zigbee-herdsman-converters names "fingerprint". Every other source
-# -- the keypad, a radio frequency command carrying a Personal Identification
-# Number, manual, indeterminate -- reports a Personal Identification Number.
+# A use counts as the credential its operation event source names. The keypad
+# names a Personal Identification Number and the Radio Frequency
+# Identification reader a card. A radio frequency command (``_RADIO_SOURCES``)
+# names a Personal Identification Number only when it names the user whose
+# code it carried (an unlock command sent with one); without a user it carried
+# none. Every other source -- manual, indeterminate, or one outside the Door
+# Lock cluster such as the vendor extension 4 that zigbee-herdsman-converters
+# names "fingerprint" -- names no credential, so the use is not reported.
 SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
+    DoorLock.OperationEventSource.Keypad: CredentialType.PIN,
     DoorLock.OperationEventSource.RFID: CredentialType.RFID,
-    4: CredentialType.FINGERPRINT,
 }
 
-# Every kind an operation event can report: whatever a source maps to, and the
-# PIN every other source reports.
+
+_RADIO_SOURCES = frozenset({DoorLock.OperationEventSource.RF})
+
+# Every kind an operation event can report: the table's, and the Personal
+# Identification Number a radio frequency command naming its user carries.
 _REPORTABLE_CREDENTIAL_TYPES = frozenset(
     {CredentialType.PIN, *SOURCE_TO_CREDENTIAL_TYPE.values()}
 )
@@ -257,11 +263,10 @@ class ZHALock(BaseLock):
         """
         Return every kind an operation event can report, less a reader it lacks.
 
-        The lock is asked during setup whether it reads cards. A fingerprint
-        is a vendor extension with no attribute to ask about, so it is always
-        listed. A card is left out only when the lock said it has no reader:
-        listing a kind the lock cannot produce costs nothing, and dropping a
-        real card use would not.
+        The lock is asked during setup whether it reads cards. A card is
+        left out only when the lock said it has no reader: listing a kind the
+        lock cannot produce costs nothing, and dropping a real card use would
+        not.
         """
         if self._reads_cards is False:
             return _REPORTABLE_CREDENTIAL_TYPES - {CredentialType.RFID}
@@ -865,12 +870,26 @@ class ZHALock(BaseLock):
             user_id,
         )
 
-        to_locked = OPERATION_TO_LOCKED.get(event_code)
+        if (
+            credential_type := credential_named_by_source(
+                source,
+                user_id,
+                names=SOURCE_TO_CREDENTIAL_TYPE,
+                radio=_RADIO_SOURCES,
+            )
+        ) is None:
+            _LOGGER.debug(
+                "Lock %s: operation event source %s names no credential, so "
+                "the use is not reported",
+                self.lock.entity_id,
+                source,
+            )
+            return
 
         self.async_fire_code_slot_event(
             code_slot=user_id if user_id > 0 else None,
-            to_locked=to_locked,
-            credential_type=SOURCE_TO_CREDENTIAL_TYPE.get(source, CredentialType.PIN),
+            to_locked=OPERATION_TO_LOCKED.get(event_code),
+            credential_type=credential_type,
         )
 
     # -- Programming event support detection ---------------------------------

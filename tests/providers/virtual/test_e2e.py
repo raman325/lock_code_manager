@@ -351,7 +351,7 @@ class TestCredentialUseRecording:
         )
         assert lock.supports_code_slot_events is False
 
-        lock.async_fire_code_slot_event(1, False)
+        lock.async_fire_code_slot_event(1, False, credential_type=CredentialType.PIN)
         await hass.async_block_till_done()
 
         recorded = hass.states.get(SLOT_1_EVENT_ENTITY)
@@ -526,7 +526,9 @@ class TestASlotHeldByAnEntryThatSyncsNothing:
         events: list[Event] = []
         hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, events.append)
 
-        get_virtual_lock(hass, lcm_config_entry).async_fire_code_slot_event(3, False)
+        get_virtual_lock(hass, lcm_config_entry).async_fire_code_slot_event(
+            3, False, credential_type=CredentialType.PIN
+        )
         await hass.async_block_till_done()
 
         assert [

@@ -784,6 +784,7 @@ async def test_fire_code_slot_event_fires_the_unified_event(
     lock_provider.async_fire_code_slot_event(
         code_slot=1,
         to_locked=False,
+        credential_type=CredentialType.PIN,
     )
     await hass.async_block_till_done()
 
@@ -833,7 +834,9 @@ async def test_fire_code_slot_event_names_the_user_from_the_configuration(
     lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
     unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
 
-    lock_provider.async_fire_code_slot_event(code_slot=1, to_locked=False)
+    lock_provider.async_fire_code_slot_event(
+        code_slot=1, to_locked=False, credential_type=CredentialType.PIN
+    )
     await hass.async_block_till_done()
 
     assert unified[0].data[ATTR_NAME] == "test1"
@@ -856,9 +859,32 @@ async def test_fire_code_slot_event_takes_no_attribution_arguments(
         lock_provider.async_fire_code_slot_event(
             code_slot=1,
             to_locked=False,
+            credential_type=CredentialType.PIN,
             source="sensor.keypad",
             target="cover.garage",
         )
+
+
+async def test_fire_code_slot_event_requires_the_credential_presented(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """A provider must say which credential the lock reported; none is assumed.
+
+    A use whose credential the lock did not name is not a PIN use, so the
+    funnel takes no default a provider could fall back on by leaving it out.
+    """
+    lock_provider = lock_code_manager_config_entry.runtime_data.locks[LOCK_1_ENTITY_ID]
+    unified = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+    with pytest.raises(TypeError):
+        lock_provider.async_fire_code_slot_event(  # type: ignore[call-arg]
+            code_slot=1, to_locked=False
+        )
+    await hass.async_block_till_done()
+
+    assert unified == []
 
 
 async def test_fire_code_slot_event_announces_nothing_when_unattributed(
@@ -881,6 +907,7 @@ async def test_fire_code_slot_event_announces_nothing_when_unattributed(
     lock_provider.async_fire_code_slot_event(
         code_slot=99,
         to_locked=False,
+        credential_type=CredentialType.PIN,
     )
     await hass.async_block_till_done()
 

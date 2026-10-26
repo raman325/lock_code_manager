@@ -1604,7 +1604,11 @@ class MockLCMPushLock(MockLCMLock):
     def _async_on_lock_use(self, event: Event) -> None:
         """Record a code use the lock integration reported on this lock."""
         if event.data[ATTR_ENTITY_ID] == self.lock.entity_id:
-            self.async_fire_code_slot_event(event.data[CONF_SLOT], to_locked=False)
+            self.async_fire_code_slot_event(
+                event.data[CONF_SLOT],
+                to_locked=False,
+                credential_type=CredentialType.PIN,
+            )
 
 
 # What the mock lock integration fires when a code is used on one of its locks;

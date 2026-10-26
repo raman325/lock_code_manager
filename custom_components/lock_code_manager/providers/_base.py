@@ -2048,16 +2048,17 @@ class BaseLock:
         self,
         code_slot: int | None = None,
         to_locked: bool | None = None,
-        credential_type: CredentialType = CredentialType.PIN,
+        *,
+        credential_type: CredentialType,
     ) -> None:
         """
         Record that a credential on this lock was used.
 
-        Sub-classes should call this whenever a code slot is used, passing
-        the kind of credential the lock said was presented. PIN is the
-        default because it is the only kind most locks can report; a
-        provider that can tell a card or a fingerprint apart says so, and
-        the use is still this slot's user's.
+        Sub-classes call this whenever a code slot is used, passing the kind
+        of credential the lock said was presented. There is no default: a use
+        counts as the credential its lock names, so a provider whose lock
+        named none does not call this at all rather than letting it pass for
+        a Personal Identification Number.
 
         The single funnel every provider goes through, so it is also where
         ``BUS_EVENT_CREDENTIAL_USED`` is fired: every provider gets it
