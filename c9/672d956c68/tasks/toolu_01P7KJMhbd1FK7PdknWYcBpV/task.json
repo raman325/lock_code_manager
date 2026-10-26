@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01P7KJMhbd1FK7PdknWYcBpV",
+  "agent_id": "a75a6e4bfb2f82bb0",
+  "subagent_type": "general-purpose",
+  "task_description": "Z-Wave: only real credential uses",
+  "token_usage": {
+    "input_tokens": 260,
+    "cache_creation_tokens": 636730,
+    "cache_read_tokens": 26339413,
+    "output_tokens": 127058,
+    "api_call_count": 130
+  },
+  "started_at": "2026-10-26T10:03:44.476117-04:00",
+  "completed_at": "2026-10-26T11:27:25.170509-04:00"
+}
