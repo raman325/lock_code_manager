@@ -17,6 +17,7 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
+from homeassistant.config_entries import SOURCE_IGNORE
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     CONF_CONDITION,
@@ -47,17 +48,29 @@ from custom_components.lock_code_manager.model.credentials import (
     CredentialTypeCapability,
     LockCapabilities,
 )
-from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.queries import (
+    get_entry_config,
+    subentry_id_for_slot,
+)
 
 from .common import (
+    LEAK_MARKER,
     LOCK_1_ENTITY_ID,
     LOCK_2_ENTITY_ID,
+    OVERLONG_PIN,
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_PIN_ENTITY,
     SLOT_2_ACTIVE_ENTITY,
     SLOT_2_ENABLED_ENTITY,
     SLOT_2_PIN_ENTITY,
+    TURNED_OFF_USERS_PIN,
+    UNNUMBERED_USERS_PIN,
+    async_setup_lcm_entry,
+    async_write_slot_pin,
+    entry_holding_pins_on,
+    unnumbered_user_subentry,
+    user_subentries,
     write_entry_config,
 )
 
@@ -1132,3 +1145,207 @@ async def test_unload_clears_registry_when_coordinator_stop_raises_before_cleanu
         for record in caplog.records
         if record.levelname == "ERROR"
     )
+
+
+# The one refusal for a PIN another user has, naming nobody.
+PIN_TAKEN = "Another user already has this PIN"
+
+
+async def _async_set_pin(hass: HomeAssistant, entity_id: str, value: str) -> None:
+    """Set a PIN through its text entity, as the dashboard does."""
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: value},
+        target={ATTR_ENTITY_ID: entity_id},
+        blocking=True,
+    )
+
+
+@pytest.mark.parametrize("value", ["5678", " 5678 "])
+async def test_another_users_pin_is_refused(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    value: str,
+) -> None:
+    """
+    Two users sharing a PIN: whoever types it opens the door as either.
+
+    Compared stripped, as the PIN is stored. The error names neither the
+    other user nor the value: anyone who can set a PIN could otherwise learn
+    whose PIN a guess is.
+    """
+    with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$") as refused:
+        await _async_set_pin(hass, SLOT_1_PIN_ENTITY, value)
+
+    assert "5678" not in str(refused.value)
+    assert "test2" not in str(refused.value)
+    assert refused.value.translation_key == "pin_not_unique"
+    assert not refused.value.translation_placeholders
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
+
+
+async def test_a_turned_off_users_pin_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
+) -> None:
+    """
+    A turned-off user's PIN is still theirs, so it is still a duplicate.
+
+    Nothing checks for duplicates again when the user is turned back on.
+    """
+    await hass.services.async_call(
+        SWITCH_DOMAIN,
+        SERVICE_TURN_OFF,
+        target={ATTR_ENTITY_ID: SLOT_1_ENABLED_ENTITY},
+        blocking=True,
+    )
+    config = get_entry_config(lock_code_manager_config_entry)
+    assert config.slot(1)[CONF_ENABLED] is False
+    assert config.slot(1)[CONF_PIN] == "1234"
+
+    with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$"):
+        await _async_set_pin(hass, SLOT_2_PIN_ENTITY, "1234")
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(2)[CONF_PIN] == "5678"
+
+
+@pytest.mark.parametrize("stored", ["1234", " 1234 "])
+async def test_an_unchanged_pin_shared_with_another_user_is_left_alone(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    stored: str,
+) -> None:
+    """
+    A duplicate saved before this rule is not refused until it changes.
+
+    The user's own PIN is compared as it is read, stripped, so one stored
+    with padding is the same PIN submitted without it.
+    """
+    entry = lock_code_manager_config_entry
+    await async_write_slot_pin(hass, entry, 2, "1234")
+    await async_write_slot_pin(hass, entry, 1, stored)
+    assert entry.subentries[subentry_id_for_slot(entry, 1)].data[CONF_PIN] == stored
+
+    await _async_set_pin(hass, SLOT_1_PIN_ENTITY, "1234")
+
+    assert get_entry_config(entry).slot(1)[CONF_PIN] == "1234"
+
+
+async def test_a_pin_held_by_a_user_with_no_slot_number_is_refused(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """Every user in the entry counts, numbered or not."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: [LOCK_1_ENTITY_ID]},
+        subentries_data=[
+            *user_subentries({1: {CONF_NAME: "Ann", CONF_ENABLED: False}}),
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_PIN: "1234", CONF_ENABLED: True}
+            ),
+        ],
+        unique_id="unplaced-duplicate",
+        version=5,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$"):
+        await coordinator.async_request_pin_update("1234")
+    await coordinator.async_request_pin_update("4321")
+
+    assert get_entry_config(entry).slot(1)[CONF_PIN] == "4321"
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_pin_longer_than_a_state_is_refused(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    Over Home Assistant's 255-character state limit, refused before it is kept.
+
+    Kept, it would make every later state write of its entity raise, quoting
+    it. Home Assistant's ``text.set_value`` refuses it before the entity sees
+    it, so this is the gate for every other way in.
+    """
+    coordinator = lock_code_manager_config_entry.runtime_data.slot_coordinators[1]
+
+    with pytest.raises(
+        ServiceValidationError, match="^PIN may be at most 255 characters$"
+    ) as refused:
+        await coordinator.async_request_pin_update(OVERLONG_PIN)
+    await hass.async_block_till_done()
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == "1234"
+    assert refused.value.translation_key == "pin_too_long"
+    assert not refused.value.translation_placeholders
+    assert LEAK_MARKER not in str(refused.value)
+    assert LEAK_MARKER not in caplog.text
+
+    await coordinator.async_request_pin_update("1" * 255)
+
+    assert get_entry_config(lock_code_manager_config_entry).slot(1)[CONF_PIN] == (
+        "1" * 255
+    )
+
+
+# Another entry on the lock this test's entry has, or on a lock it does not.
+SHARES_A_LOCK = [
+    pytest.param([LOCK_1_ENTITY_ID], True, id="shares a lock"),
+    pytest.param([LOCK_2_ENTITY_ID], False, id="no lock in common"),
+]
+
+
+@pytest.mark.parametrize(("other_locks", "refused"), SHARES_A_LOCK)
+@pytest.mark.parametrize("pin", [TURNED_OFF_USERS_PIN, UNNUMBERED_USERS_PIN])
+async def test_a_pin_held_in_another_entry_on_a_shared_lock_is_refused(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    other_locks: list[str],
+    refused: bool,
+    pin: str,
+) -> None:
+    """
+    Two entries on one lock put their PINs on the same keypad.
+
+    So a PIN a user of the other entry holds is refused, turned off or
+    without a slot number as within an entry. An entry with no lock in
+    common is a different door.
+    """
+    other = entry_holding_pins_on(other_locks)
+    other.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(other.entry_id)
+    entry = await async_setup_lcm_entry(hass, unique_id="mine")
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    if refused:
+        with pytest.raises(ServiceValidationError, match=f"^{PIN_TAKEN}$"):
+            await coordinator.async_request_pin_update(pin)
+        assert get_entry_config(entry).slot(1)[CONF_PIN] == "1234"
+    else:
+        await coordinator.async_request_pin_update(pin)
+        assert get_entry_config(entry).slot(1)[CONF_PIN] == pin
+
+    for loaded in (entry, other):
+        await hass.config_entries.async_unload(loaded.entry_id)
+
+
+async def test_an_ignored_entry_on_the_lock_holds_no_pin(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """An entry the user ignored is not set up, and never puts PINs on a lock."""
+    entry_holding_pins_on([LOCK_1_ENTITY_ID], source=SOURCE_IGNORE).add_to_hass(hass)
+    entry = await async_setup_lcm_entry(hass, unique_id="mine")
+    coordinator = entry.runtime_data.slot_coordinators[1]
+
+    await coordinator.async_request_pin_update(TURNED_OFF_USERS_PIN)
+
+    assert get_entry_config(entry).slot(1)[CONF_PIN] == TURNED_OFF_USERS_PIN
+    await hass.config_entries.async_unload(entry.entry_id)

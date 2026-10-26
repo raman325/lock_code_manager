@@ -85,3 +85,24 @@ class TestGeneratePin:
         with patch.object(pin_generator, "is_unsafe_pin", return_value=True):
             with pytest.raises(RuntimeError, match="after 100 attempts"):
                 generate_pin()
+
+
+def _digits(*pins: str):
+    """Patch the random source to spell out ``pins``, one after another."""
+    return patch.object(
+        pin_generator.secrets,
+        "randbelow",
+        side_effect=[int(digit) for pin in pins for digit in pin],
+    )
+
+
+def test_a_pin_to_avoid_is_drawn_again() -> None:
+    """A candidate in ``avoid`` is not returned, as an unsafe one is not."""
+    with _digits("2468", "1397"):
+        assert generate_pin(4, avoid={"2468"}) == "1397"
+
+
+def test_nothing_to_avoid_keeps_the_first_safe_pin() -> None:
+    """Without ``avoid`` the generator is what it was."""
+    with _digits("2468"):
+        assert generate_pin(4) == "2468"

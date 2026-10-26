@@ -17,14 +17,24 @@ from ..const import (
     DOMAIN,
     EXCLUDED_CONDITION_PLATFORMS,
 )
-from ..model.config import EntryConfig, async_write_entry_config
+from ..model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    held_pins,
+    pin_too_long,
+)
 from ..model.credentials import MANAGED_CREDENTIAL_TYPES, CredentialType
 from ..model.events import (
     CredentialOperation,
     async_fire_credential_used,
 )
 from ..model.names import identity, name_error, normalize_name
-from ..model.queries import get_entry_config, get_loaded_config_entry
+from ..model.pin_generator import generate_pin
+from ..model.queries import (
+    get_entry_config,
+    get_loaded_config_entry,
+    users_on_locks,
+)
 from ..sync.registry import SlotTaken
 from .allocation import SlotAllocationError, async_allocate_for
 from .locks import get_managed_lock
@@ -473,6 +483,42 @@ async def async_disable_user(
     await coordinator.async_request_active_toggle(False)
 
 
+def generate_pin_for(
+    hass: HomeAssistant,
+    length: int,
+    *,
+    config_entry_id: str | None = None,
+    config_entry_title: str | None = None,
+) -> str:
+    """
+    Generate a PIN, one no user on the entry's locks has when given an entry.
+
+    A script that generates a PIN and then sets it would otherwise fail at
+    random on a PIN somebody already has. Without an entry nothing is held
+    against it.
+
+    Bounded like the generator: when every draw is refused, with or without
+    an entry, the refusal names the length asked for, never a PIN.
+    """
+    held: set[str] = set()
+    failure = "pin_generation_failed"
+    if config_entry_id is not None or config_entry_title is not None:
+        config_entry = get_loaded_config_entry(
+            hass, config_entry_id, config_entry_title
+        )
+        config = get_entry_config(config_entry)
+        held = held_pins(users_on_locks(hass, config.users.values(), config.locks))
+        failure = "pin_generation_exhausted"
+    try:
+        return generate_pin(length, avoid=held)
+    except RuntimeError as err:
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key=failure,
+            translation_placeholders={"length": str(length)},
+        ) from err
+
+
 async def async_add_users(
     hass: HomeAssistant,
     users: list[dict[str, Any]],
@@ -496,6 +542,9 @@ async def async_add_users(
     config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
     config = get_entry_config(config_entry)
 
+    # The PINs on the entry's locks, its own and other entries' users': each
+    # newcomer's is added as the batch proceeds.
+    held = held_pins(users_on_locks(hass, config.users.values(), config.locks))
     additions: dict[str, dict[str, Any]] = {}
     for entry in users:
         name = entry[CONF_NAME]
@@ -518,12 +567,30 @@ async def async_add_users(
         # without something to program.
         if enabled and not pin:
             raise ServiceValidationError(f"{name!r} cannot be enabled without a PIN")
+        if pin and pin_too_long(pin):
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="user_pin_too_long",
+                translation_placeholders={"name": name},
+            )
+        # Checked against the batch as well as the entry and the entries
+        # sharing its locks, turned-off users included: a PIN two users share
+        # opens the door as either of them.
+        if pin in held:
+            # Names the user being added, the caller's own input; never who
+            # already has the PIN.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="user_pin_not_unique",
+                translation_placeholders={"name": name},
+            )
         if condition:
             _async_validate_condition(hass, condition)
 
         user: dict[str, Any] = {CONF_ENABLED: enabled}
         if pin:
             user[CONF_PIN] = pin
+            held.add(pin)
         if condition:
             user[CONF_CONDITION] = condition
         additions[name] = user

@@ -21,8 +21,11 @@ from custom_components.lock_code_manager.model.config import (
     EntryConfigDiff,
     build_slot_device_identifier,
     build_slot_unique_id,
+    held_pins,
     parse_slot_device_identifier,
     parse_slot_unique_id,
+    pin_held,
+    pin_too_long,
 )
 from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import (
@@ -838,3 +841,44 @@ def test_a_non_string_stored_pin_is_left_alone() -> None:
     )
     assert config.slot(1)["pin"] == 1234
     assert not isinstance(config.slot(1)["pin"], str)
+
+
+def test_held_pins_are_read_stripped() -> None:
+    """Padding on a stored PIN is not part of it."""
+    users = [{CONF_PIN: "9999"}, {CONF_PIN: " 1234 "}, {CONF_PIN: "5678"}]
+
+    assert held_pins(users) == {"9999", "1234", "5678"}
+
+
+def test_held_pins_leave_out_no_pin() -> None:
+    """No PIN is not a PIN two users can share."""
+    users = [{CONF_PIN: ""}, {CONF_PIN: "   "}, {}, {CONF_PIN: None}]
+
+    assert held_pins(users) == set()
+
+
+def test_a_pin_fits_in_a_state() -> None:
+    """
+    At most Home Assistant's 255-character state limit.
+
+    A longer PIN would make its text entity's state raise, quoting it.
+    """
+    assert not pin_too_long("1" * 255)
+    assert pin_too_long("1" * 256)
+
+
+def test_held_pins_read_a_pin_stored_as_a_number() -> None:
+    """A legacy PIN stored as a number is the PIN typed as text."""
+    assert held_pins([{CONF_PIN: 1234}]) == {"1234"}
+
+
+def test_pin_held_reads_stored_pins_as_held_pins_does() -> None:
+    """Padded or stored as a number, a stored PIN is the PIN typed."""
+    assert pin_held([{CONF_PIN: "9999"}, {CONF_PIN: " 1234 "}], "1234")
+    assert pin_held([{CONF_PIN: 1234}], "1234")
+    assert not pin_held([{CONF_PIN: "9999"}], "1234")
+
+
+def test_pin_held_finds_nobody_for_no_pin() -> None:
+    """No PIN is not a PIN two users can share."""
+    assert not pin_held([{CONF_PIN: ""}, {}, {CONF_PIN: None}], "")

@@ -1,6 +1,6 @@
 """Config entry data types for lock_code_manager."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 import logging
 from types import MappingProxyType
@@ -11,7 +11,7 @@ from homeassistant.config_entries import (
     ConfigSubentry,
     ConfigSubentryData,
 )
-from homeassistant.const import CONF_NAME, CONF_PIN
+from homeassistant.const import CONF_NAME, CONF_PIN, MAX_LENGTH_STATE_STATE
 from homeassistant.core import HomeAssistant, callback
 
 from ..const import CONF_LOCKS, CONF_SLOT, CONF_SLOTS, CONF_USERS, SUBENTRY_TYPE_USER
@@ -54,6 +54,54 @@ def _normalized_user(user: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(pin := normalized.get(CONF_PIN), str):
         normalized[CONF_PIN] = pin.strip()
     return normalized
+
+
+def pin_too_long(pin: str) -> bool:
+    """
+    Return whether ``pin`` is too long to store.
+
+    A PIN is shown as a Home Assistant state -- its text entity and each
+    lock's PIN sensor -- and a state longer than Home Assistant allows is
+    refused with an error that quotes it.
+    """
+    return len(pin) > MAX_LENGTH_STATE_STATE
+
+
+def stored_pin(user: Mapping[str, Any]) -> str:
+    """
+    Return a user's stored PIN as the text it would be typed as.
+
+    Stripped, and a legacy PIN stored as a number read as its digits: it is
+    compared with what somebody types. No PIN reads as empty.
+    """
+    pin = user.get(CONF_PIN)
+    return "" if pin is None else str(pin).strip()
+
+
+def held_pins(users: Iterable[Mapping[str, Any]]) -> set[str]:
+    """
+    Return the PINs ``users`` hold, each as ``stored_pin`` reads it.
+
+    Two users sharing a PIN: whoever types it is recorded as either, and
+    turning one off leaves it working for the other. So a turned-off user
+    still holds their PIN, as does one with no slot number. No PIN is not a
+    PIN anybody holds.
+
+    A set of PINs, never who holds them: whoever can set a PIN could
+    otherwise learn whose PIN a guess is. Built once per check, and a batch
+    adds each accepted PIN to it.
+    """
+    return {pin for user in users if (pin := stored_pin(user))}
+
+
+def pin_held(users: Iterable[Mapping[str, Any]], pin: str) -> bool:
+    """
+    Return whether any of ``users`` holds ``pin``, stopping at the first.
+
+    For one PIN checked once; a batch builds ``held_pins`` instead. No PIN is
+    not a PIN anybody holds.
+    """
+    return bool(pin) and any(stored_pin(user) == pin for user in users)
 
 
 @dataclass(frozen=True, slots=True)

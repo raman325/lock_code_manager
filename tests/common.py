@@ -102,6 +102,7 @@ from custom_components.lock_code_manager.model.exceptions import (
     LockDisconnected,
     LockOperationFailed,
 )
+from custom_components.lock_code_manager.model.queries import get_entry_config
 from custom_components.lock_code_manager.model.slot_assignment import identity
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.sync.worker import LockWorker
@@ -824,6 +825,23 @@ async def async_set_slot_pin(
         },
         blocking=True,
     )
+
+
+async def async_write_slot_pin(
+    hass: HomeAssistant, config_entry: ConfigEntry, slot_num: int, pin: str
+) -> None:
+    """
+    Write a slot's PIN into the configuration, past the entity's checks.
+
+    For a configuration the entity would refuse, such as one saved before a
+    rule existed: the lock sees it through the entry's update listener.
+    """
+    async_write_entry_config(
+        hass,
+        config_entry,
+        get_entry_config(config_entry).with_slot_field_set(slot_num, CONF_PIN, pin),
+    )
+    await hass.async_block_till_done()
 
 
 async def async_switch_slot(
@@ -1979,6 +1997,50 @@ def unnumbered_user_subentry(name: str, **fields) -> ConfigSubentryData:
         subentry_type=SUBENTRY_TYPE_USER,
         title=name,
         unique_id=None,
+    )
+
+
+# A PIN one character over Home Assistant's state limit, marked so a leak of
+# it into an error or the log can be found.
+LEAK_MARKER = "leak-marker-77ab"
+OVERLONG_PIN = LEAK_MARKER + "1" * (256 - len(LEAK_MARKER))
+
+# The PINs ``entry_holding_pins_on`` gives its users, every way a PIN can be
+# held: by a turned-off user, and by one with no slot number.
+TURNED_OFF_USERS_PIN = "2468"
+UNNUMBERED_USERS_PIN = "1357"
+
+
+def entry_holding_pins_on(locks: list[str], **kwargs: Any) -> MockConfigEntry:
+    """
+    Build another entry on ``locks`` whose users hold two PINs.
+
+    Ann is turned off, at slot 5 so she collides with no fixture's numbers,
+    and Unplaced has no slot number: each still holds their PIN. The caller
+    adds it to Home Assistant, and sets it up if the test needs it loaded.
+    ``kwargs`` reach the entry, such as ``source``.
+    """
+    return MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_LOCKS: locks},
+        subentries_data=[
+            *user_subentries(
+                {
+                    5: {
+                        CONF_NAME: "Ann",
+                        CONF_ENABLED: False,
+                        CONF_PIN: TURNED_OFF_USERS_PIN,
+                    }
+                }
+            ),
+            unnumbered_user_subentry(
+                "Unplaced", **{CONF_ENABLED: True, CONF_PIN: UNNUMBERED_USERS_PIN}
+            ),
+        ],
+        unique_id="another-entry",
+        title="another entry",
+        version=CONFIG_ENTRY_VERSION,
+        **kwargs,
     )
 
 

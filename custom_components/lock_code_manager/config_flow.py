@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Callable, Collection, Container, Iterable, Mapping, Sequence
 import logging
+from types import MappingProxyType
 from typing import Any, override
 
 import probatio as vol
@@ -47,14 +48,25 @@ from .ha.allocation import (
     async_read_occupancy,
 )
 from .ha.runtime import locks_that_cannot_report
-from .model.config import EntryConfig, async_write_entry_config
+from .model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    held_pins,
+    pin_held,
+    pin_too_long,
+    stored_pin,
+)
 from .model.names import (
     identity,
     name_error,
     normalize_name,
     validate_user_names,
 )
-from .model.queries import entries_configuring, get_entry_config
+from .model.queries import (
+    entries_configuring,
+    get_entry_config,
+    users_on_locks,
+)
 from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
@@ -198,6 +210,26 @@ def _check_common_slots(
         }
 
 
+def _check_pins_on_added_locks(
+    hass: HomeAssistant, users: Iterable[Mapping[str, Any]], added: Iterable[str]
+) -> tuple[dict, dict]:
+    """
+    Refuse an added lock another entry's user has one of these users' PINs on.
+
+    Adding the lock puts the entry's PINs on a keypad the other entry's PINs
+    are already on. Turned-off users count on both sides. Names the lock,
+    never the PIN or either user.
+    """
+    mine = held_pins(users)
+    lock = next(
+        (lock for lock in added if mine & held_pins(users_on_locks(hass, (), [lock]))),
+        None,
+    )
+    if lock is None:
+        return {}, {}
+    return {"base": "pin_conflict_on_lock"}, {"error_lock": lock}
+
+
 async def _async_check_existing_codes(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -267,7 +299,7 @@ async def _async_validate_users_yaml(
     raw_users: dict[Any, Any],
     locks: Iterable[str],
     *,
-    taken: Collection[str] = (),
+    taken: Mapping[str, Mapping[str, Any]] = MappingProxyType({}),
 ) -> tuple[dict | None, dict, dict]:
     """
     Validate a users submission for the editor and the yaml setup path.
@@ -281,11 +313,12 @@ async def _async_validate_users_yaml(
     the flow that is still creating one; it is what the lock reads this
     performs are made on behalf of.
 
-    ``taken`` is whichever names the block is being added alongside, empty
+    ``taken`` is whichever users the block is being added alongside, empty
     when it IS the whole configuration. A block added to an entry has to
     clear the users already there as well as its own: two keys meaning one
     person collapse into a single key on the way into storage whether they
-    arrived together or a week apart.
+    arrived together or a week apart, and a PIN two users share is recorded
+    as either of them whoever types it.
 
     Returns the parsed users -- or ``None`` when validation failed -- with the
     accumulated errors and description placeholders.
@@ -309,6 +342,29 @@ async def _async_validate_users_yaml(
     for name in parsed_users:
         if identity(name) in spoken_for:
             return None, {"base": "name_not_unique"}, {"name": name}
+
+    # Named rather than quoted: a block has no field to mark, and the PIN is
+    # not repeated back.
+    too_long = next(
+        (
+            name
+            for name, fields in parsed_users.items()
+            if pin_too_long(stored_pin(fields))
+        ),
+        None,
+    )
+    if too_long is not None:
+        return None, {"base": "pin_too_long_in_block"}, {"name": too_long}
+
+    # Its own message: a block has no field to mark, so it names which of
+    # the pasted users it is -- never who already has the PIN. The entries
+    # sharing a lock count: their PINs are on the same keypads.
+    held = held_pins(users_on_locks(hass, taken.values(), locks))
+    for name, fields in parsed_users.items():
+        if (pin := stored_pin(fields)) in held:
+            return None, {"base": "pin_not_unique_in_block"}, {"name": name}
+        if pin:
+            held.add(pin)
 
     # The same refusal the guided path gives. Both write the one field, so a
     # condition entity this integration cannot read must fail on both routes
@@ -405,22 +461,36 @@ def _validate_user_form(
     hass: HomeAssistant,
     user_input: dict[str, Any],
     taken: Collection[str],
+    previous: Mapping[str, Any] = MappingProxyType({}),
+    *,
+    pin_holders: Iterable[Mapping[str, Any]],
 ) -> tuple[str | None, dict[str, Any], dict[str, str], dict[str, Any]]:
     """
-    Validate one user's submitted form against the names already spoken for.
+    Validate one user's submitted form against the users already there.
 
     Shared by the setup flow, which collects users before the entry exists,
     and the subentry flow, which adds and edits them afterwards. One
     definition of a valid user, so the two routes cannot answer differently.
 
-    ``taken`` is whichever names this submission must not collide with -- for
-    an edit, everybody except the user being edited.
+    ``taken`` is whichever names this submission must not collide with --
+    for an edit, everybody except the user being edited, whose fields as the
+    configuration reads them are ``previous``.
+
+    ``pin_holders`` is the users whose PINs it must not take: the other
+    users on the same locks, in this entry or another. A PIN equal to the one
+    the edited user already holds is not checked again, so a duplicate saved
+    before that check refuses only an edit that changes it.
     """
     errors: dict[str, str] = {}
     placeholders: dict[str, Any] = {}
+    pin = stored_pin(user_input)
 
     if _slot_enabled_without_pin(user_input):
         errors[CONF_PIN] = "missing_pin_if_enabled"
+    elif pin_too_long(pin):
+        errors[CONF_PIN] = "invalid_pin"
+    elif pin != stored_pin(previous) and pin_held(pin_holders, pin):
+        errors[CONF_PIN] = "pin_not_unique"
 
     name: str | None = None
     if error := name_error(user_input.get(CONF_NAME)):
@@ -679,7 +749,14 @@ class LockCodeManagerFlowHandler(
 
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, self.data[CONF_USERS]
+                self.hass,
+                user_input,
+                self.data[CONF_USERS],
+                pin_holders=users_on_locks(
+                    self.hass,
+                    self.data[CONF_USERS].values(),
+                    self.data[CONF_LOCKS],
+                ),
             )
             description_placeholders.update(placeholders)
 
@@ -837,6 +914,15 @@ class LockCodeManagerFlowHandler(
                     existing_slots,
                     config_entry,
                 )
+            added = [
+                lock_entity_id
+                for lock_entity_id in user_input[CONF_LOCKS]
+                if lock_entity_id not in entry_config.locks
+            ]
+            if not additional_errors:
+                additional_errors, additional_placeholders = _check_pins_on_added_locks(
+                    self.hass, entry_config.users.values(), added
+                )
             if not additional_errors:
                 # Reauth is where a lock gets swapped, so it is also where an
                 # already-valid slot set can become too large for the new lock.
@@ -850,11 +936,6 @@ class LockCodeManagerFlowHandler(
             # A lock swapped in gets the entry's numbers as the options flow
             # adds one: checked for keypad codes in them, and said of when it
             # cannot report any.
-            added = [
-                lock_entity_id
-                for lock_entity_id in user_input[CONF_LOCKS]
-                if lock_entity_id not in entry_config.locks
-            ]
             if not additional_errors and added and existing_slots:
                 (
                     additional_errors,
@@ -960,6 +1041,11 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 errors, description_placeholders = _check_common_slots(
                     self.hass, added, config.slot_numbers
                 )
+            if not errors:
+                # Or have a user with one of this entry's PINs on it.
+                errors, description_placeholders = _check_pins_on_added_locks(
+                    self.hass, config.users.values(), added
+                )
             if not errors and config.slot_numbers:
                 # The users are not on this form, but the numbers they hold
                 # are what a new lock has to be able to hold. Without this a
@@ -1063,7 +1149,12 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
 
         if user_input is not None:
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, config.users
+                self.hass,
+                user_input,
+                config.users,
+                pin_holders=users_on_locks(
+                    self.hass, config.users.values(), config.locks
+                ),
             )
             description_placeholders.update(placeholders)
 
@@ -1233,8 +1324,16 @@ class LockCodeManagerUserSubentryFlow(ConfigSubentryFlow):
         others = {other: user for other, user in config.users.items() if other != held}
 
         if user_input is not None:
+            # Compared with the user as read, PIN stripped: one stored with
+            # padding is the same PIN submitted without it.
             name, fields, errors, placeholders = _validate_user_form(
-                self.hass, user_input, others
+                self.hass,
+                user_input,
+                others,
+                config.users.get(held, subentry.data),
+                pin_holders=users_on_locks(
+                    self.hass, config.users.values(), config.locks
+                ),
             )
             description_placeholders.update(placeholders)
 

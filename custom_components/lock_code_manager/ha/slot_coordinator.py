@@ -40,10 +40,16 @@ from homeassistant.helpers.issue_registry import (
 )
 
 from ..const import ATTR_IN_SYNC, DOMAIN, EVENT_CREDENTIAL_USED
-from ..model.config import EntryConfig, async_write_entry_config
+from ..model.config import (
+    EntryConfig,
+    async_write_entry_config,
+    pin_held,
+    pin_too_long,
+    stored_pin,
+)
 from ..model.credentials import CredentialType
 from ..model.names import name_error, normalize_name
-from ..model.queries import get_entry_config
+from ..model.queries import get_entry_config, users_on_locks
 from .runtime import async_want
 
 if TYPE_CHECKING:
@@ -288,7 +294,12 @@ class SlotEntityCoordinator:
         value = value.strip()
 
         if value:
+            if pin_too_long(value):
+                raise ServiceValidationError(
+                    translation_domain=DOMAIN, translation_key="pin_too_long"
+                )
             self._validate_credential_length(value, CredentialType.PIN)
+            self._refuse_duplicate_pin(value)
 
         updates: dict[str, Any] = {CONF_PIN: value}
         if not value and self.is_enabled:
@@ -299,6 +310,26 @@ class SlotEntityCoordinator:
             updates[CONF_ENABLED] = False
 
         self._write_config_fields(updates)
+
+    def _refuse_duplicate_pin(self, value: str) -> None:
+        """
+        Refuse ``value`` if another user holds it on one of the entry's locks.
+
+        Its own other users count, and the users of every other entry on one
+        of its locks: their PINs are on the same keypads. The PIN this user
+        already holds is not checked again, so a duplicate saved before this
+        rule refuses only a change to it.
+        """
+        if value == stored_pin(self._slot_config()):
+            return
+        config = get_entry_config(self._config_entry)
+        holders = users_on_locks(self._hass, config.users.values(), config.locks)
+        if pin_held(holders, value):
+            # Names nobody: whoever can set a PIN could otherwise learn whose
+            # PIN a guess is.
+            raise ServiceValidationError(
+                translation_domain=DOMAIN, translation_key="pin_not_unique"
+            )
 
     def _validate_credential_length(
         self, value: str, credential_type: CredentialType

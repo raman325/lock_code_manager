@@ -1,5 +1,6 @@
 """Random PIN generation with unsafe-pattern filtering."""
 
+from collections.abc import Container
 import secrets
 
 # Common 4-digit PINs that should never be generated.
@@ -69,14 +70,17 @@ def is_unsafe_pin(pin: str) -> bool:
     return n == 4 and pin in COMMON_WEAK_PINS_4
 
 
-def generate_pin(length: int = DEFAULT_PIN_LENGTH) -> str:
+def generate_pin(
+    length: int = DEFAULT_PIN_LENGTH, avoid: Container[str] = frozenset()
+) -> str:
     """
     Generate a cryptographically-random PIN of ``length`` digits.
 
-    Retries until the candidate passes ``is_unsafe_pin``. Uses ``secrets``
-    for entropy. A safety cap of 100 attempts protects against pathological
-    edge cases (e.g. a future filter change rejecting a much larger fraction
-    of the space).
+    Retries until the candidate passes ``is_unsafe_pin`` and is not one of
+    ``avoid`` (the PINs users already hold, for a caller who will set it on
+    somebody). Uses ``secrets`` for entropy. A safety cap of 100 attempts
+    protects against pathological edge cases (e.g. a future filter change
+    rejecting a much larger fraction of the space).
     """
     if not MIN_PIN_LENGTH <= length <= MAX_PIN_LENGTH:
         raise ValueError(
@@ -84,7 +88,7 @@ def generate_pin(length: int = DEFAULT_PIN_LENGTH) -> str:
         )
     for _ in range(100):
         candidate = "".join(str(secrets.randbelow(10)) for _ in range(length))
-        if not is_unsafe_pin(candidate):
+        if not is_unsafe_pin(candidate) and candidate not in avoid:
             return candidate
     raise RuntimeError(
         f"Failed to generate a safe PIN of length {length} after 100 attempts"

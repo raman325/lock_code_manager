@@ -130,6 +130,7 @@ from .ha.services import (
     async_set_condition,
     async_set_credential,
     async_use_credential,
+    generate_pin_for,
 )
 from .ha.slot_coordinator import SlotEntityCoordinator
 from .ha.unmanaged import async_sweep_unmanaged_codes
@@ -149,7 +150,6 @@ from .model.pin_generator import (
     DEFAULT_PIN_LENGTH,
     MAX_PIN_LENGTH,
     MIN_PIN_LENGTH,
-    generate_pin,
 )
 from .model.pin_masking import build_pin_deobfuscation_map, deobfuscate_pins
 from .model.queries import (
@@ -862,7 +862,14 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
 
     async def _generate_pin(call: ServiceCall) -> ServiceResponse:
         """Generate a random PIN that avoids known unsafe patterns."""
-        return {"pin": generate_pin(call.data[ATTR_LENGTH])}
+        return {
+            "pin": generate_pin_for(
+                hass,
+                call.data[ATTR_LENGTH],
+                config_entry_id=call.data.get("config_entry_id"),
+                config_entry_title=call.data.get("config_entry_title"),
+            )
+        }
 
     hass.services.async_register(
         DOMAIN,
@@ -870,6 +877,9 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
         _generate_pin,
         schema=vol.Schema(
             {
+                # Optional here: given one, the PIN is one nobody on its locks
+                # has; without one, any safe PIN.
+                **_ENTRY_SELECTOR,
                 vol.Optional(ATTR_LENGTH, default=DEFAULT_PIN_LENGTH): vol.All(
                     vol.Coerce(int), vol.Range(min=MIN_PIN_LENGTH, max=MAX_PIN_LENGTH)
                 ),
