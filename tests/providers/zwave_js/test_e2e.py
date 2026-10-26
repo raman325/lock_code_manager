@@ -33,6 +33,7 @@ from zwave_js_server.const.command_class.multilevel_switch import (
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent,
 )
+from zwave_js_server.const.command_class.power_level import PowerLevelTestStatus
 from zwave_js_server.event import Event as ZwaveEvent
 from zwave_js_server.model.access_control import CredentialData, UserData
 from zwave_js_server.model.node import Node
@@ -1475,8 +1476,8 @@ KEYPAD_ENTRY = "7319468205"
 # builds them in packages/zwave-js/src/lib/node/CCHandlers/:
 # EntryControlCC.ts:48-55 (an ASCII Enter carries the keys pressed, which the
 # driver masks in its own log, packages/cc/src/cc/EntryControlCC.ts:523-529),
-# BatteryCC.ts:18-24 (a level of 0xff is low battery) and
-# MultilevelSwitchCC.ts:52-66. The server forwards them unchanged
+# BatteryCC.ts:18-24 (a level of 0xff is low battery),
+# MultilevelSwitchCC.ts:52-66 and PowerlevelCC.ts:188-199. The server forwards them unchanged
 # (zwave-js-server 400fd94, src/lib/forward.ts:563-574).
 OTHER_COMMAND_CLASS_ARGS = {
     "entry_control": (
@@ -1498,6 +1499,14 @@ OTHER_COMMAND_CLASS_ARGS = {
         {
             "eventType": MultilevelSwitchCommand.STOP_LEVEL_CHANGE,
             "eventTypeLabel": "Stop level change",
+        },
+    ),
+    "powerlevel": (
+        CommandClass.POWERLEVEL,
+        {
+            "testNodeId": 5,
+            "status": PowerLevelTestStatus.SUCCESS,
+            "acknowledgedFrames": 10,
         },
     ),
 }
