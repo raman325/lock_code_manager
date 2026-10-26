@@ -2645,6 +2645,7 @@ async def test_add_user_refuses_a_taken_pin_without_reading_the_locks(
         ("user_pin_not_unique", {"name"}),
         ("user_pin_too_long", {"name"}),
         ("pin_generation_exhausted", {"length"}),
+        ("pin_generation_failed", {"length"}),
     ],
 )
 def test_the_pin_refusals_are_translated(key: str, placeholders: set[str]) -> None:
@@ -2743,3 +2744,19 @@ async def test_generate_pin_for_an_entry_gives_up_without_naming_a_pin(
     assert refused.value.translation_key == "pin_generation_exhausted"
     assert refused.value.translation_placeholders == {"length": "4"}
     assert "2468" not in str(refused.value)
+
+
+async def test_generate_pin_without_an_entry_gives_up_with_a_translated_error(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """With no entry too, giving up is a clear refusal, not "Unknown error"."""
+    with (
+        patch.object(pin_generator, "is_unsafe_pin", return_value=True),
+        pytest.raises(ServiceValidationError) as refused,
+    ):
+        await _async_generate_pin(hass)
+
+    assert refused.value.translation_key == "pin_generation_failed"
+    assert refused.value.translation_placeholders == {"length": "4"}

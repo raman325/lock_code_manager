@@ -558,6 +558,9 @@
     },
     "pin_generation_exhausted": {
       "message": "Could not generate a {length}-digit PIN that no user on this entry's locks already has. Try a longer PIN."
+    },
+    "pin_generation_failed": {
+      "message": "Could not generate a safe {length}-digit PIN. Try again."
     }
   },
   "selector": {

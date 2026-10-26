@@ -497,20 +497,24 @@ def generate_pin_for(
     random on a PIN somebody already has. Without an entry nothing is held
     against it.
 
-    Bounded like the generator: when every draw is taken, the refusal names
-    the length asked for, never a PIN.
+    Bounded like the generator: when every draw is refused, with or without
+    an entry, the refusal names the length asked for, never a PIN.
     """
-    if config_entry_id is None and config_entry_title is None:
-        return generate_pin(length)
-    config_entry = get_loaded_config_entry(hass, config_entry_id, config_entry_title)
-    config = get_entry_config(config_entry)
-    held = held_pins(users_on_locks(hass, config.users.values(), config.locks))
+    held: set[str] = set()
+    failure = "pin_generation_failed"
+    if config_entry_id is not None or config_entry_title is not None:
+        config_entry = get_loaded_config_entry(
+            hass, config_entry_id, config_entry_title
+        )
+        config = get_entry_config(config_entry)
+        held = held_pins(users_on_locks(hass, config.users.values(), config.locks))
+        failure = "pin_generation_exhausted"
     try:
         return generate_pin(length, avoid=held)
     except RuntimeError as err:
         raise ServiceValidationError(
             translation_domain=DOMAIN,
-            translation_key="pin_generation_exhausted",
+            translation_key=failure,
             translation_placeholders={"length": str(length)},
         ) from err
 
