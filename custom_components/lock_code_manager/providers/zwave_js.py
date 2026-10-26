@@ -1198,6 +1198,7 @@ class ZWaveJSLock(BaseLock):
                 ),
                 None,
             ),
+            credential_type=CredentialType.PIN,
         )
 
     @property

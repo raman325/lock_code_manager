@@ -24,6 +24,7 @@ from homeassistant.exceptions import HomeAssistantError
 from ..model.credentials import (
     Credential,
     CredentialRef,
+    CredentialType,
     SlotCredential,
     User,
     WriteResult,
@@ -717,9 +718,12 @@ class ZWaveJSUILock(BaseMqttLock):
                 value,
             )
             return
+        # Only the keypad's lock and unlock operations reach here, so the
+        # credential is a PIN.
         self.async_fire_code_slot_event(
             code_slot=code_slot,
             to_locked=to_locked,
+            credential_type=CredentialType.PIN,
         )
 
     @callback
