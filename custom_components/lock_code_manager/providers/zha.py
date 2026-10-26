@@ -43,7 +43,7 @@ from ..model.exceptions import (
     LockOperationFailed,
 )
 from ._base import BaseLock
-from ._util import is_masked_code
+from ._util import credential_named_by_source, is_masked_code
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -175,15 +175,13 @@ SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
 }
 
 
-def _credential_presented(source: int, user_id: int) -> CredentialType | None:
-    """Return the credential an operation event's source names, or None."""
-    if source == DoorLock.OperationEventSource.RF:
-        return CredentialType.PIN if user_id > 0 else None
-    return SOURCE_TO_CREDENTIAL_TYPE.get(source)
+_RADIO_SOURCES = frozenset({DoorLock.OperationEventSource.RF})
 
-
-# Every kind an operation event can report.
-_REPORTABLE_CREDENTIAL_TYPES = frozenset(SOURCE_TO_CREDENTIAL_TYPE.values())
+# Every kind an operation event can report: the table's, and the Personal
+# Identification Number a radio frequency command naming its user carries.
+_REPORTABLE_CREDENTIAL_TYPES = frozenset(
+    {CredentialType.PIN, *SOURCE_TO_CREDENTIAL_TYPE.values()}
+)
 
 # The event masks that say whether the lock notifies a code change.
 _PROGRAMMING_EVENT_MASKS = (
@@ -872,7 +870,14 @@ class ZHALock(BaseLock):
             user_id,
         )
 
-        if (credential_type := _credential_presented(source, user_id)) is None:
+        if (
+            credential_type := credential_named_by_source(
+                source,
+                user_id,
+                names=SOURCE_TO_CREDENTIAL_TYPE,
+                radio=_RADIO_SOURCES,
+            )
+        ) is None:
             _LOGGER.debug(
                 "Lock %s: operation event source %s names no credential, so "
                 "the use is not reported",

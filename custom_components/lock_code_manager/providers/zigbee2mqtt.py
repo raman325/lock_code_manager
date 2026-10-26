@@ -27,7 +27,12 @@ from ..model.credentials import (
 )
 from ..model.exceptions import LockDisconnected, LockOperationFailed
 from ._mqtt import CANNOT_TELL, BaseMqttLock, SlotAnswer
-from ._util import is_masked_code, parse_slot_num, resolve_discovery_payload
+from ._util import (
+    credential_named_by_source,
+    is_masked_code,
+    parse_slot_num,
+    resolve_discovery_payload,
+)
 from .const import LOGGER
 
 # Device registry identifier prefix Zigbee2MQTT uses in its HA discovery
@@ -75,24 +80,19 @@ _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
     "rfid_card_unlock": CredentialType.RFID,
 }
 _Z2M_RF_SOURCE = "rf"
+_Z2M_RADIO_SOURCES = frozenset({_Z2M_RF_SOURCE})
 
 # An action whose name carries its source (``keypad_unlock``, ``rf_lock``)
 # says where it came from when the payload has no ``action_source_name``.
 _Z2M_ACTION_PREFIX_TO_SOURCE = (("keypad_", "keypad"), ("rf_", _Z2M_RF_SOURCE))
 
 
-def _z2m_credential_presented(
-    source_name: str | None, code_slot: int
-) -> CredentialType | None:
-    """Return the credential a use's source names, or None."""
-    if source_name == _Z2M_RF_SOURCE:
-        return CredentialType.PIN if code_slot > 0 else None
-    return _Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(str(source_name))
-
-
 # Nothing here asks the lock which readers it has, so every kind a source can
-# name is reported.
-_Z2M_REPORTED_CREDENTIAL_TYPES = frozenset(_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values())
+# name is reported: the table's, and the Personal Identification Number a
+# radio frequency command naming its user carries.
+_Z2M_REPORTED_CREDENTIAL_TYPES = frozenset(
+    {CredentialType.PIN, *_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values()}
+)
 
 # User status 0xFF, which the Door Lock cluster names "Not Supported": the
 # lock cannot report its users at all.
@@ -314,7 +314,12 @@ class Zigbee2MQTTLock(BaseMqttLock):
                         ),
                         None,
                     )
-                credential_type = _z2m_credential_presented(source_name, code_slot)
+                credential_type = credential_named_by_source(
+                    str(source_name),
+                    code_slot,
+                    names=_Z2M_SOURCE_TO_CREDENTIAL_TYPE,
+                    radio=_Z2M_RADIO_SOURCES,
+                )
                 if credential_type is None:
                     LOGGER.debug(
                         "Lock %s: action_source_name %r names no credential, so "
