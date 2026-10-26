@@ -55,19 +55,22 @@ _Z2M_LOCK_ACTIONS_UNLOCKED = frozenset(
 )
 _Z2M_LOCK_ACTIONS = _Z2M_LOCK_ACTIONS_LOCKED | _Z2M_LOCK_ACTIONS_UNLOCKED
 
-# The credential an operation event's ``action_source_name`` says was
-# presented (zigbee-herdsman-converters ``lockSourceName``). Every other
-# source -- keypad, radio frequency remote, manual -- reports PIN.
+# The credential each source the Door Lock cluster defines says was presented,
+# by the ``action_source_name`` zigbee-herdsman-converters gives it
+# (``lockSourceName``): a card from the Radio Frequency Identification reader,
+# and a PIN from the keypad, a radio frequency remote or manual. Only these
+# names are classified. Any other, such as "fingerprint" for the vendor
+# extension 4, is not reported.
 _Z2M_SOURCE_TO_CREDENTIAL_TYPE: dict[str, CredentialType] = {
+    "keypad": CredentialType.PIN,
+    "rf": CredentialType.PIN,
+    "manual": CredentialType.PIN,
     "rfid": CredentialType.RFID,
-    "fingerprint": CredentialType.FINGERPRINT,
 }
 
-# Nothing here asks the lock which readers it has, so every kind an operation
-# event's source can name is reported, and the keypad's PIN.
-_Z2M_REPORTED_CREDENTIAL_TYPES = frozenset(
-    {CredentialType.PIN, *_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values()}
-)
+# Nothing here asks the lock which readers it has, so every kind a source can
+# name is reported.
+_Z2M_REPORTED_CREDENTIAL_TYPES = frozenset(_Z2M_SOURCE_TO_CREDENTIAL_TYPE.values())
 
 # User status 0xFF, which the Door Lock cluster names "Not Supported": the
 # lock cannot report its users at all.
@@ -265,8 +268,8 @@ class Zigbee2MQTTLock(BaseMqttLock):
         """Apply device-topic JSON on the Home Assistant event loop."""
         action = payload.get("action")
 
-        # Handle lock/unlock actions with user identification (a PIN, card or
-        # fingerprint, by action_source_name)
+        # Handle lock/unlock actions with user identification (a PIN or a
+        # card, by action_source_name)
         if isinstance(action, str) and action in _Z2M_LOCK_ACTIONS:
             action_user = payload.get("action_user")
             if action_user is not None and not isinstance(action_user, bool):
@@ -279,13 +282,26 @@ class Zigbee2MQTTLock(BaseMqttLock):
                         self.lock.entity_id,
                     )
                     return
-                to_locked = action in _Z2M_LOCK_ACTIONS_LOCKED
+                source_name = payload.get("action_source_name")
+                # ``lockSourceName`` has no name for the cluster's indeterminate
+                # source, so a use from it arrives without one.
+                credential_type = (
+                    CredentialType.PIN
+                    if source_name is None
+                    else _Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(str(source_name))
+                )
+                if credential_type is None:
+                    LOGGER.debug(
+                        "Lock %s: action_source_name %r is not a source the Door "
+                        "Lock cluster defines, so the use is not reported",
+                        self.lock.entity_id,
+                        source_name,
+                    )
+                    return
                 self.async_fire_code_slot_event(
                     code_slot=code_slot,
-                    to_locked=to_locked,
-                    credential_type=_Z2M_SOURCE_TO_CREDENTIAL_TYPE.get(
-                        str(payload.get("action_source_name")), CredentialType.PIN
-                    ),
+                    to_locked=action in _Z2M_LOCK_ACTIONS_LOCKED,
+                    credential_type=credential_type,
                 )
             return
 

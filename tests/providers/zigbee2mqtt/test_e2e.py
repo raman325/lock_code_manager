@@ -12,6 +12,7 @@ from freezegun.api import FrozenDateTimeFactory
 import pytest
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
+    async_capture_events,
     async_fire_mqtt_message,
 )
 
@@ -41,6 +42,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CREDENTIAL_TYPE,
     ATTR_IN_SYNC,
     ATTR_OPERATION,
+    BUS_EVENT_CREDENTIAL_USED,
     CONF_LOCKS,
     CONF_NUM_USERS,
     CONF_SLOT,
@@ -70,6 +72,7 @@ from custom_components.lock_code_manager.model.credentials import (
 )
 from custom_components.lock_code_manager.model.events import CredentialOperation
 from custom_components.lock_code_manager.model.queries import subentry_id_for_slot
+from custom_components.lock_code_manager.providers.const import LOGGER
 from custom_components.lock_code_manager.providers.zigbee2mqtt import (
     Zigbee2MQTTLock,
 )
@@ -103,6 +106,8 @@ from .conftest import (
     z2m_lock_discovery_payload,
 )
 from .fake_bridge import ENABLED, FakeZ2MBridge
+
+Z2M_LOGGER = LOGGER.name
 
 # Full LCM setup briefly holds the coordinator's debounced refresh lock while
 # the initial sync runs. Concurrent async_request_refresh calls during that
@@ -814,8 +819,11 @@ class TestBridgeEvents:
         [
             pytest.param(0, "pin", id="keypad"),
             pytest.param(1, "pin", id="rf"),
+            pytest.param(2, "pin", id="manual"),
             pytest.param(3, "rfid", id="rfid"),
-            pytest.param(4, "fingerprint", id="fingerprint"),
+            # ``lockSourceName`` has no name for the cluster's indeterminate
+            # source, so the event carries ``action_source`` alone.
+            pytest.param(0xFF, "pin", id="indeterminate"),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -841,7 +849,6 @@ class TestBridgeEvents:
                 hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
             )
             assert hass.states.get(event_1).attributes[ATTR_EVENT_TYPES] == [
-                "fingerprint",
                 "pin",
                 "rfid",
             ]
@@ -852,6 +859,66 @@ class TestBridgeEvents:
             state = hass.states.get(event_1)
             assert state.attributes[ATTR_EVENT_TYPE] == expected
             assert state.attributes[ATTR_CREDENTIAL_TYPE] == expected
+
+    @pytest.mark.parametrize(
+        ("payload", "source_name"),
+        [
+            # Source 4, a vendor extension ``lockSourceName`` names "fingerprint".
+            pytest.param(None, "fingerprint", id="fingerprint"),
+            # The Nimly locks' own converter (zigbee-herdsman-converters
+            # src/devices/onesti.ts, attribute 0x0100's source octet 03).
+            pytest.param(
+                {
+                    "action": "unlock",
+                    "action_user": 1,
+                    "action_source_name": "fingerprintsensor",
+                },
+                "fingerprintsensor",
+                id="nimly_fingerprintsensor",
+            ),
+        ],
+    )
+    async def test_a_use_from_a_source_the_cluster_does_not_define_is_not_reported(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+        caplog: pytest.LogCaptureFixture,
+        payload: dict[str, Any] | None,
+        source_name: str,
+    ) -> None:
+        """
+        An ``action_source_name`` outside the Door Lock cluster's records no use.
+
+        The use is not reported, rather than announced as a PIN or as a kind
+        the lock may not have. A keypad unlock afterwards still lands.
+        """
+        lock_id = mqtt_lock_discovered.entity_id
+        caplog.set_level(logging.DEBUG, logger=Z2M_LOGGER)
+        async with _bridge_entry(hass, freezer, lock_id) as entry:
+            event_1 = slot_entity_id(
+                hass, EVENT_DOMAIN, entry, 1, EVENT_CREDENTIAL_USED
+            )
+            used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+            if payload is None:
+                fake_z2m_bridge.operation_event("unlock", 1, 4)
+            else:
+                _fire_device_payload(hass, payload)
+            await hass.async_block_till_done()
+
+            assert used == []
+            assert hass.states.get(event_1).state == STATE_UNKNOWN
+            assert (logging.DEBUG, (lock_id, source_name)) in [
+                (record.levelno, record.args)
+                for record in caplog.records
+                if record.name == Z2M_LOGGER
+            ]
+
+            fake_z2m_bridge.operation_event("unlock", 1)
+            await hass.async_block_till_done()
+            assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == ["pin"]
 
     @pytest.mark.parametrize(
         "payload",
