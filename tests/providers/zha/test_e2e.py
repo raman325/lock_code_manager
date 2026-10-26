@@ -1359,12 +1359,7 @@ class TestCredentialPresented:
         ("source", "expected"),
         [
             pytest.param(DoorLock.OperationEventSource.Keypad, "pin", id="keypad"),
-            pytest.param(DoorLock.OperationEventSource.RF, "pin", id="rf"),
-            pytest.param(DoorLock.OperationEventSource.Manual, "pin", id="manual"),
             pytest.param(DoorLock.OperationEventSource.RFID, "rfid", id="rfid"),
-            pytest.param(
-                DoorLock.OperationEventSource.Indeterminate, "pin", id="indeterminate"
-            ),
         ],
     )
     async def test_an_unlock_names_the_credential_presented(
@@ -1399,20 +1394,35 @@ class TestCredentialPresented:
         assert [event.data[ATTR_CREDENTIAL_TYPE] for event in used] == [expected]
         assert hass.states.get(event_entity).attributes[ATTR_EVENT_TYPE] == expected
 
-    async def test_a_use_from_a_source_the_cluster_does_not_define_is_not_reported(
+    @pytest.mark.parametrize(
+        "source",
+        [
+            pytest.param(DoorLock.OperationEventSource.RF, id="rf"),
+            pytest.param(DoorLock.OperationEventSource.Manual, id="manual"),
+            pytest.param(
+                DoorLock.OperationEventSource.Indeterminate, id="indeterminate"
+            ),
+            # A vendor extension zigbee-herdsman-converters names "fingerprint"
+            # (``lockSourceName``); the cluster does not define it.
+            pytest.param(4, id="vendor_4"),
+        ],
+    )
+    async def test_a_use_from_a_source_naming_no_credential_is_not_reported(
         self,
         hass: HomeAssistant,
         lcm_config_entry: MockConfigEntry,
         door_lock: DoorLockStandIn,
         caplog: pytest.LogCaptureFixture,
+        source: int,
     ) -> None:
         """
-        A source outside the Door Lock cluster's records no use at all.
+        A use counts only as the credential its source names.
 
-        Source 4 is a vendor extension zigbee-herdsman-converters names
-        "fingerprint" (``lockSourceName``); the cluster does not define it,
-        so the use is not reported, rather than announced as a PIN or as a
-        kind the lock may not have.
+        A radio frequency command, the thumb-turn and an indeterminate source
+        name no credential, and a source outside the Door Lock cluster's
+        names nothing this integration can classify, so none records a use:
+        no event on the bus and none on the user's event entity, rather than
+        a PIN the lock never said was typed.
         """
         await _run_ticks(hass)
         event_entity = slot_entity_id(
@@ -1422,14 +1432,14 @@ class TestCredentialPresented:
         used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
         caplog.set_level(logging.DEBUG, logger=ZHA_LOGGER)
 
-        _unlock_from(door_lock, 4)
+        _unlock_from(door_lock, source)
         await hass.async_block_till_done()
 
         assert used == []
         after = hass.states.get(event_entity)
         assert (after.state, after.attributes) == (before.state, before.attributes)
         lock_id = _zha_lock(lcm_config_entry).lock.entity_id
-        assert (logging.DEBUG, (lock_id, 4)) in [
+        assert (logging.DEBUG, (lock_id, int(source))) in [
             (record.levelno, record.args)
             for record in caplog.records
             if record.name == ZHA_LOGGER

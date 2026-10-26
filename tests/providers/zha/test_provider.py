@@ -913,7 +913,7 @@ async def test_operation_event_zero_user_id(
             "Args",
             (),
             {
-                "operation_event_source": DoorLock.OperationEventSource.Manual,
+                "operation_event_source": DoorLock.OperationEventSource.Keypad,
                 "operation_event_code": DoorLock.OperationEvent.Lock,
                 "user_id": 0,
             },

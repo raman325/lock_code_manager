@@ -161,18 +161,15 @@ OPERATION_TO_LOCKED: dict[int, bool] = {
     DoorLock.OperationEvent.ScheduleUnlock: False,
 }
 
-# The credential each source the Door Lock cluster defines says was presented:
-# a card from the Radio Frequency Identification reader, and a Personal
-# Identification Number from every other -- the keypad, a radio frequency
-# command, manual, indeterminate. Only these sources are classified. A use
-# from any other, such as the vendor extension 4 that zigbee-herdsman-converters
-# names "fingerprint", is not reported.
+# A use counts as the credential its operation event source names, and only
+# two sources name one: the keypad a Personal Identification Number, the Radio
+# Frequency Identification reader a card. Every other source -- a radio
+# frequency command, manual, indeterminate, or one outside the Door Lock
+# cluster such as the vendor extension 4 that zigbee-herdsman-converters names
+# "fingerprint" -- names no credential, so the use is not reported.
 SOURCE_TO_CREDENTIAL_TYPE: dict[int, CredentialType] = {
     DoorLock.OperationEventSource.Keypad: CredentialType.PIN,
-    DoorLock.OperationEventSource.RF: CredentialType.PIN,
-    DoorLock.OperationEventSource.Manual: CredentialType.PIN,
     DoorLock.OperationEventSource.RFID: CredentialType.RFID,
-    DoorLock.OperationEventSource.Indeterminate: CredentialType.PIN,
 }
 
 # Every kind an operation event can report.
@@ -867,8 +864,8 @@ class ZHALock(BaseLock):
 
         if (credential_type := SOURCE_TO_CREDENTIAL_TYPE.get(source)) is None:
             _LOGGER.debug(
-                "Lock %s: operation event source %d is not one the Door Lock "
-                "cluster defines, so the use is not reported",
+                "Lock %s: operation event source %d names no credential, so "
+                "the use is not reported",
                 self.lock.entity_id,
                 source,
             )
