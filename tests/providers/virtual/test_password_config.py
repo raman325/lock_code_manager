@@ -39,7 +39,10 @@ from custom_components.lock_code_manager.const import (
 from custom_components.lock_code_manager.ha.callbacks import EntityCallbackRegistry
 from custom_components.lock_code_manager.ha.entry import available_credential_types
 from custom_components.lock_code_manager.ha.runtime import lock_registry
-from custom_components.lock_code_manager.model.config import build_slot_unique_id
+from custom_components.lock_code_manager.model.config import (
+    async_write_entry_config,
+    build_slot_unique_id,
+)
 from custom_components.lock_code_manager.model.credentials import (
     CredentialAddress,
     CredentialType,
@@ -1353,5 +1356,67 @@ async def test_one_password_entity_failing_to_add_leaves_the_others(
     assert entity_id is not None
     assert hass.states.get(entity_id) is not None
     assert "could not add the password entity of slot 1" in caplog.text
+
+    await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _edit_without_a_form(hass: HomeAssistant, entry, slot: int, user_input):
+    """Start an edit with its submission: no form is drawn before it."""
+    result = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_USER),
+        context={
+            "source": "reconfigure",
+            "subentry_id": subentry_id_for_slot(entry, slot),
+        },
+        data=user_input,
+    )
+    while result["type"] == FlowResultType.SHOW_PROGRESS:
+        await hass.async_block_till_done()
+        result = await hass.config_entries.subentries.async_configure(result["flow_id"])
+    return result
+
+
+async def test_an_edit_submitted_without_a_form_keeps_the_stored_password(
+    hass: HomeAssistant, lcm_config_entry
+) -> None:
+    """
+    No form drew a Password field, so the submission cannot have cleared it.
+
+    It counts as the credential the enabled user needs, since the entry's
+    lock takes passwords.
+    """
+    await _make_password_only(hass, lcm_config_entry)
+
+    result = await _edit_without_a_form(
+        hass, lcm_config_entry, 1, {CONF_NAME: "slot1", CONF_ENABLED: True}
+    )
+
+    assert result["type"] == "abort"
+    subentry_id = subentry_id_for_slot(lcm_config_entry, 1)
+    stored = lcm_config_entry.subentries[subentry_id].data
+    assert stored["password"] == "pw"
+    assert stored[CONF_ENABLED] is True
+
+
+async def test_an_edit_submitted_without_a_form_counts_only_what_the_entry_offers(
+    hass: HomeAssistant, virtual_lock_entity, mock_lock_config_entry
+) -> None:
+    """With no form drawn, a password the entry's locks do not take does not count."""
+    entry = await _set_up_entry(hass, [LOCK_1_ENTITY_ID])
+    async_write_entry_config(
+        hass,
+        entry,
+        get_entry_config(entry)
+        .with_slot_field_set(1, "password", "pw")
+        .with_slot_field_removed(1, CONF_PIN),
+    )
+    await hass.async_block_till_done()
+
+    result = await _edit_without_a_form(
+        hass, entry, 1, {CONF_NAME: "slot1", CONF_ENABLED: True}
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {"base": "missing_credential_if_enabled"}
 
     await hass.config_entries.async_unload(entry.entry_id)
