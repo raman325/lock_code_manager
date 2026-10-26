@@ -36,6 +36,7 @@ from zwave_js_server.util.lock import get_code_slot_value, get_usercodes
 from homeassistant.components.zwave_js import lock_helpers
 from homeassistant.components.zwave_js.const import (
     ATTR_EVENT,
+    ATTR_EVENT_LABEL,
     ATTR_HOME_ID,
     ATTR_NODE_ID,
     ATTR_PARAMETERS,
@@ -168,24 +169,23 @@ _ZWAVE_TO_DOMAIN_CREDENTIAL_TYPE: dict[UserCredentialType, CredentialType] = {
 }
 
 
-# All known Access Control Notification CC events that indicate the lock is locked
-# or unlocked
-ACCESS_CONTROL_NOTIFICATION_TO_LOCKED = {
-    True: (
-        AccessControlNotificationEvent.AUTO_LOCK_LOCKED_OPERATION,
-        AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION,
-        AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE,
-        AccessControlNotificationEvent.LOCKED_BY_RF_WITH_INVALID_USER_CODE,
-        AccessControlNotificationEvent.MANUAL_LOCK_OPERATION,
-        AccessControlNotificationEvent.RF_LOCK_OPERATION,
-    ),
-    False: (
-        AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION,
-        AccessControlNotificationEvent.MANUAL_UNLOCK_OPERATION,
-        AccessControlNotificationEvent.RF_UNLOCK_OPERATION,
-        AccessControlNotificationEvent.UNLOCK_BY_RF_WITH_INVALID_USER_CODE,
-        AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE,
-    ),
+# A use counts as the credential its Access Control event names, and belongs
+# to the user the event names; an event naming no user is not a use. The keypad
+# operations and the version 8 operations "with User Code" name a Personal
+# Identification Number, and so does a radio frequency operation (a Z-Wave
+# command) naming the user whose code it carried. Every other event -- manual,
+# auto-lock, a failed or invalid-code attempt, or a programming event such as a
+# duplicate refusal -- names no credential, so it is not reported. The version
+# 8 credential operations would name theirs, but the driver does not parse
+# their parameters, so no credential type reaches the provider. Each entry
+# says whether the operation left the lock locked.
+ACCESS_CONTROL_PIN_USE_TO_LOCKED: dict[AccessControlNotificationEvent, bool] = {
+    AccessControlNotificationEvent.KEYPAD_LOCK_OPERATION: True,
+    AccessControlNotificationEvent.LOCK_OPERATION_WITH_USER_CODE: True,
+    AccessControlNotificationEvent.RF_LOCK_OPERATION: True,
+    AccessControlNotificationEvent.KEYPAD_UNLOCK_OPERATION: False,
+    AccessControlNotificationEvent.UNLOCK_OPERATION_WITH_USER_CODE: False,
+    AccessControlNotificationEvent.RF_UNLOCK_OPERATION: False,
 }
 
 
@@ -1178,26 +1178,34 @@ class ZWaveJSLock(BaseLock):
 
         params = evt.data.get(ATTR_PARAMETERS) or {}
         code_slot = params.get("userId", 0)
+        event = evt.data[ATTR_EVENT]
 
         duplicate = (
             AccessControlNotificationEvent.NEW_USER_CODE_NOT_ADDED_DUE_TO_DUPLICATE_CODE
         )
-        if evt.data[ATTR_EVENT] == duplicate and refuses_write_in_flight(
+        if event == duplicate and refuses_write_in_flight(
             self._uc_write_slot, code_slot
         ):
             self._uc_write_refused = True
             return
 
+        if (to_locked := ACCESS_CONTROL_PIN_USE_TO_LOCKED.get(event)) is None or (
+            code_slot <= 0
+        ):
+            _LOGGER.debug(
+                "Lock %s: Access Control event %s (%s) naming user %s is not a "
+                "credential use, so it is not reported",
+                self.lock.entity_id,
+                event,
+                evt.data.get(ATTR_EVENT_LABEL),
+                code_slot,
+            )
+            return
+
         self.async_fire_code_slot_event(
             code_slot=code_slot,
-            to_locked=next(
-                (
-                    to_locked
-                    for to_locked, codes in ACCESS_CONTROL_NOTIFICATION_TO_LOCKED.items()
-                    if evt.data[ATTR_EVENT] in codes
-                ),
-                None,
-            ),
+            to_locked=to_locked,
+            credential_type=CredentialType.PIN,
         )
 
     @property

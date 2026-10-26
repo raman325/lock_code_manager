@@ -13,6 +13,7 @@ from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.lock_code_manager.ha.adapter import _Coordinator
 from custom_components.lock_code_manager.model.credentials import (
+    CredentialType,
     SlotCredential,
     pin_address,
 )
@@ -433,7 +434,11 @@ class TestKeypadEvents:
         fire_node_value(hass, property_path, keypad_payload(3))
         await hass.async_block_till_done()
 
-        fired.assert_called_once_with(code_slot=3, to_locked=expected_to_locked)
+        fired.assert_called_once_with(
+            code_slot=3,
+            to_locked=expected_to_locked,
+            credential_type=CredentialType.PIN,
+        )
 
     @pytest.mark.parametrize(
         "payload",
