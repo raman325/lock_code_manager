@@ -43,8 +43,8 @@ class AccessControlUser(NamedTuple):
     # The user, or None when the notification names none or one that is no
     # user identifier.
     user: int | None
-    # Whether it names something that is no user identifier: not a whole
-    # number, or below zero. A duplicate refusal naming that answers no write,
+    # Whether it names something that is no user identifier: not an integer,
+    # or below zero. A duplicate refusal naming that answers no write,
     # where one naming no user may answer the write in flight.
     unreadable: bool = False
 
@@ -55,14 +55,13 @@ def access_control_user(parameters: object) -> AccessControlUser:
 
     No parameters, parameters that are not a mapping (a raw buffer), no user
     key, a null user and user 0 all name no user. Anything else that is not
-    a whole number above zero is unreadable: a fraction is not truncated to a
-    slot, nor is text or a boolean coerced to one.
+    an integer above zero is unreadable: a fraction is not truncated to a
+    slot, nor is text or a boolean coerced to one. The driver sends a user
+    as an integer (a User Code Report field or a parsed value parameter).
     """
     if not isinstance(parameters, Mapping):
         return AccessControlUser(None)
     value = next((parameters[key] for key in _USER_KEYS if key in parameters), None)
-    if isinstance(value, float) and value.is_integer():
-        value = int(value)
     if value is None or (type(value) is int and value == 0):
         return AccessControlUser(None)
     if type(value) is not int or value < 0:
