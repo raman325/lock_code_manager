@@ -4474,3 +4474,98 @@ async def test_an_ignored_entry_on_the_lock_holds_no_pin(
         )
 
     assert result["type"] == "create_entry"
+
+
+async def _async_add_lock_2_to_users_with(
+    hass: HomeAssistant, pin: str
+) -> dict[str, Any]:
+    """Add lock 2 to an entry on lock 1 whose second user holds ``pin``."""
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {
+            "User 1": {CONF_ENABLED: True, CONF_PIN: "1111"},
+            "User 2": {CONF_ENABLED: False, CONF_PIN: pin},
+        },
+    )
+    started = await hass.config_entries.options.async_init(entry.entry_id)
+    with _holding():
+        return await hass.config_entries.options.async_configure(
+            started["flow_id"], {CONF_LOCKS: [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]}
+        )
+
+
+@pytest.mark.parametrize("pin", [TURNED_OFF_USERS_PIN, UNNUMBERED_USERS_PIN])
+async def test_options_flow_refuses_a_lock_where_another_entry_has_a_users_pin(
+    hass: HomeAssistant, mock_lock_config_entry, pin: str
+) -> None:
+    """
+    Adding a lock puts the entry's PINs on a keypad another entry's PINs are on.
+
+    The refusal names the lock, never the PIN or either user. Turned-off users
+    count on both sides.
+    """
+    entry_holding_pins_on([LOCK_2_ENTITY_ID]).add_to_hass(hass)
+
+    result = await _async_add_lock_2_to_users_with(hass, pin)
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "pin_conflict_on_lock"}
+    assert result["description_placeholders"] == {"lock": LOCK_2_ENTITY_ID}
+    _assert_options_error_renders(result)
+
+
+async def test_options_flow_adds_a_lock_with_no_pin_in_common(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """The counterpart: another entry on the lock with other PINs is no bar."""
+    entry_holding_pins_on([LOCK_2_ENTITY_ID]).add_to_hass(hass)
+
+    result = await _async_add_lock_2_to_users_with(hass, "4826")
+
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_LOCKS] == [LOCK_1_ENTITY_ID, LOCK_2_ENTITY_ID]
+
+
+@pytest.mark.parametrize(
+    ("pin", "refused"), [(TURNED_OFF_USERS_PIN, True), ("4826", False)]
+)
+async def test_reauth_checks_pins_on_a_lock_it_adds(
+    hass: HomeAssistant, mock_lock_config_entry, pin: str, refused: bool
+) -> None:
+    """A lock swapped in by reauth is checked as one the options flow adds."""
+    entry_holding_pins_on([LOCK_2_ENTITY_ID]).add_to_hass(hass)
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID],
+        {"User 1": {CONF_ENABLED: True, CONF_PIN: pin}},
+        unique_id="reauth-pins",
+    )
+    entry.async_start_reauth(hass, context={"lock_entity_id": LOCK_1_ENTITY_ID})
+    await hass.async_block_till_done()
+    [flow] = entry.async_get_active_flows(hass, {SOURCE_REAUTH})
+
+    with _holding():
+        result = await async_configure_flow(
+            hass, flow["flow_id"], {CONF_LOCKS: [LOCK_2_ENTITY_ID]}
+        )
+
+    if refused:
+        assert result["step_id"] == "reauth_confirm"
+        assert result["errors"] == {"base": "pin_conflict_on_lock"}
+        assert result["description_placeholders"]["lock"] == LOCK_2_ENTITY_ID
+    else:
+        assert result["type"] == "abort"
+        assert result["reason"] == "locks_updated"
+
+
+@pytest.mark.parametrize("section", ["config", "options"])
+def test_a_pin_conflict_on_a_lock_names_only_the_lock(section: str):
+    """The reauth and options forms can say which lock, and nothing more."""
+    strings = json.loads(
+        Path("custom_components/lock_code_manager/strings.json").read_text()
+    )
+
+    message = strings[section]["error"]["pin_conflict_on_lock"]
+
+    assert set(re.findall(r"\{(\w+)\}", message)) == {"lock"}

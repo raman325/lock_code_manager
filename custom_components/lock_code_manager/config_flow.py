@@ -210,6 +210,26 @@ def _check_common_slots(
         }
 
 
+def _check_pins_on_added_locks(
+    hass: HomeAssistant, users: Iterable[Mapping[str, Any]], added: Iterable[str]
+) -> tuple[dict, dict]:
+    """
+    Refuse an added lock another entry's user has one of these users' PINs on.
+
+    Adding the lock puts the entry's PINs on a keypad the other entry's PINs
+    are already on. Turned-off users count on both sides. Names the lock,
+    never the PIN or either user.
+    """
+    mine = held_pins(users)
+    lock = next(
+        (lock for lock in added if mine & held_pins(users_on_locks(hass, (), [lock]))),
+        None,
+    )
+    if lock is None:
+        return {}, {}
+    return {"base": "pin_conflict_on_lock"}, {"lock": lock}
+
+
 async def _async_check_existing_codes(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -895,6 +915,16 @@ class LockCodeManagerFlowHandler(
                     config_entry,
                 )
             if not additional_errors:
+                additional_errors, additional_placeholders = _check_pins_on_added_locks(
+                    self.hass,
+                    entry_config.users.values(),
+                    (
+                        lock_entity_id
+                        for lock_entity_id in user_input[CONF_LOCKS]
+                        if lock_entity_id not in entry_config.locks
+                    ),
+                )
+            if not additional_errors:
                 # Reauth is where a lock gets swapped, so it is also where an
                 # already-valid slot set can become too large for the new lock.
                 try:
@@ -1016,6 +1046,11 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
                 # Another entry may already manage some of them on it.
                 errors, description_placeholders = _check_common_slots(
                     self.hass, added, config.slot_numbers
+                )
+            if not errors:
+                # Or have a user with one of this entry's PINs on it.
+                errors, description_placeholders = _check_pins_on_added_locks(
+                    self.hass, config.users.values(), added
                 )
             if not errors and config.slot_numbers:
                 # The users are not on this form, but the numbers they hold
