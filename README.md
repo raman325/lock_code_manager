@@ -51,8 +51,9 @@ Features:
 | [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | Try Lock Code Manager without a real lock |
 | [ESPHome][wiki-external-keypads] | ❌ | ❌ | ✅ | Keypads and readers, not locks: codes are checked, nothing is written to the device |
 
-**Code Events** means Lock Code Manager can tell which user's code was used, for
-automations.
+**Code Events** means Lock Code Manager can tell which user's code was used and
+[emits an event][wiki-events] for it: the `lock_code_manager_credential_used`
+bus event and the user's event entity, either of which can trigger automations.
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
@@ -120,6 +121,7 @@ wrong, to learn more about it, or anything in between — find me on the
 [wiki-repairs]: https://github.com/raman325/lock_code_manager/wiki/Repair-Issues
 [wiki-conditions]: https://github.com/raman325/lock_code_manager/wiki/Using-Condition-Entities
 [wiki-services]: https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions
+[wiki-events]: https://github.com/raman325/lock_code_manager/wiki/Tracking-lock-state-change-events
 [wiki-guests]: https://github.com/raman325/lock_code_manager/wiki/Managing-Guests-and-Rentals
 [wiki-adding-provider]: https://github.com/raman325/lock_code_manager/wiki/Adding-a-Provider
 [wiki-unsupported]: https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations
