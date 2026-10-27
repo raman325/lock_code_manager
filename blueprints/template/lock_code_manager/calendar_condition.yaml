@@ -19,14 +19,15 @@ blueprint:
     - **"slot N" in the event description** — the description says `slot 3`
     for the user on slot 3. `slot 12` does not count as `slot 1`.
 
-    Name matching ignores case. **Match text** (optional) narrows any of these
+    Names match as whole words and ignore case, so `Al` doesn't match `Alice`.
+    **Match text** (optional) narrows any of these
     further: the event's title or description must also contain it, again
     ignoring case.
 
 
     The sensor updates as soon as the calendar moves to another event or the
-    user is renamed. It is off when it can't find the user, and unavailable
-    while the calendar is or if its template fails to render, so a problem
+    user is renamed. It is off when it can't find the user, unavailable while
+    the calendar is, and unknown if its template fails to render, so a problem
     leaves the PIN inactive rather than active.
 
 
@@ -102,7 +103,8 @@ variables:
   _legacy_condition: !input condition_template
   # A sensor from before Match keeps the meaning of its old default, any event,
   # unless it set its own condition template: that one can't be honoured, so
-  # it gets no match at all and the availability template turns it off.
+  # it gets no match at all, and the availability template makes it
+  # unavailable.
   match: >-
     {%- if _chosen_match != 'not set' -%}{{ _chosen_match }}
     {%- elif _legacy_condition == 'not set' -%}any
@@ -123,13 +125,19 @@ binary_sensor:
         | selectattr('attributes.slot_field', 'eq', 'name')
         | selectattr('attributes.code_slot', 'eq', slot)
         | map(attribute='state') | first | default('') | lower -%}
-    {%- set has_name = name not in ('', 'unknown', 'unavailable') -%}
+    {#- Names match as whole words: punctuation and spacing become single
+        spaces on both sides, so "Al" doesn't match "Alice". -#}
+    {%- set words = ' ' ~ (name | regex_replace('\\W+', ' ') | trim) ~ ' ' -%}
+    {%- set has_name = name not in ('unknown', 'unavailable')
+        and words | trim != '' -%}
+    {%- set title_words = ' ' ~ (title | regex_replace('\\W+', ' ')) ~ ' ' -%}
+    {%- set details_words = ' ' ~ (details | regex_replace('\\W+', ' ')) ~ ' ' -%}
     {%- if match == 'any' -%}
       {%- set matched = true -%}
     {%- elif match == 'name_in_title' -%}
-      {%- set matched = has_name and name in title -%}
+      {%- set matched = has_name and words in title_words -%}
     {%- elif match == 'name_in_description' -%}
-      {%- set matched = has_name and name in details -%}
+      {%- set matched = has_name and words in details_words -%}
     {%- elif match == 'slot_in_description' -%}
       {%- set matched = slot > 0
           and (slot | string) in details | regex_findall('slot\\s*(\\d+)') -%}

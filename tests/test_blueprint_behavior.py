@@ -27,7 +27,12 @@ from homeassistant.components.text import (
     DOMAIN as TEXT_DOMAIN,
     SERVICE_SET_VALUE,
 )
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, STATE_UNAVAILABLE
+from homeassistant.const import (
+    ATTR_ENTITY_ID,
+    ATTR_FRIENDLY_NAME,
+    STATE_UNAVAILABLE,
+    STATE_UNKNOWN,
+)
 from homeassistant.core import HomeAssistant, ServiceCall, State, callback
 from homeassistant.helpers import entity_registry as er, template
 from homeassistant.setup import async_setup_component
@@ -1080,6 +1085,9 @@ async def _calendar_at(
         ({"match": "name_in_title"}, ("on", "TEST1 arriving", ""), "on"),
         ({"match": "name_in_title"}, ("on", "test2 arriving", ""), "off"),
         ({"match": "name_in_title"}, ("on", "Stay", "test1"), "off"),
+        ({"match": "name_in_title"}, ("on", "test10 arriving", ""), "off"),
+        ({"match": "name_in_title"}, ("on", "Stay: test1, 2 nights", ""), "on"),
+        ({"match": "name_in_description"}, ("on", "Stay", "guest test10"), "off"),
         ({"match": "name_in_description"}, ("on", "Stay", "Guest: Test1"), "on"),
         ({"match": "name_in_description"}, ("on", "test1", "Guest: test2"), "off"),
         ({"match": "slot_in_description"}, ("on", "Stay", "Slot 1, two nights"), "on"),
@@ -1100,6 +1108,9 @@ async def _calendar_at(
         "name-in-title-ignores-case",
         "name-in-title-other-user",
         "name-in-title-not-description",
+        "test10-is-not-test1",
+        "name-between-punctuation",
+        "test10-is-not-test1-in-description",
         "name-in-description",
         "name-in-description-not-title",
         "slot-in-description",
@@ -1198,8 +1209,9 @@ async def test_calendar_condition_does_not_match_a_user_it_cannot_find(
     A slot with no name entity matches no event, rather than every event.
 
     An empty name is in every title, so a name match against a user that
-    can't be found (no such slot, or the name entity unavailable and so
-    without attributes) would otherwise turn the sensor on for any booking.
+    can't be found would otherwise turn the sensor on for any booking. An
+    unavailable name entity ends up here too: Home Assistant drops an
+    unavailable entity's attributes, so the lookup finds nobody.
     """
     hass.states.async_set("calendar.bookings", "off", {})
     await _setup_calendar_condition(
@@ -1225,6 +1237,47 @@ async def test_calendar_condition_is_unavailable_with_its_calendar(
     )
 
     assert await _calendar_at(hass, STATE_UNAVAILABLE) == STATE_UNAVAILABLE
+
+
+async def test_calendar_condition_is_not_on_when_its_template_fails(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """
+    A state template that fails to render leaves the sensor ``unknown``.
+
+    Only ``on`` makes a PIN active, so an error has to land anywhere but
+    there. A config entry that doesn't exist makes ``config_entry_attr``
+    raise inside the state template.
+    """
+    hass.states.async_set("calendar.bookings", "off", {})
+    with patch_blueprint(
+        CALENDAR_PATH,
+        BLUEPRINTS_ROOT / "template" / CALENDAR_PATH,
+        schema=template_config.TEMPLATE_BLUEPRINT_SCHEMA,
+    ):
+        assert await async_setup_component(
+            hass,
+            "template",
+            {
+                "template": {
+                    "name": "Guest Condition",
+                    "use_blueprint": {
+                        "path": CALENDAR_PATH,
+                        "input": {
+                            "config_entry": 12345,
+                            "calendar_entity": "calendar.bookings",
+                            "slot_number": 1,
+                            "match": "any",
+                        },
+                    },
+                }
+            },
+        )
+    await hass.async_block_till_done()
+
+    assert await _calendar_at(hass, "on", "Anything") == STATE_UNKNOWN
 
 
 @pytest.mark.parametrize(

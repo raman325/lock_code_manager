@@ -120,14 +120,15 @@ sensor per user, each matching that user's events.
 | User's name in the event description | has the user's name in its description |
 | "slot N" in the event description | says `slot 3` in its description, for the user on slot 3 (`slot 12` does not count as `slot 1`) |
 
-- Name matching ignores case. A user the sensor can't find (no such slot, or
+- Names match as whole words and ignore case, so `Al` doesn't match
+  `Alice`. A user the sensor can't find (no such slot, or
   their name entity unavailable while all the configuration's locks are)
   matches no event
 - The sensor updates as soon as the calendar moves to another event or the
   user is renamed
 - It is unavailable while the calendar entity is `unknown` or `unavailable`,
-  and if its template fails to render, so a problem leaves the PIN inactive
-  rather than active
+  and unknown if its template fails to render. Only `on` makes a PIN active,
+  so a problem leaves the PIN inactive rather than active
 - Free-form condition templates are not supported. For a rule these choices
   don't cover, make your own [template binary
   sensor](https://www.home-assistant.io/integrations/template/) and use it as
@@ -208,8 +209,8 @@ calendars.
 | Clear PIN when event ends | Clear the PIN when the calendar event ends | `true` |
 | Notification service (optional) | A `notify` entity, messaged when the PIN is set or cleared | None |
 
-**Slot number** takes a static number or a template, the same way as in
-[Calendar Condition](#calendar-condition).
+**Slot number** takes a static number, or a template that reads it from the
+event, e.g. `{{ description | regex_findall('slot (\\d+)') | first }}`.
 
 The PIN template and the slot number template can use these variables:
 
@@ -412,10 +413,11 @@ To set it up:
 
 Lock Code Manager assigns each user a slot number and manages it for
 you, so the configuration editor and the dashboard cards never show
-it. The [Calendar Condition](#calendar-condition) and [Calendar PIN
-Setter](#calendar-pin-setter) blueprints still take one, because the
-number can come from a template over the calendar event. Every action,
-and every other blueprint, addresses the person by name instead.
+it. The [Calendar Condition](#calendar-condition) blueprint takes one to
+say which user its sensor gates, and the [Calendar PIN
+Setter](#calendar-pin-setter) takes one because the number can come from a
+template over the calendar event. Every action, and every other blueprint,
+addresses the person by name instead.
 
 To find the number for a user, open any of that user's entities and
 look at its `code_slot` attribute. In a template, for a user named Raman
