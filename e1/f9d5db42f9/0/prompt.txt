@@ -1,0 +1,687 @@
+research #1768. Consider various group types (there are legacy groups and new style groups - I think the new style gets exposed in the same domain as the underlying entities
+
+---
+
+actually I think the right answer is to use template entities as the condition. That's what allows us to keep thing simple
+
+---
+
+post it but don't close it yet. Go ahead and update the wiki
+
+---
+
+the README is starting to get pretty big. Should we shrink/split it?
+
+---
+
+yes
+
+---
+
+**Code Events** means Lock Code Manager can tell which user's code was used, for -> should we also say and will emit events?
+
+---
+
+a lock that already holds codes in the configuration's slots is refused until you clear them <- do we still need this?
+
+---
+
+right but how does that also hold true when we say that the lock picks the first clear slot
+
+---
+
+its already merged so new PR
+
+---
+
+ok, everything is cleaned up. Clean up stale branches. Then look at 858 and evaluate the feasibility. This feels like a lot more work than it sounds but let me know if you disagree
+
+---
+
+I am confused by #2. What needs to land? we don't have anything in flight
+
+---
+
+write up the wiki while I decide how to reply
+
+---
+
+you can comment on the issue, but I don't think we want to support alarm panels. There isn't a standard way to do alarm panels from what you are telling me and even locks are a very recent thing that could be supported across providers
+
+---
+
+the name part is overstated, I actually did feel like this should be credential_manager long term but renaming things is hard
+
+---
+
+edited again
+
+---
+
+the external keypads wiki page is super long. Can we figure out how to refactor and shorten, either through collapsed sections, a ToC, subpages, something else? Then let's check other wiki pages and apply the same treatment
+
+---
+
+I agree BLUEPRINTS.md with a light wiki page referencing it
+
+---
+
+<task-notification>
+<task-id>a918b4b03fafcc5b3</task-id>
+<tool-use-id>toolu_015nyzix4RC7NqVAxYHL8iLv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/a918b4b03fafcc5b3.output</output-file>
+<status>completed</status>
+<summary>Agent "Split Managing Guests recipes page" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I split the page into an overview and a recipes subpage, following the External Keypads model. Nothing is committed, and I only touched these two files. Checking every original line against the two new files shows only the intended changes: the link and heading edits, the new intro line, the short recipe list, and one divider put back.
+
+**Line counts**
+- `/Users/raman/projects/lock_code_manager.wiki/Managing-Guests-and-Rentals.md`: 252 lines (was 407)
+- `/Users/raman/projects/lock_code_manager.wiki/Managing-Guests-and-Rentals-Recipes.md`: 164 lines (new)
+
+**Overview page, in order**
+- The intro, "The short version", Pattern 0, "Why renaming is free", Pattern 1 and Pattern 2 are unchanged.
+- "Keeping guests apart from household codes" comes next.
+- Then a new short "## Recipes" list linking to the subpage, one line per recipe.
+- "Things that bite" is last.
+
+**Recipes page**
+- The H1 is "Managing guests and rentals: recipes", followed by a "Part of [[Managing guests and rentals|Managing-Guests-and-Rentals]], which explains …" line.
+- The recipes are H2 under it ("## 1." to "## 3."), so heading levels don't skip.
+- "Things these share" is the closing H2.
+
+**Where the three sections went**
+- **Things these share went to the recipes page.** Its heading says "these", meaning the recipes. Two of its five bullets (slot allocation, `delete_user` clearing the PIN) repeat what Pattern 2 already says. One bullet is borderline: "PIN length must satisfy your strictest lock". Patterns 1 and 2 also call `generate_pin` with `length: 6`, so someone reading only the patterns could pick a length their lock rejects. I left the section whole rather than pull one bullet out. If you want that bullet on the overview, it's a one-line move.
+- **Keeping guests apart from household codes stayed on the overview.** Whether to use one config entry or two is a setup choice that applies to every pattern, not to any recipe.
+- **Things that bite stayed on the overview.** Every item applies to all the patterns: slot limits, leftover codes, reusing PINs, a condition versus disabling, checking the in-sync sensor.
+
+**Link fixes**
+- Line 11 of the overview said "[Recipes](#recipes) below"; it is now `[[Recipes|Managing-Guests-and-Rentals-Recipes]]`.
+- The two `#pattern-1-…` links on the recipes page now point to `Managing-Guests-and-Rentals#pattern-1-rotate-a-standing-user-recommended-for-rentals`.
+- I linked "Pattern 2" in recipe 1's first sentence to `Managing-Guests-and-Rentals#pattern-2-add-and-remove-per-guest`.
+- The remaining in-page links on the overview (`#pattern-0-…`) and the one "above" (Pattern 1 pointing back to its own earlier code) are still on the same page, so they still work.
+- I removed the doubled `---` before the old "# Recipes" and kept a single `---` before "Keeping guests apart", like the other sections.
+- The overview now points to the recipes twice, at line 11 and in the new list. I kept both.
+
+**Things that look wrong (not fixed)**
+1. **The shared booking calendar opens the door for every booking.** Pattern 2's `add_user` example and recipe 1's alternative both give each guest `condition: calendar.bookings`. That calendar is on during any booking, so each guest's code would work during everyone else's bookings too, not just their own.
+2. **The two-entries advice clashes with automatic slots.** "Keeping guests apart" says two entries are fine "as long as they do not manage the same slot numbers on the same lock". But the same page says you never choose a slot number. A reader has no obvious way to keep the two entries' slots apart, and the page doesn't say whether allocation already prevents a clash.
+3. **Recipe 3 relies on things it never sets up.** It sets `input_number.courier_uses` to 1 without saying that helper has to exist already. The entity ID it gives, `event.all_locks_courier_credential_used`, also only holds if the entry is titled "All Locks".
+
+I checked a few other claims and they hold:
+- The fields the page uses exist in `services.yaml` (`condition`, `clear_credentials`, `enable_if_disabled`).
+- `generate_pin` accepts 4 to 12.
+- The Slot Usage Limiter, Calendar PIN Setter and Slot Usage Notifier blueprints all exist.
+- "Before 5.0, removing a slot did not clear its PIN" is accurate: the fix for #1453 first shipped in 5.0.0.</result>
+<usage><subagent_tokens>93039</subagent_tokens><tool_uses>9</tool_uses><duration_ms>90417</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6630a2c1c8801e7c</task-id>
+<tool-use-id>toolu_01DtMWogwyZnfmeU7LbiUNf7</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/a6630a2c1c8801e7c.output</output-file>
+<status>completed</status>
+<summary>Agent "Merge blueprint docs into BLUEPRINTS.md" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both files are rewritten and left uncommitted. `prek run --files BLUEPRINTS.md` passes, markdownlint included. All nine required anchors, plus `#finding-a-slot-number`, exist as headings in the new wiki page. Every BLUEPRINTS.md link the wiki page uses points at a heading that exists.
+
+**Line counts**
+- `/Users/raman/projects/lock_code_manager/.worktrees/blueprints-docs/BLUEPRINTS.md`: 331 → 499
+- `/Users/raman/projects/lock_code_manager.wiki/Blueprints.md`: 439 → 123. I edited only this file in the wiki; the other modified files there belong to the other helpers.
+
+**What moved from the wiki into BLUEPRINTS.md**
+- **Slot Usage Limiter:** setup steps; the counter being a visible helper you can reset from the user interface or another automation.
+- **Calendar Condition:** a variables table with descriptions; example condition templates; setup steps; the fact that **Slot number** can be a number or a template; the note on when the template is evaluated.
+- **Date Range Condition:** the example usage, merged into the setup steps; the `condition_helpers` tip, linked to the wiki page.
+- **Calendar PIN Setter:** a variables table; example PIN templates; setup steps; the slot-number template option; "an empty result skips setting the PIN".
+- **Auto Re-lock:** the `sun.sun` note (no Sun integration means the night delay never applies); the night window runs from sunset to sunrise.
+- **Lock on Door Close:** the sensor is `on` when open and `off` when closed; 0 means lock immediately.
+- **Slot Usage Notifier:** a variables table; setup steps; `mode: queued` with a limit of 10.
+- **Credential Used:** a variables table; the "reach for this one or the other two" guidance; the external keypad pointer to the wiki's External Keypads page.
+- **Condition Linker:** setup steps; the accepted condition entity domains; the PIN being active only while that entity is `on`; a **Breaking** note that it takes a Name; name matching ignores case and surrounding spaces.
+- **Finding a slot number:** which blueprints still take a number and why; the number is stable across renames.
+- I also added a few facts from the YAML that neither document had. For example: entity reloads and recovery from `unavailable` count as no use; the sensor is unavailable while the calendar or helpers are unavailable; the lock is checked again after the delay; the input ranges.
+- I dropped the wiki's Auto Re-lock and Lock on Door Close setup steps, because they only repeat the inputs table.
+
+**Discrepancies and how I resolved them**
+1. **Limiter helper minimum (wiki):** the wiki said create the helper with min=0. The YAML says min=-1, because -1 means unlimited. Fixed to -1.
+2. **Initial uses on re-enable (both docs):** both said only 0 or a positive number. The YAML also allows -1 (selector -1 to 999), and the reset fires on any value other than 0. Added "-1 = unlimited".
+3. **Notification service, Limiter and PIN Setter (BLUEPRINTS.md):** it said "Service called". The YAML input is a `notify` entity that receives `notify.send_message`. Fixed.
+4. **Calendar PIN Setter regex example (wiki):** the wiki had `'\b\d{4}\b'`. I tested it with Jinja: `\b` becomes a backspace character, so the pattern never matches (on "Check-in code: 5678" it returned an empty string). The YAML's `'\\b\\d{4}\\b'` returns `5678`. I used the YAML form and added a sentence explaining why the backslashes are doubled.
+5. **Calendar Condition business-hours example (wiki):** `{{ 8 &lt;= now().hour &lt; 18 }}` is not in the YAML. By the YAML's own note, the condition is only evaluated at load or reload, so it would not follow the clock. I replaced it with the YAML's `{{ name_state == 'Guest' }}` example.
+6. **Finding a slot number (BLUEPRINTS.md):** it said "Blueprints and services still take one". No action in `services.yaml` takes a slot number, and the Condition Linker takes a name. Rewrote it to match the wiki: only the two calendar blueprints take a number.
+7. **Slot-number entity example (BLUEPRINTS.md):** it used `text.raman_pin`. The device is named `"{title} {name}"` (`entity.py`), so the real ID is `text.all_locks_raman_pin`. Fixed.
+8. **Combining example (wiki):** it said "Next event: Cleaners is enabled again → counter resets". The calendar condition never turns the Enabled switch on, and the Limiter resets only when that switch turns on. Fixed the text.
+9. **Group default (wiki):** it said the group is on when all members are on "(default)". A Home Assistant binary sensor group defaults to on when any member is on, and `all: true` makes it require all. Fixed. This one is based on my knowledge of Home Assistant, not on this repo, so it's worth a glance.
+
+**Unsure, for you to decide**
+- **Condition Linker name matching:** the YAML says the name must be "exactly as they are named". The code matches ignoring case and surrounding spaces (`set_condition` → `_stored_user` → `identity()`). I documented the code's behaviour, which agrees with the wiki. The YAML description is stricter than reality; I didn't edit any YAML.
+- **Stale examples in the Limiter YAML:** I didn't edit these.
+  - `switch.front_door_code_slot_1_enabled` is the pre-5.0 naming.
+  - `event.raman` doesn't match the `"{title} {name}"` device naming.
+- **Existing "Breaking" callouts:** I kept those already in BLUEPRINTS.md and added one in the same style for the Condition Linker. They describe past changes, which sits uneasily with the no-history rule. I dropped the wiki's top-of-page 5.0 and 6.0 callouts and the "replaces Number of Uses (removed in 2.0)" note. In their place the wiki has one line pointing to the Upgrading to 6.0 and 5.0 pages.
+- **"All three see the same uses":** Credential Used says this, quoting the YAML. But the attributes table says a use of a kind not in `event_types` never reaches the entity, so the Notifier and Limiter can miss uses the event still fires for. I left the YAML's wording.
+- **Not carried over:** the YAML's "Template debugging" snippets, which were never in either doc.</result>
+<usage><subagent_tokens>151056</subagent_tokens><tool_uses>21</tool_uses><duration_ms>303042</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>ab6ea0b259aa34af3</task-id>
+<tool-use-id>toolu_01HgULMECcjVSvHfiFhYNN9X</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/ab6ea0b259aa34af3.output</output-file>
+<status>completed</status>
+<summary>Agent "De-duplicate provider developer pages" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three pages are edited and nothing is committed. Every cross-page anchor I added resolves to a real heading (15 links, checked with GitHub's slug rules). Total length went from 1,603 to 1,555 lines, because the reference page gained the facts it was missing. `Blueprints.md` also shows as modified; that was another helper, not me.
+
+## Line counts
+| File | Before | After |
+| --- | --- | --- |
+| `Adding-a-Provider.md` | 658 | 591 |
+| `Provider-State-Management.md` | 633 | 687 |
+| `Architecture.md` | 312 | 277 |
+
+## What moved where
+**Into Provider-State-Management (the reference):**
+- **New subsection "What the base does around your primitives"** (under "Slot-Only vs Native-User Providers"). It holds what Architecture used to list for `async_set_usercode`, `_set_credential`, `_build_tagged_user_name`, `async_clear_usercode` and `_delete_credential`, checked against `_base.py:1242-1351` and `1469-1759`.
+- **`async_set_credential`**: an argument-by-argument list. The meaning of `name` was missing (`None` means leave the name unchanged; slot-only providers use it, native-user providers may treat it as advisory). Also states which exception to raise for a duplicate versus any other refusal.
+- **`async_delete_credential`**: slot-only providers use `ref.slot` and ignore `ref.user_id`. New fact from the code: a `False` return is not recorded as a clear LCM made, so a masked or silent slot is not trusted as cleared (`sync/worker.py:725`, `sync/slot.py:159`).
+- **`async_set_user`**: what `user.name` holds, what `SetUserResult.user_id` and `created` are for, and the two lookup passes. From the tutorial it took the "pre-4.0.0 position" legacy predicate (`user_id == slot` on Z-Wave, `credential_index == slot` on Matter).
+- **`async_delete_user`**: deleting a user cascades to all its credentials; it is called only for rollback and from your release override.
+- **`async_get_capabilities`**: both the user-management flag and a name length above 0 are required; unadvertised credential types are refused; the result is cached and `cached_capabilities` exists.
+- **Slot teardown hook**: the cascade reason (from the tutorial). Three facts from `zwave_js.py:663-768`: read the raw credential list, a kept user keeps the display part of its name, and a failed rename is logged rather than raised.
+- **New "Helpers on `BaseLock`" section**: takes over Architecture's helper list, plus a "Recording a code use" subsection.
+
+**Adding-a-Provider (the tutorial):** each duplicated method keeps a short example and links to its reference section. `async_set_user` is now one function plus a pointer for `_find_user_index_for_slot`. The teardown hook is two paragraphs with no code. The complete example is inside `&lt;details&gt;&lt;summary&gt;The whole provider in one file&lt;/summary&gt;`, with a blank line after `&lt;/summary&gt;`.
+
+**Architecture:** the per-primitive list is replaced by a short section. It covers which entry points the worker calls, the split between orchestration and primitives, and why the helpers are `@final` (every native-user provider gets the same tagging, rollback and type checks). It then links to the new reference subsection.
+
+## Mismatches with the code that I corrected
+1. **`async_fire_code_slot_event` was missing a required argument.** The tutorial said it "takes only the slot and the direction", and its example left out `credential_type`. The real signature has a required keyword-only `credential_type` with no default (`_base.py:2047-2053`), so the example would have raised `TypeError`. Fixed in the tutorial's Step 7 and in the reference helpers table.
+2. **The event name was short.** The pages said `credential_used`; the real name is `lock_code_manager_credential_used` (`const.py:144`).
+3. **Both `_find_user_index_for_slot` examples used `parse_tag` to decide ownership.** That counts a homeowner's user named `3` as LCM's. The real code uses `self.slot_tag(...)` after loading capabilities (`zwave_js.py:641-657`), and `_util.py:84-103` says ownership is `slot_tag`'s decision. The reference example is fixed, and so is the tutorial's troubleshooting tip about push handlers (Matter uses `_raw_user_slot`, `matter.py:262-281`).
+4. **The legacy-adoption example in the reference had no position check.** It would adopt any untagged user holding a PIN at the slot. Z-Wave also requires `user_id == slot` (`zwave_js.py:655`). Added, with a comment telling readers to replace it with their lock's pre-4.0.0 position.
+5. **The release example renamed kept users to an empty name.** Z-Wave keeps the display part, and a failed rename is logged, not raised (`zwave_js.py:735-768`). The example now calls an untag step, and the bullets describe the real behaviour.
+6. **The reference's diagram called `async_setup` "one-time".** It runs again on every reload (`_base.py:994-1003`). Fixed.
+7. **Architecture described `_require_readable_pin` as a helper for providers.** The base calls it before the provider sees the PIN, and its docstring says providers must not add their own check (`_base.py:1645-1662`). Reworded.
+
+## Things I wasn't sure about, or left alone
+- **Stale docstrings in the code** (read-only for me, so not fixed):
+  - The `supports_native_users` docstring says the base "deletes the user when its last credential is removed" (`_base.py:568`), but `_delete_credential` never deletes the user.
+  - The `_set_credential` docstring says it "Returns True if the value changed" (`_base.py:1695`), but it returns a `WriteResult`.
+  - The `BaseLock` class docstring says to "Override subscribe_push_updates()" (`_base.py:197, 203`), but that method is `@final`.
+- **Matter's lookup is different.** Its `_find_user_index_for_slot` takes no `adopt_untagged` argument and returns a tuple (`matter.py:1109`). The pages present the Z-Wave shape as the pattern; I didn't document Matter's variant.
+- **I didn't re-check the rest of the reference page** against the code (Reads, Update Modes, Exception Routing, Connection State). I only checked the parts I touched, plus the defaults and constants in the intervals table, which match.</result>
+<usage><subagent_tokens>196152</subagent_tokens><tool_uses>53</tool_uses><duration_ms>339466</duration_ms></usage>
+</task-notification>
+
+---
+
+should the main wiki page be updated as well?
+
+---
+
+wondering if https://github.com/raman325/lock_code_manager/issues/1739 is the feature we need to justify 8.0.0
+
+---
+
+first lets research 1739
+
+---
+
+<task-notification>
+<task-id>a74ca554148ffd373</task-id>
+<tool-use-id>toolu_012NEChKjY2PvjABAbCdtuq4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/a74ca554148ffd373.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace slot assumptions in sync/providers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I checked each claim in the issue against the code. The core of the claim holds: the sync engine is already per lock. But the queries, allocation and the user's slot coordinator still treat the user's one configuration-wide number as the slot on every lock.
+
+One correction to the brief: there is no `custom_components/lock_code_manager/domain/` source. It holds only stale `__pycache__` files (allocation, coordinator, identifier_migration…). Paths below are relative to `custom_components/lock_code_manager/`.
+
+## 1. Where the engine keys by slot, and whether that key is per lock
+
+| Place | Keyed by | Per lock? |
+|---|---|---|
+| `LockWorker` (`sync/worker.py:136`, key protocol `sync/slot.py:48-58`) | An opaque key; "the worker never looks inside a key" | **Yes.** No change needed. |
+| `LockRegistry` owners (`sync/registry.py:52`, `_locks[lock]` at :85, `owner(lock, slot)` :159, `_check_free` :306) | `_locks[lock].owners[slot]` | **Yes.** Cross-entry "slot owned by another entry" (`SlotTaken`) is already decided per lock. |
+| `slot_of` (`ha/runtime.py:175-177`, wired at :387-388) | `address.user_ref` | Per lock in effect: it is only used inside one lock's entry. |
+| `CredentialAddress.user_ref` (`model/credentials.py:237-257`) | The slot number | The type doesn't care. Inside a worker it already means the slot on that lock: the port hands it straight to the provider as the slot (`ha/adapter.py:340-356`, `:187-197`). The config-wide part is only what callers put into `pin_address(slot)`. |
+| Lock store (`ha/lock_store.py:60,78,128-150`, `forget_slot` :174) | `locks[registry_id].slots[str(slot)]` | **Yes**, with one exception: `forget_entry(keys, slots)` (`:187-196`) applies one slot set to every lock. Its caller passes `config.slot_numbers` for all of an entry's locks (`__init__.py:1221-1224`). |
+| Pending work: `GIVEN_UP_KEY` (`ha/runtime.py:65-67,790`), `port.releasing`, `_written_at`, `others`, `not_reported` (`ha/adapter.py:118-140`), persisted repair data (`ha/runtime.py:923-928`) | `(lock, slot)` or per port | **Yes.** |
+| Write fingerprints (`sync/slot.py:87-89`) | The value plus a salt; no slot in it | Not keyed by slot at all. |
+| `in_sync` sensors (`binary_sensor.py:51-73`, `entity.py:405-423`) | One sensor per (lock, slot) over credential types | Per lock in shape, but built from the configuration number `slot_num`. I found no aggregation across locks in my scope. |
+| Queries (`model/queries.py`) | `slots_configured_on(lock)` returns `config.slot_numbers` (:205); `configured_owner(lock, slot)` uses `config.has_slot(slot)` (:131) | **The signatures take a lock, but the answers are configuration-wide.** The lock only filters which entries count (`has_lock`, :113). |
+| Slot coordinator (`ha/slot_coordinator.py:12,86-92`, `ha/entry.py:34` `dict[int, …]`) | One per (entry, slot number) | **Configuration-wide.** `async_push_want` sends the same `self._slot_num` to every lock (`:150-162`). This is the one real "same slot everywhere" assumption on the write path. |
+| Runtime reverse lookups | A slot on a lock is mapped to an entry, then to a config-wide key: `_name_for` (`ha/runtime.py:217-220`); `_on_disable` uses `slot_coordinators.get(slot)` and issue id `slot_disabled_{entry}_{slot}` (`:235-267`); reconcile deletes `slot_disabled_{owner}_{slot_num}` using the lock's slot (`:864-873`); `async_hand_off` uses `slot_coordinators.get(slot)` (`:700-704`) | **Configuration-wide.** These would break once the slot on a lock differs from the user's number. |
+| Update pass, adjacent to my scope (`model/config.py:529-534`, `__init__.py:1792-1795,1837-1839,2045-2059`) | `pairs_removed` is a cartesian product of locks × slot numbers; the `wants` dict passed to `async_hold_lock` is the same `{slot_num: want}` for every lock | Configuration-wide. |
+
+**Verdict on the issue's claims:**
+- **"One worker per lock with its own slot table"** is true.
+- **"The store is keyed per lock"** is true, except `forget_entry`.
+- **"Queries already take a lock"** is true of the signatures only; their bodies read the configuration-wide numbers. The fix is small and sits in `EntryConfig` (the other researcher's area) plus `queries.py:131,205`.
+
+## 2. The split I'd propose
+
+Each place needs one of two things:
+- **The engine needs the position on this lock.** That covers the worker, registry, store, port, releases and repairs. It is what the provider writes, what the store remembers, and what a release clear still targets after the user is deleted.
+- **The configuration side needs the user's identity.** That covers the coordinator, the `slot_disabled` and `pin_required` issues, PIN, enabled and condition settings, and attribution names.
+
+**Proposal:**
+- **Leave `CredentialAddress` keyed by position.** Only its docstring changes, from "the managed slot number" to "the slot on this lock" (`model/credentials.py:246-248`). Optionally rename `user_ref` to `slot`, which is mechanical.
+  - Keying it by user identity instead would force the port to translate back to a position on every read and write (`adapter.py:187,336`). It would also force a store key migration. And pending clears for deleted users would have no identity left to key on.
+- **Add two lookups at the boundary between the configuration and the engine (`model/queries.py`):**
+  - `user_at(hass, lock, slot) -&gt; (entry, user_id) | None` replaces every `configured_owner(...)` followed by `name_for(slot)` / `slots.get(slot)` / `slot_coordinators.get(slot)`. Call sites: `runtime.py:217-220,236-246,702`, `providers/_base.py:2074-2081`.
+  - A per-lock position lookup, e.g. `position(user_id, lock) -&gt; int | None`, used by `SlotEntityCoordinator.async_push_want` for each lock. It is also used by the per-lock entities (`entity.py:407,418`) and when building the `wants` dict at `__init__.py:1792`.
+- **Re-key `slot_coordinators` by user identity.** I'd infer subentry id rather than name, given the earlier decision that mutable values stay out of identifiers. That is the identity researcher's call.
+- **Fix `forget_entry` and `async_hand_off` to take per-lock positions,** e.g. `Mapping[lock_key, positions]`.
+
+## 3. Allocation
+
+Today every step folds all locks together:
+- `async_check_slot_capacity` raises `slot_out_of_range` if any lock can't hold a number (`ha/allocation.py:154-191`).
+- `async_max_slot` takes the minimum across locks (`:398`).
+- `Occupancy.unavailable` unions every lock's occupied numbers (`model/occupancy.py:67-69`), and `claimed_by_other_entries` is also unioned across locks (`allocation.py:297-303`).
+- `async_allocate_for` runs one shared window for all locks (`:474-525`) and returns one `frozenset[int]`.
+- `held` is a single set (`model/slot_assignment.py:119-130`), and `reconcile` assigns one number per name (`:132-184`).
+
+**Per-lock version:** run the same window loop once per lock, each with its own limit (`async_get_max_slot`, falling back to `MAX_SEARCHED_SLOT` at `:395`), its own held positions and its own other-entry claims. It returns `{lock: unavailable}`. `SlotAssignment` becomes name → {lock: slot}, with `held_by` and `reconcile` per lock.
+
+**Simpler:**
+- `slot_out_of_range` disappears, along with its config-flow call sites when a lock is added (`config_flow.py:930,1055`).
+- The `existing_codes` refusal (`config_flow.py:233-256`) becomes "allocate on the new lock with every user as a newcomer".
+- The "smallest lock constrains everyone" minimum goes.
+- A code on lock A no longer widens lock B's window. Fewer indices get read (inference).
+- `too_many_users` stays, but per lock.
+
+**Harder:**
+- **"Reading each lock separately" is not new.** Reads are already per lock and in parallel (`allocation.py:276`).
+- Held positions per lock.
+- Progress reporting across independent per-lock windows (`:463-472`).
+- **"Same number on every lock when one is free everywhere" is a real design decision.** It re-couples the searches: try a common number first, then fall back to per lock. Pure per-lock lowest-free is simpler but makes numbers diverge sooner.
+- **Unreadable locks are a design decision.** Today `occupancy_unknown` refuses everything (`:488-493`). Per lock you could allocate on the readable locks and defer the rest.
+
+Matter-style locks (where the slot is not the credential index) only exclude foreign untagged indices (`_async_adoptable`, `:557-578`), which is already per lock. The write-time capacity backstop also stays as it is (`adapter.py:226-235,486-493`).
+
+## 4. Providers
+
+- **No provider assumes the same slot across locks.** Each provider instance is one lock, and every slot it handles is passed in per call from that lock's port (`adapter.py:389-412`). The tag is built from that argument (`providers/_base.py:1475-1530`, `_util.py:65-68`). Matter's `user_index` → slot map lives on the instance and is rebuilt from tags on read (`matter.py:350-355,721-791`).
+- **Providers touch the configuration through exactly three spots in `_base.py`:**
+  - `is_slot_managed` (`:454-456`)
+  - `managed_slots` (`:2041-2043`), used by Akuvox, Schlage, ZHA, Zigbee2MQTT, virtual and the MQTT providers
+  - attribution, `configured_owner` then `name_for(code_slot)` (`:2074-2081`)
+
+  The first two become correct automatically once the queries answer per lock. Attribution needs `user_at`; that is about 5 lines.
+- **Push handlers** (`_confirm_slot` / `_expects_pin`, `_base.py:429-451`; `_Coordinator`, `adapter.py:629-646`) already map a reported slot to a per-lock address.
+- **Release and teardown hooks** (`async_release_managed_slot`, `async_clear_usercode`'s tag-based owner lookup at `_base.py:1302-1351`) work per (lock, slot). No provider has cross-lock state (I checked module and class-level state).
+- **Matter does decouple slot from index:** `credential_index_follows_slot` returns False (`matter.py:408-418`).
+- **Akuvox and Schlage keep the slot only in the tag** (`akuvox.py:6-8`, `schlage.py:5-7`). One correction to the issue: they inherit `credential_index_follows_slot = True`. Capacity is skipped for them only because they don't implement `async_get_capabilities`, so the capacity queries fail and are skipped (`_base.py:1962-1972`, `:1948-1961`).
+- **Upgrade, if each user's number is copied onto every lock:**
+  - Tags `lcm:N:`, store `slots["N"]`, Matter's tag map, Akuvox/Schlage `parse_full_tag`, pending releases and persisted repair data all match unchanged. Nothing is written to any lock.
+  - The only orphans are the persistent issue ids `slot_disabled_{entry}_{N}` and `pin_required_{entry}_{N}` (`runtime.py:255`, `slot_coordinator.py` around :547, `__init__.py:1229-1230`), if those get re-keyed by user. The migration should delete and re-raise them.
+
+## 5. Size
+
+| Module | Change | Kind |
+|---|---|---|
+| `sync/registry.py`, `sync/slot.py`, `sync/worker.py` | none | — |
+| `ha/adapter.py`, `ha/locks.py`, all provider subclasses | none | — |
+| `model/credentials.py` | docstring, optional rename of `user_ref` (~25 sites) | mechanical |
+| `ha/lock_store.py` | `forget_entry` takes positions per lock (~10 lines); no store migration | mechanical |
+| `model/queries.py` | per-lock `slots_configured_on` / `configured_owner`, plus `user_at` and the position lookup (~40 lines) | small design |
+| `providers/_base.py` | attribution through `user_at` (~5 lines) | mechanical |
+| `ha/runtime.py` | `_name_for`, `_on_disable`, reconcile's issue deletion, `async_hand_off` (~40-60 lines); the issue-id keying is a decision | mixed |
+| `ha/slot_coordinator.py` (+ `ha/entry.py`) | re-key from slot number to user, `push_want` per lock, issue ids, `_slot_config` / `with_slot_field_set` (~60 lines) | design (identity choice) |
+| `ha/allocation.py` + `model/occupancy.py` + `model/slot_assignment.py` | per-lock windows, occupancy, held, reconcile (~200-300 lines of ~880) | **largest design piece** |
+| Adjacent (other researchers): `__init__.py` wants / hand-off / forget, `model/config.py` `pairs_removed` | per-lock pairs and wants | mechanical once `EntryConfig` exposes positions |
+
+Inference: in my scope, about 80% of the risk sits in allocation and in re-keying the slot coordinator. The engine itself needs essentially nothing.</result>
+<usage><subagent_tokens>196511</subagent_tokens><tool_uses>41</tool_uses><duration_ms>266259</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a2270e3d84721a67b</task-id>
+<tool-use-id>toolu_0121hc7NsMwamxjsVWYE4LSk</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/a2270e3d84721a67b.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace user-facing slot surfaces" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I made no edits and ran no git commands that change state. The main finding: no action takes or returns a slot number, and the bus event carries none. The exposure is the `code_slot` attribute on every entity, plus the dashboard and blueprint configs keyed by it. How bad #1739 gets for users depends on one decision: does each user keep a configuration-wide key, today's number, after per-lock slots arrive?
+
+## 1. Events
+- **Bus event `lock_code_manager_credential_used`** (`model/events.py:93-103`): no slot field, only name, entry, source, target, type and operation. **A.** One dependency: the `name` it carries is looked up from the lock's slot through the configuration-wide map at `ha/runtime.py:217-220` (`get_entry_config(entry).slots.get(slot)`). That lookup has to become per lock, or uses get credited to the wrong person. That's the engine side, so I only note it.
+- **Event entity** (`event.py`): it picks up events by name (`event.py:172-176`), so recording is **A**. But every LCM entity gets `code_slot = slot_num` (the configuration-wide number) from the base class (`entity.py:100-103`), including the per-lock in-sync and code sensors (`entity.py:340-341`). Nothing exposes the slot a user holds on a given lock, and the event says nothing about which lock slot was used.
+  - If `code_slot` stays configuration-wide, automations keep matching, but "slot N used on Back Door" is wrong whenever the user's Back Door slot differs. **C.**
+  - If per-lock entities switch to the per-lock slot, anything filtering them by `code_slot` changes meaning. **C.** Adding a new attribute instead would be **B.**
+
+## 2. Actions and websocket
+- **`services.yaml`:** every action addresses a person by name. No field takes or returns a slot; the `use_credential` response is valid/user/reason (`ha/services.py:332-336`). **A.** Handlers turn the name into a slot internally (`ha/services.py:148-181`, `673-675`).
+- **`deobfuscate_log`:** its lookup table is salted with the configuration-wide slot (`model/pin_masking.py:64-68`), but logs are masked with the lock's slot (`ha/adapter.py:385`, `providers/_base.py:410-414`). Tokens for users whose lock slot differs would quietly fail to decode. **B**, a backend fix, but nothing errors if it's forgotten.
+- **Websocket commands:**
+
+| Command | Slot data | Effect | Class |
+|---|---|---|---|
+| `get_config_entry_data` | `slots: {slot_num: {name, condition}}` (`websocket.py:450-456`), joined to unique IDs in the frontend | Fine while the configuration-wide key exists | A/B |
+| `subscribe_lock_codes` | `slots[].slot` is already the lock's own slot (`:476`, `:655-687`) | The join that attaches name, managed and in-sync is keyed by `config.slot_numbers` (`:569-578`, `:603-607`, `:666`). It must map lock slot to user, or rows show the wrong person with no error | B |
+| `subscribe_code_slot` | takes `slot` (`:1058`, `:268-269`), returns `slot_num` (`:1002`) | Per-lock status reads `lock_codes(...).get(slot_num)` with the configuration-wide number (`:900`) and must use the per-lock one. Could add a per-lock slot to `locks[]` | B |
+| `set_condition` / `clear_condition` | accept `slot` (`:1271`, `:1324`) | Only cards configured with `slot:` send it | follows the key decision |
+| `write_unmanaged_code` / `clear_unmanaged_code` | `code_slot` (`:1218`, `:1245`) | Already the lock's own slot | A |
+
+## 3. Frontend (`ts/`)
+- **User card `lcm-user`** (`slot-card.ts`): never shows a slot (`:509`). It addresses the user by `user_entity_id`, then `name`, then `slot` (`:1165-1172`), and validates `slot` as 1-9999 (`:170-173`). **A** for cards that use an entity or name. Cards using `slot:` follow the key decision: **C** if the key is reassigned, **D** if it's removed.
+- **Deprecated `lcm-slot` alias** (`slot-card.ts:1517-1536`): same behaviour as the user card's `slot:` path.
+- **Add-user card:** "A slot is picked for you on every lock" (`add-user-card.ts:340`) stays true. **A.**
+- **Lock codes card:** its "Slot N" rows (`lock-codes-card.ts:384`, `537`, `555`, `633`; writes `code_slot` at `253-263`) are already per lock. **A** on screen; whether the rows are right depends on the backend join above.
+- **Slot section strategy:** emits `user_entity_id`, then `name`, then `slot` (`slot-section-strategy.ts:57`); `slot` is a required field in the type (`types.ts:149`). Legacy mode (`use_slot_cards: false`) groups entities by the slot in their unique IDs (`slot-section-strategy.ts:88-90`, `generate-view.ts:181-185`, `:348`). If per-lock unique IDs were re-keyed to per-lock slots, a user's per-lock rows would be grouped under the wrong person without any error. **C (inferred).** Otherwise **A.**
+- **View generation** (`generate-view.ts:53-107`): sections are keyed by the `get_config_entry_data` slots. A section with no name is titled "Slot N" (`:243`). **B.**
+- **`condition_helpers`:** the dashboard level is `Record&lt;entry_id, Record&lt;slot_num, …&gt;&gt;` (`types.ts:90`, `dashboard-strategy.ts:52`) and the view level is `Record&lt;slot_num, …&gt;` (`types.ts:116`, `generate-view.ts:90-91`). Users type these numbers by hand into dashboard YAML or storage, which LCM cannot migrate. **A** if the configuration-wide key survives unchanged, **C** if it's reassigned, **D** if it's replaced.
+
+## 4. Blueprints and `BLUEPRINTS.md`
+- **`calendar_condition.yaml`:** takes a `slot_number` input (`:100-107`), finds the user by `attributes.code_slot == slot_number` (`:143-149`), and exposes `slot_number` (`:26`).
+- **`calendar_pin_setter.yaml`:** same pattern (`:57-64`, `:128-134`), with "Slot N" in its notifications (`:158-161`, `:185-188`).
+- For both calendar blueprints: existing instances keep working only if per-user entities keep the configuration-wide `code_slot`. Users also put numbers in calendar event text (the `regex_findall('slot (\d+)')` pattern), which is data LCM can't reach. **C** if someone copies a number off a lock (say the lock codes card) for a user whose slots differ; **D** if `code_slot` is removed.
+- **`slot_usage_notifier.yaml`:** `slot_num` comes from `code_slot` (`:130-132`) and is shown alongside `lock_name`. **C.**
+- **`slot_usage_limiter.yaml`:** `_slot_number` from `code_slot` (`:180-181`) appears in the notification text (`:237-240`). **B/C.**
+- **No slot input (A):** `credential_used`, `condition_linker`, `auto_relock`, `door_lock_on_close`, `date_range_condition`.
+- **`BLUEPRINTS.md`:** lines 30, 139-172, 224-266, 343, 437-455 ("Finding a slot number": "The number is stable"), and 476 (the `code_slot` row, "The user's slot number").
+
+## 5. Diagnostics, repairs, names, logbook
+- **Diagnostics:** the per-lock code and worker sections (`diagnostics.py:85-121`) are **A**. The per-user section is keyed by the configuration-wide slot and reads `lock_codes(lock).get(slot_num)` (`:144-160`, `:204-208`), so it needs the per-lock slot. **B.**
+- **Repairs:**
+  - `slot_disabled` (`ha/runtime.py:234-267`; `strings.json:432-437`): the issue ID is `slot_disabled_{entry}_{slot}` using the lock's slot. The title "Slot N disabled" is scoped to the entry, but two users could hold N on different locks. The code also looks up `slot_coordinators.get(slot)` with the lock's slot (`:246`), which would turn off the wrong user; that's the engine's to fix. The text and ID should name the user. **B.**
+  - `pin_required` (`ha/slot_coordinator.py:544-556`; strings `443-448`): "PIN required for slot N" uses the configuration-wide number. **B**, should name the user.
+  - Already per lock, **A**: `slot_suspended` and `slot_clear_failed` (`ha/runtime.py:891-929`; strings `454-470`), `slot_conflict` (`:573-606`; strings `476`), `lock_re_paired_work_dropped` (strings `492`), `unmanaged_code` (`ha/unmanaged.py:110-117`; strings `507-522`), and `number_of_uses_removed` (`__init__.py:309-320`), a legacy migration repair.
+- **Errors and flow text:** the `name_required` error ("Code slot {slot_num} needs a name", strings `532`) is **B**. `existing_codes` and `slot_out_of_range` go away. The `too_many_users`, `numbers_needed_exceed_capacity` and `search_limit_reached` errors and the flow/action description strings ("picks which code slot each user occupies") need rewording. **B.**
+- **Entity names:** no slot appears in any entity name translation. The device name is "{title} {user}". Users named "User N" at the 5.0 migration (`model/names.py:54-56`, `:128`) keep that stored name, which becomes misleading but harmless. **B.**
+- **Logbook:** LCM has no logbook platform. **A.**
+
+## 6. Wiki pages
+- `Blueprints.md:45-63` (Finding a slot number, "The number is stable")
+- `Configuration-Structure.md:41` ("same position"), `47`, `53-57` (`condition_helpers` keyed by slot), `79`
+- `UI-Strategies.md:57`, `80`, `118`, `146`, `155`
+- `Using-Condition-Entities.md:128-174`
+- `Custom-Cards.md:17-23`, `47`, `87`
+- `Tracking-lock-state-change-events.md:22`, `32`, `38`, `72` (`code_slot`)
+- `Managing-Guests-and-Rentals.md:57` ("identifies a user internally by the slot number"), `197`, `205-210` (two entries must not share a slot number on the same lock)
+- `Managing-Guests-and-Rentals-Recipes.md:157`; `Advanced-Usage.md:9`
+- `Adding-and-Removing-Locks.md:13-15` (the `existing_codes` refusal, which goes away)
+- `Upgrading-to-7.0.md:9`, `77-78`; `Upgrading-to-6.0.md:39`, `80-87`, `113`, `125-131`; `Upgrading-to-5.0.md:3`, `24`, `93`, `97-100`, `140-147`
+- `Services-and-Actions.md:5`, `9`, `28`, `393`, `417` (mask salt)
+- `Repair-Issues.md:25`, `39`, `49`, `59`, `99`, `119`
+- `Migrating-from-keymaster.md:10-11`, `42`, `59`, `128`, `134-135` ("same slot definitions")
+- `Troubleshooting-Device-Diagnostics.md:16`
+
+## 7. Totals
+- **A, about 22 unaffected:** the bus event, every action, the unmanaged-code commands, the lock codes card and add-user card on screen, entity names and IDs, logbook, the six per-lock repairs, five blueprints, and user cards addressed by entity or name.
+- **B, about 15 display or backend-only:** the three websocket joins, per-user diagnostics, `deobfuscate_log`, the `slot_disabled`, `pin_required` and `name_required` text, flow error wording, the "Slot N" heading and "User N" names, notification text, and the docs.
+- **C, about 6 that silently change meaning:**
+  1. `code_slot` on per-user entities and the event entity, as "the user's slot number"
+  2. The notifier pairing `slot_num` with `lock_name`
+  3. `code_slot` on per-lock entities, whichever way it goes
+  4. Calendar blueprint numbers copied off a lock
+  5. Legacy-mode grouping, if unique IDs are re-keyed
+  6. The wiki's "stable, same position on every lock" claims
+- **D, about 5, only if the configuration-wide key is dropped:** dashboard and view `condition_helpers`, `slot:` on `lcm-user`/`lcm-slot` cards, the `slot` field in the slot section strategy, the calendar blueprints' `slot_number` input and the numbers in calendar event text, and any user automation selecting by `code_slot`. LCM can't migrate any of these: they live in Lovelace storage or YAML, `automations.yaml`, and outside calendars.
+
+**Decision for you (my inference):** keeping today's number as a permanent per-user key under its current name turns every D into A. It still leaves the C items, because the number stops matching the lock on any lock where the user's slot differs. The lowest-risk mix:
+- Keep the key's value and the `code_slot` attribute.
+- Stop calling it a slot in the docs.
+- Add a separate per-lock slot attribute on per-lock entities.
+- Change the notifier's `slot_num` (and the limiter's text) to drop it or explain it.
+- Cover all of this in the upgrade note #1739 already asks for.</result>
+<usage><subagent_tokens>181088</subagent_tokens><tool_uses>45</tool_uses><duration_ms>266264</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a31a275930d05846e</task-id>
+<tool-use-id>toolu_01XRtEYhotovkUJYTN1GvnRq</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/a31a275930d05846e.output</output-file>
+<status>completed</status>
+<summary>Agent "Trace slot identity in config/HA layer" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I traced the configuration, identity and Home Assistant layer for #1739. Two findings matter most. First, the user's number is both the registry key and the lock-side slot address, and the code mixes the two uses everywhere. Second, per-lock slots are a design job, not a find-and-replace on `CONF_SLOT`. Paths are relative to `custom_components/lock_code_manager/` unless I say otherwise; HA paths are relative to `.venv/.../site-packages/homeassistant/`.
+
+## 1. What derives identity from the slot number
+
+**Registry identity (keyed on the user's number):**
+- **Device:** `build_slot_device_identifier` builds `{entry_id}|{slot}` (`model/config.py:602-609`). It is used at `entity.py:61`, `__init__.py:477,1268,1626` and `diagnostics.py:169`. `parse_slot_device_identifier` reads it back as a strict int (`model/config.py:612-638`) for the orphan sweep (`__init__.py:1657`) and the device delete hook (`__init__.py:1722-1728`).
+- **Entity unique_id:**
+  - Per user: `{entry}|{slot}|{key}` (`model/config.py:584-599`, used at `entity.py:99`).
+  - Per (user, lock): `{entry}|{slot}|{key}|{lock_entity_id}` (`entity.py:359-361`).
+  - `parse_slot_unique_id` (`model/config.py:641-662`) is used at `__init__.py:1318,1528,1558` and `websocket.py:262`.
+  - `websocket.py` hand-builds the same strings a second time: `_slot_unique_id` (`websocket.py:149-151`), plus `:606` and `:780`.
+- **Which user (subentry) an entity or device belongs to:** `subentry_id_for_slot` matches on `data[CONF_SLOT]` (`model/queries.py:74-93`). Every platform calls it (`text.py:38`, `switch.py:38`, `sensor.py:38`, `binary_sensor.py:46,73`, `event.py:46`), and so does `__init__.py:1328`.
+- **Removal callbacks:** keys are `"{slot}|{key}"` or `"{slot}|{key}|{lock}"` (`entity.py:195,366`), removed by the prefix `f"{slot}|"` (`ha/callbacks.py:183-194`).
+- **Coordinators:** `slot_coordinators: dict[int, …]` (`ha/entry.py:34`); entities find theirs by `slot_num` (`entity.py:270`).
+- **Repair issue ids:**
+  - Per user: `slot_disabled_{entry}_{slot}` and `pin_required_{entry}_{slot}` (`ha/runtime.py:255`, `ha/slot_coordinator.py:399,547`, `__init__.py:1229-1230`).
+  - Per (lock, slot): `slot_suspended_…`, `slot_conflict_…` and `unmanaged_…` (`ha/runtime.py:572-574,857`, `ha/unmanaged.py:44-46`).
+- **Entity IDs:** the current IDs are name-shaped. The v3 migration re-slugged them from slot to name (`__init__.py:1533-1603`), so they don't depend on the number.
+
+**Lock-side addressing (the same number used as "the slot on this lock"):**
+- `EntryConfig._by_slot` / `slots` / `slot_numbers` / `name_for` / `has_slot` / `slot()` / `with_slot_field_*` (`model/config.py:137-151,276-319,423-437`).
+- `_owner` → `config.has_slot` (`model/queries.py:117-135`); `slots_configured_on` → `config.slot_numbers` (`:180-206`); `configured_owner` (`:209-220`).
+- The worker's name lookup (`ha/runtime.py:217-220`); refusal → coordinator found by the lock's slot (`ha/runtime.py:236-246`); `async_owns_slot` (`:578-612`); `async_hand_off` (`:675-705`).
+- The coordinator pushes `self._slot_num` to every lock (`ha/slot_coordinator.py:147,156-162`).
+- `LockWorkerView._pin = pin_address(self.slot_num)` and `registry.owner(lock, slot_num)` (`entity.py:404-423`).
+- `EntryConfigDiff.pairs_removed` is the full product locks × slot numbers (`model/config.py:529-534,571`).
+- Store forgetting and hand-off on entry removal use `config.slot_numbers` (`__init__.py:1218-1227`).
+- The websocket lock view: `_get_slot_entity_ids` (`websocket.py:569-578`), `_in_sync_entity_id` (`:602-607`) and `_get_slot_in_sync_entity_ids` (`:766-786`).
+
+**What breaks if a user holds different slots on different locks:**
+- **Every lock-side reverse lookup goes wrong silently.** `configured_owner(lock, slot)`, `_name_for`, `_on_disable`, `async_hand_off` and `LockWorkerView._pin` all assume "slot on the lock = the user's number". They would act on the wrong user, or on nobody.
+- **The bug hides itself.** The upgrade copies the old number onto every lock, so every existing config and most fixtures keep the two equal. Tests only catch a misclassified site if they deliberately use a slot that differs from the user's number (my inference).
+- **A slot change on one lock is invisible to the update listener.** `has_changes` only looks at users and locks (`model/config.py:574-581`). The listener returns early when nothing changed (`__init__.py:2000-2007`), so the old address is never released. It needs added and moved pairs, not just the cartesian `pairs_removed`.
+- **Repair texts change meaning.** `slot_disabled` and `pin_required` are per user but quote a slot number, which no longer names one position.
+
+**Per user vs per (user, lock):**
+- Per user: name/PIN text, enabled switch, active binary sensor, credential-used event, and the device. These go through `register_standard_adder` (`text.py`, `switch.py`, `binary_sensor.py:37-47`, `event.py`).
+- Per (user, lock): the PIN code sensor (`sensor.py`), plus the in-sync aggregate and the in-sync sensor for each credential type (`binary_sensor.py:49-73`).
+- All of them carry `code_slot = slot_num` as a state attribute (`entity.py:100-103`); the third researcher covers that surface.
+
+## 2. What should identify a user
+
+**The earlier reasoning.** `model/slot_assignment.py:10-14` says reusing a number "hands a newcomer the departed user's number, entity identifiers and history, matching what the physical credential slot does." That only holds while the number *is* a physical position on every lock. With per-lock slots, the configuration-wide number no longer names any position. Only the (lock, slot-on-lock) pair still does.
+
+**HA facts (read in source):**
+- `ConfigSubentry` is a frozen dataclass whose `subentry_id` is a ULID generated at creation (`config_entries.py:371-379`). It is stored and restored as is (`:482`).
+- `async_update_subentry` changes only data, title and unique_id (`:2717-2746`). Nothing can change the id.
+- `async_remove_subentry` also deletes the subentry's devices and entities (`config_entries.py:2700-2714`, `helpers/device_registry.py:4444-4453`). So the id lasts exactly as long as the subentry.
+- `async_update_entity(new_unique_id=…)` keeps the registry row and the entity_id, records `previous_unique_id`, and raises `ValueError` if the new id is taken (`helpers/entity_registry.py:1959-1970`).
+- The recorder only reacts to `old_entity_id` changes (`components/recorder/entity_registry.py:23-43`). History therefore survives a unique_id change.
+- `async_update_device(new_identifiers=…)` keeps the device id (so entities stay attached), checks for collisions (`helpers/device_registry.py:3303-3307`), and `merge_identifiers` is deprecated (`:3690`).
+
+| Option | What it is | Registry migration | History and entity IDs | Fit with the reuse reasoning | Main cost |
+|---|---|---|---|---|---|
+| **(a) Keep the number, add per-lock map** | `CONF_SLOT` stays the user's identity; per-lock slots default to it | None. Every unique_id and device identifier is unchanged | Survive (nothing moves) | Breaks. The number becomes an arbitrary reused handle, and per-lock entities keyed on it track a position that may differ from that lock's real slot | Two meanings share one `int`: every site above must be classified as "user's number" or "slot on this lock". Needs separate types (e.g. a `NewType`) and tests where the two differ |
+| **(b) subentry_id** | `{entry}\|{subentry_id}\|{key}[\|lock]`, device `{entry}\|{subentry_id}` | One-way: `new_unique_id` for every entity and `new_identifiers` for every device. Orphans with no subentry must be skipped or purged | Survive (entity_id and device id kept) | Replaces it. Never reused, so a newcomer inherits nothing. That is a behaviour change, but arguably the right one once the number isn't a position | `async_write_entry_config` matches subentries by `CONF_SLOT` (`model/config.py:698-705`), so `EntryConfig` must carry subentry ids. A user created at entry setup gets their id only from HA (`model/config.py:469-477`). The int parsers (`model/config.py:612-662`, `websocket.py:262`) need rewriting |
+| **(c1) Hybrid** | Per-user entities and the device keyed by subentry_id; per-lock entities keyed by (lock, slot on that lock) | Per-user entities and devices as in (b). Per-lock entities need none today, since slot = number | Survive | Keeps it exactly where it is true: a per-lock entity tracks a real slot on a real lock | Moving a user's slot on one lock re-keys or recreates that lock's sensors. Tenure makes moves rare |
+| **(c2) Number that is never reused** | (a), but new numbers are never handed out again | None on upgrade | Survive | Drops inheritance without moving any key | Numbers drift from slots over time, and the user-facing `code_slot` stops meaning anything |
+
+Two more options I'd rule out. Using the name as identity was tried in PR #1422 and reversed (your memory notes). Using `subentry.unique_id` would get HA to enforce uniqueness (`config_entries.py:2743-2744`), but it is editable and adds nothing over subentry_id.
+
+**A trap common to all four.** A per-lock map keyed by lock entity_id inherits an existing gap: I found nothing that follows a lock rename into `CONF_LOCKS`. My grep for `old_entity_id` hit only the recorder note and `ha/references.py`. The store, by contrast, is keyed by registry id (`__init__.py:1218-1222`). This is an inference.
+
+## 3. Config and migration
+
+**All 17 `CONF_SLOT` references:**
+- `const.py:185`: the definition.
+- `__init__.py`: 77 (import), 444 (v4→v5 write), 473 (v4→v5 device move to subentry).
+- `config_flow.py`:
+  - 37 (import)
+  - 1194 (add one user)
+  - 1352 and 1381 (reconfigure: number read and carried)
+  - 1404 (number stripped from the edit form)
+- `model/config.py`:
+  - 17 (import)
+  - 209 and 212 (`from_entry`: number stripped from fields and fed to `SlotAssignment`)
+  - 458 (`subentry_data`)
+  - 699 and 705 (`async_write_entry_config` matches subentries by number)
+- `model/queries.py`: 44 (import), 90 (`subentry_id_for_slot`).
+
+**Other places that write slot numbers:**
+- Entry creation: `_async_finish_ui_setup` and `_async_create_entry` pass `CONF_SLOT_ASSIGNMENT` through `from_mapping` (`config_flow.py:779-809`), as does `yaml_allocated` (`:853-869`).
+- Adding several users at once (`config_flow.py:1249-1289`).
+- Services: `async_add_users` (`ha/services.py:607-630`), `async_delete_users` (`:673-691`), plus the lookups `_slot_for_user` and `_slot_coordinator_for` (`:148-182`).
+- Slot-addressed condition services, `has_slot`/`with_slot_field_*` (`ha/services.py:404-437`), reachable only from the websocket (`websocket.py:1278-1330`).
+- Pasted YAML users carry no numbers (`config_flow.py:108-122,307`), and slot-keyed blocks are refused (`:328-329`).
+
+**How versions work today:**
+- `VERSION = 5` with no `MINOR_VERSION` (`config_flow.py:616`).
+- `async_migrate_entry` runs a chain 1→2→3→4→5 (`__init__.py:238-500`), each step bumping via `async_update_entry(version=N)`.
+- The 3→4 step is pure functions in `model/user_migration.py`, which is registry-silent (docstring lines 19-20), plus an entity_id re-slug.
+- The 4→5 step creates the subentries and moves devices with `new_config_subentry_id` (`__init__.py:397-491`).
+- Tests: `tests/test_migration_history.py` (recorder survives an upgrade) and `tests/properties/test_user_migration.py` (nobody renumbered, nothing lost).
+- HA refuses to load an entry whose version is above the handler's (`config_entries.py:1170-1179`). A major bump therefore blocks downgrades. A minor bump would let old code load the entry and quietly write the shared number everywhere, so this needs a major bump.
+
+**What a v5→v6 step would do:** write `{lock: CONF_SLOT for lock in CONF_LOCKS}` into each user subentry, plus the registry re-key under (b) or (c1). Because every per-lock slot equals the old number, the slot each lock is asked to fill is unchanged. So no lock-side change is needed, provided the engine addresses by that per-lock number (the other researcher should confirm).
+
+**Traps for any new subentry key:**
+- `from_entry` only strips `CONF_SLOT` (`model/config.py:208-210`), so a new key would leak into user fields.
+- `async_update_and_abort` replaces the data wholesale (`config_flow.py:1377-1382`), so reconfigure would erase the map unless it carries it explicitly.
+- The edit form only filters `CONF_SLOT` (`config_flow.py:1404`).
+- `with_user_renamed` re-keys the assignment (`model/config.py:363-366`), so a per-lock map must be re-keyed with it.
+- The "no two users on one number" dedupe (`model/slot_assignment.py:64-77`) becomes a per-lock rule.
+
+## 4. Checks that exist only because the number is shared
+
+- **`existing_codes`** (`config_flow.py:233-256`, called at `:939-945` for reauth and `:1064-1068` for options). This becomes allocation on the added lock, preferring each user's existing number when it's free there. `occupancy_unknown` stays. The options and reauth flows would then have to write every subentry through `async_write_entry_config`. Today they only save the locks (`_async_save`, `:1104-1129`; `_async_save_locks_and_reload`, `:259-293`).
+- **`slot_out_of_range`** (`ha/allocation.py:128-191`). Its existing-number callers (`config_flow.py:930,1055`) go away and are replaced by a per-lock count check. The count callers (`config_flow.py:395`, `ha/allocation.py:443`) stay.
+- **`numbers_needed_exceed_capacity`** (`ha/allocation.py:307-347,512`). This becomes per lock: it fires only for a lock's own crowding. `async_max_slot`'s "smallest answer wins, every lock gets the same numbers" (`:351-399`) no longer applies (the allocation researcher should confirm).
+- **`slots_already_configured`** (`_check_common_slots`, `config_flow.py:184-210`, called at `:911,1041`). Allocation already excludes `slots_configured_on(lock, excluding=entry)` (`ha/allocation.py:300`), so per-lock allocation makes this refusal unnecessary. What remains is old storage that already has an overlap, which `async_owns_slot` covers.
+- **User subentry flows** (`config_flow.py:1168-1197,1249-1289,1352-1375`). These change from "one number free on every lock" to `{lock: slot}`. `_cannot_report` (`:405-420`) names slots, which becomes slots per lock.
+
+## 5. Size
+
+About 85 functions across roughly 20 files in this layer. The tests (`test_config`, `test_queries`, `test_init`, `test_config_flow`, `test_migration_history`, properties) are extra.
+
+| Area | Count |
+|---|---|
+| `model/config.py` (EntryConfig, the diff, builders/parsers, the write path) | about 22 |
+| `config_flow.py` | about 14 |
+| `__init__.py` (migration, remove-entry, device and orphan sweeps, update listener, new-lock setup) | about 12 |
+| `entity.py` plus the 5 platforms | about 13 |
+| `ha/services.py` | 6 |
+| `ha/runtime.py` HA-side lookups (shared with the sync researcher) | 4 |
+| `ha/slot_coordinator.py` | 4 |
+| `model/queries.py` | 4 |
+| `model/slot_assignment.py` | 3 |
+| `diagnostics.py` | 2 |
+| `ha/callbacks.py`, `ha/entry.py` | 1 each |
+
+**Mechanical:** the platform adders, the `subentry_id_for_slot` lookups, removal-callback keys, issue ids, diagnostics, and the copy-the-number migration under (a).
+
+**Needs design:**
+1. The identity choice in section 2. It decides whether any registry migration happens at all.
+2. Splitting "user's number" from "slot on this lock" at every lookup, and making that split enforceable by types.
+3. A new `EntryConfigDiff` with added and moved pairs, so the listener and release logic see a slot change on one lock.
+4. Options and reauth turning into allocating, multi-subentry writers.
+5. How a per-lock map handles a lock rename.
+
+The websocket lookups and the `code_slot` attribute also depend on this split; I left them to the frontend researcher.</result>
+<usage><subagent_tokens>217207</subagent_tokens><tool_uses>44</tool_uses><duration_ms>296136</duration_ms></usage>
+</task-notification>
+
+---
+
+ok give me the release notes for 8.0.0
+
+---
+
+released
+
+---
+
+give each guest their own calendar? that defeats the purpose of the blueprints to allow people ot use regex to map a single calendar to potentially multiple guests
+
+---
+
+yes and do the PR next
+
+---
+
+<task-notification>
+<task-id>a084140e36a2fe4ba</task-id>
+<tool-use-id>toolu_014q4ye1TCmDqDVzpsUbcUNG</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/551e587c-a8de-4f70-922d-c037cad26aa6/tasks/a084140e36a2fe4ba.output</output-file>
+<status>completed</status>
+<summary>Agent "Review calendar condition PR 1789" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I reviewed PR #1789: `blueprints/template/lock_code_manager/calendar_condition.yaml`, `BLUEPRINTS.md` and `tests/test_blueprint_behavior.py`, checked against the Home Assistant source in `.venv`. I confirmed the two problems below by running probe tests against both this branch and `origin/main`, from a copy in `/tmp` that I've since deleted. The worktree is unchanged. The PR's 6 calendar tests pass.
+
+## Critical
+
+**1. If a variable fails to render, the sensor keeps its last state. After an event this leaves the guest's code active (confidence 92).**
+- **Where:** `calendar_condition.yaml:136-164`, the `variables:` block, and `:160` in particular.
+- **Cause:** the coordinator renders the top-level `variables` with no try/except (`components/template/coordinator.py`, `_handle_triggered`). If any variable raises `TemplateError`, the trigger task fails and `async_set_updated_data` is never called. The entity just keeps whatever state it had last.
+- **Scenario A, using the blueprint's own example:** set `slot_number` to `{{ description | regex_findall('slot (\d+)') | first }}` (`calendar_condition.yaml:107`, `BLUEPRINTS.md:147`).
+  - While the event says "slot 1", the sensor is `on`, which is correct.
+  - When the event ends, `description` is `''` and `slot_number` renders `''`. `slot_number | int` on line 160 then raises "int got invalid input ''".
+  - The sensor stays `on`, and every minute tick and every calendar change raises the same error.
+  - I reproduced it: `on` before the event ended, still `on` after the event ended plus one minute, with "Task exception was never retrieved" in the log.
+  - On main the same input made platform setup fail, so there was no sensor and LCM treated the slot as inactive. Main failed closed; this branch fails open.
+- **Scenario B:** a user condition such as `{{ (end_time | as_datetime) &gt; now() }}`. It renders `on` during the event, then raises once `end_time` becomes `''`, and stays `on` after the event ends (reproduced).
+- **Restart makes it worse:** the restored state (`TriggerEntity.async_added_to_hass` falls back to `async_restore_last_state` when there's no data yet) is then never corrected if the start trigger's render also raises.
+- **Fix:**
+  - At minimum, change line 160 to `slot_number | int(0)`.
+  - More generally, render the condition in `state:` rather than as a variable. A state render error sets `_state_render_error`, which makes the sensor unavailable, and LCM treats that as inactive. Failing closed is the right default for an access gate.
+
+## Important
+
+**2. The new `BLUEPRINTS.md:111` example `{{ name_state in message }}` passes for every event when `name_state` is empty, and the sensor can now stay wrong for up to a minute (confidence 82).**
+- **Why it's empty:** `name_state` is `''` whenever `_name_entity` doesn't resolve.
+  - HA leaves out `extra_state_attributes`, including `slot_field`, when an entity is unavailable (`helpers/entity.py:1120`).
+  - LCM's name entity is unavailable when all the entry's locks are unavailable (`entity.py:225-236`), and missing while LCM reloads.
+  - `'' in message` is always true, so every user's sensor turns `on` whenever any event is running.
+- **What the trigger change adds:** the name entity isn't a trigger. When the lock comes back, the sensor keeps that stale `on` until the next minute tick, and LCM can act on it in that window. On main, the state-based template re-rendered as soon as the name entity changed.
+- I confirmed that slot 99, which has no name entity, renders `on` for "Somebody else".
+- Substring matching is also loose: "Al" matches "Alice".
+- **Fix:** document `{{ name_state and name_state in message }}`, and use it in the test.
+
+## Checked and fine
+
+- **Triggers:**
+  - A state trigger with no `to`/`from` fires on attribute-only changes (`match_all` in `components/homeassistant/triggers/state.py`).
+  - `homeassistant: start` listens for `EVENT_HOMEASSISTANT_STARTED`. The coordinator attaches triggers on START, so it's armed in time.
+  - `event_template_reloaded` fires after `_process_config`. If the entity is added after that, it renders through the `coordinator.data is not None` branch.
+  - `time_pattern` `/1` works, and the probe saw it tick.
+- **Lifecycle:**
+  - Created while HA is running: `unknown` until the first trigger (the test comment is accurate). In practice the reload event covers this.
+  - Calendar unavailable or removed: the sensor goes `unavailable`. `availability` does work on trigger entities (`_render_availability_template`, `strict=True`, run variables available).
+  - Restart: LCM's own setup also waits for STARTED, and the template's start listener fires in the same dispatch. The window where LCM reads a stale restored state is tiny and gets corrected straight away, unless finding 1 applies.
+- **unique_id and entity_id:** the blueprint moves `unique_id` to the entity, the section has none, and `_set_unique_id` adds no prefix. Existing registry entries keep their IDs. Adding `this` and `trigger` variables breaks nothing.
+- **Tests:**
+  - "follows the current event" really does exercise an attribute-only change (test1 → test2).
+  - In the rename test, only the minute tick can re-render the sensor.
+  - The `template_teardown` docstring is correct: the template coordinator never calls `async_register_shutdown`, so triggers outlive the HA stop. The fixture does what `_process_config` does on reload and tears down before `hass`.</result>
+<usage><subagent_tokens>145728</subagent_tokens><tool_uses>40</tool_uses><duration_ms>339379</duration_ms></usage>
+</task-notification>
+
+---
+
+every minute check seems expensive no?
+
+---
+
+why can't we set the variables in the actual template block and then it'll redraw when everything changes and we don't need to have a time trigger
+
+---
+
+A
+
+---
+
+wait what does it mean these are fixed match modes? its a dropdown now?
+
+---
+
+lets also add event description includes the user's name
