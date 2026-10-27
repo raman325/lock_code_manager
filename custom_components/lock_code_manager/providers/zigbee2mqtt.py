@@ -118,6 +118,27 @@ def _mqtt_payload_pin_has_code_value(pin_raw: Any) -> bool:
     return str(pin_raw) != ""
 
 
+def _z2m_users_pin(pin_raw: Any) -> Any:
+    """
+    Return a ``users`` entry's ``pin_code`` as the current converter publishes it.
+
+    zigbee-herdsman-converters before v26.50.0 published a code read from
+    the lock as its raw octets, which JSON carries as an object of byte
+    values keyed by position (``{"0": 49, "1": 50}``, or ``{}`` for none).
+    Zigbee2MQTT keeps a device's last state across restarts and upgrades, so
+    a user it has not read since still carries that form. Decoded as the
+    converter now does (``Buffer.toString``, UTF-8), so a stale entry and a
+    fresh read of the same code agree. Anything else is returned unchanged.
+    """
+    if not isinstance(pin_raw, dict):
+        return pin_raw
+    try:
+        octets = bytes(pin_raw[str(index)] for index in range(len(pin_raw)))
+    except KeyError, TypeError, ValueError:
+        return pin_raw
+    return octets.decode("utf-8", errors="replace")
+
+
 def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotAnswer:
     """
     Project one Zigbee2MQTT ``users`` entry to a SlotCredential, or ``CANNOT_TELL``.
@@ -148,8 +169,11 @@ def _project_z2m_user_state(user_info: dict[str, Any]) -> SlotAnswer:
     status = user_info.get("status")
     if status == _Z2M_STATUS_CANNOT_TELL:
         return CANNOT_TELL
-    pin_raw = user_info.get("pin_code")
+    pin_raw = _z2m_users_pin(user_info.get("pin_code"))
     if status == "enabled":
+        # An object that is not a code's octets holds nothing to compare.
+        if isinstance(pin_raw, dict):
+            return SlotCredential.unreadable()
         if _mqtt_payload_pin_has_code_value(pin_raw):
             code = str(pin_raw)
             return (

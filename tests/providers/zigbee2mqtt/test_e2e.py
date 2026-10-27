@@ -715,6 +715,39 @@ class TestBridge:
             assert lock_reachable(hass, lock_id) is not False
             assert lock_codes(hass, lock_id) == {1: SlotCode.EMPTY}
 
+    async def test_a_code_cached_as_bytes_is_read_as_its_digits(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        mqtt_lock_discovered,
+        fake_z2m_bridge: FakeZ2MBridge,
+    ) -> None:
+        """
+        #1791: a code Zigbee2MQTT cached as raw bytes is read as its digits.
+
+        zigbee-herdsman-converters before v26.50.0 published a code read from
+        the lock as its octets, ``{"0": 50, "1": 52, ...}`` in JSON, and
+        Zigbee2MQTT republishes a user it has not read since in that form.
+        Taken as text, the slot showed a code no keypad can enter, so the PIN
+        on it went unrecognized.
+        """
+        bridge = fake_z2m_bridge
+        bridge.set_user(0, "2468")
+        bridge.cache["users"] = {
+            "0": {
+                "status": "enabled",
+                "pin_code": {"0": 50, "1": 52, "2": 54, "3": 56},
+            }
+        }
+        lock_id = mqtt_lock_discovered.entity_id
+        pins = {1: "1234", 2: "5678"}
+        async with _bridge_entry(hass, freezer, lock_id, pins) as entry:
+            await _until_settled(hass, freezer, entry, lock_id, bridge, pins)
+            bridge.report()
+            await async_advance_sync_ticks(hass, freezer)
+
+            assert lock_codes(hass, lock_id)[0] == "2468"
+
     async def test_a_custom_base_topic_carries_every_command(
         self,
         hass: HomeAssistant,
