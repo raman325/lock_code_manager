@@ -64,6 +64,11 @@ blueprint:
 
     - Allow when the slot is named for a known guest: `{{ name_state == 'Guest' }}`
 
+    - Match each user against a shared calendar's event:
+      `{{ name_state and name_state in message }}`. The `name_state and` matters:
+      it is empty when the user's name entity can't be found, and an empty
+      string is in every message.
+
 
     **When it updates**
 
@@ -72,6 +77,12 @@ blueprint:
     once a minute. The minute check catches what the calendar can't signal: a
     user renamed just after their booking starts, or a template that reads the
     time.
+
+
+    **A condition template that fails to render keeps the sensor where it
+    was.** Home Assistant skips the update instead of turning the sensor off,
+    so a template that errors once an event ends can leave a PIN active. Give
+    filters a default for empty values, e.g. `as_datetime(none)`.
 
 
     **Template debugging**
@@ -104,7 +115,7 @@ blueprint:
       description: >
         The code slot number. Can be a static number (e.g. `3`) or a Jinja2
         template that resolves to a number using calendar event attributes
-        (e.g. `{{ description | regex_findall('slot (\d+)') | first }}`).
+        (e.g. `{{ description | regex_findall('slot (\\d+)') | first }}`).
       selector:
         template:
     calendar_entity:
@@ -157,7 +168,7 @@ variables:
     {{ expand(_all_entities)
        | selectattr('attributes.slot_field', 'defined')
        | selectattr('attributes.slot_field', 'eq', 'name')
-       | selectattr('attributes.code_slot', 'eq', slot_number | int)
+       | selectattr('attributes.code_slot', 'eq', slot_number | int(0))
        | map(attribute='entity_id') | first | default('') }}
   name_state: >
     {{ states(_name_entity) if _name_entity else '' }}

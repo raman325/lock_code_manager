@@ -1029,6 +1029,10 @@ async def test_limiter_derives_slot_and_config_entry(
 
 
 CALENDAR_CONDITION_ENTITY = "binary_sensor.guest_condition"
+# The documented way to match a user against a shared calendar's event. The
+# guard matters: ``name_state`` is empty whenever the user's name entity can't
+# be found, and an empty string is in every message.
+GUEST_MATCH = "{{ name_state and name_state in message }}"
 
 
 @pytest.fixture
@@ -1102,7 +1106,7 @@ async def test_calendar_condition_follows_the_current_event(
         hass,
         lock_code_manager_config_entry,
         calendar_entity,
-        "{{ name_state in message }}",
+        GUEST_MATCH,
     )
 
     for calendar_state, message, expected in (
@@ -1138,7 +1142,7 @@ async def test_calendar_condition_catches_a_rename_within_a_minute(
         hass,
         lock_code_manager_config_entry,
         calendar_entity,
-        "{{ name_state in message }}",
+        GUEST_MATCH,
     )
 
     hass.states.async_set(calendar_entity, "on", {"message": "Sarah Chen"})
@@ -1156,6 +1160,91 @@ async def test_calendar_condition_catches_a_rename_within_a_minute(
 
     await async_advance_time(hass, timedelta(minutes=1))
     assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "on"
+
+
+async def test_calendar_condition_turns_off_when_a_parsed_slot_number_goes_empty(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    template_teardown,
+) -> None:
+    """
+    A slot number read out of the event doesn't hold the sensor on after it.
+
+    The blueprint documents reading the slot number from the event
+    description. When the event ends the description is empty, and a
+    variable that fails to render skips the update entirely, which leaves a
+    trigger-based sensor wherever it was: on, for a guest whose booking is
+    over.
+    """
+    calendar_entity = "calendar.bookings"
+    hass.states.async_set(calendar_entity, "off", {"description": ""})
+    with patch_blueprint(
+        CALENDAR_PATH,
+        BLUEPRINTS_ROOT / "template" / CALENDAR_PATH,
+        schema=template_config.TEMPLATE_BLUEPRINT_SCHEMA,
+    ):
+        assert await async_setup_component(
+            hass,
+            "template",
+            {
+                "template": {
+                    "name": "Guest Condition",
+                    "use_blueprint": {
+                        "path": CALENDAR_PATH,
+                        "input": {
+                            "config_entry": lock_code_manager_config_entry.entry_id,
+                            "calendar_entity": calendar_entity,
+                            "slot_number": (
+                                "{{ description | regex_findall('slot (\\\\d+)')"
+                                " | first | default('') }}"
+                            ),
+                            "condition_template": GUEST_MATCH,
+                        },
+                    },
+                }
+            },
+        )
+    await hass.async_block_till_done()
+
+    hass.states.async_set(
+        calendar_entity, "on", {"message": "test1", "description": "slot 1"}
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "on"
+
+    hass.states.async_set(calendar_entity, "off", {"message": "", "description": ""})
+    await hass.async_block_till_done()
+    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "off"
+
+
+async def test_calendar_condition_does_not_match_a_user_it_cannot_find(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    template_teardown,
+) -> None:
+    """
+    A slot with no name entity matches no event, rather than every event.
+
+    ``name_state`` is empty when the user's name entity can't be found: no
+    such slot, or the entity is unavailable and so has no attributes. An
+    empty string is in every message, so an unguarded match would turn the
+    sensor on for any booking at all.
+    """
+    calendar_entity = "calendar.bookings"
+    hass.states.async_set(calendar_entity, "off", {"message": ""})
+    await _setup_calendar_condition(
+        hass,
+        lock_code_manager_config_entry,
+        calendar_entity,
+        GUEST_MATCH,
+        slot_number=99,
+    )
+
+    hass.states.async_set(calendar_entity, "on", {"message": "Somebody else"})
+    await hass.async_block_till_done()
+    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "off"
 
 
 @pytest.mark.parametrize(

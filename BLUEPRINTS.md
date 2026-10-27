@@ -108,11 +108,18 @@ their PIN is active.
 - The sensor is unavailable while the calendar entity is `unknown` or
   `unavailable`
 - One shared calendar can gate many users: match each user against the
-  current event, e.g. `{{ name_state in message }}`
+  current event with `{{ name_state and name_state in message }}`. Keep the
+  `name_state and`: `name_state` is empty when the user's name entity can't be
+  found (for example while all the configuration's locks are unavailable), and
+  an empty string is in every message
 - The sensor re-evaluates whenever the calendar's state or current event
   changes, when Home Assistant starts, when template entities reload, and once
   a minute. The minute check catches a user renamed just after their booking
   starts, and a template that reads the time
+- A condition template that fails to render leaves the sensor where it was:
+  Home Assistant skips the update instead of turning it off, so a template
+  that errors once an event ends can leave a PIN active. Give filters a
+  default for empty values, e.g. `as_datetime(none)`
 
 > **Breaking: `lock_entity_ids` is gone.** It came from the credential used
 > event entity, which no longer lists the config entry's locks as its event
@@ -144,7 +151,7 @@ their PIN is active.
 that resolves to a number from the calendar event's attributes:
 
 ```jinja
-{{ description | regex_findall('slot (\d+)') | first }}
+{{ description | regex_findall('slot (\\d+)') | first }}
 ```
 
 The condition template can use these variables:
