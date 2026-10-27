@@ -98,86 +98,53 @@ To set it up:
 
 ### Calendar Condition
 
-Creates a template binary sensor that turns ON when a calendar
-event is active and an optional condition template evaluates to
-true. Assign the sensor as a user's condition entity to control when
-their PIN is active.
-
-- Filter by event title, description, or location using Jinja2 templates
-- Supports any HA calendar integration (local, Google, CalDAV, etc.)
-- The sensor is unavailable while the calendar entity is `unknown` or
-  `unavailable`
-- One shared calendar can gate many users: match each user against the
-  current event with `{{ name_state and name_state in message }}`. Keep the
-  `name_state and`: `name_state` is empty when the user's name entity can't be
-  found (for example while all the configuration's locks are unavailable), and
-  an empty string is in every message
-- The sensor re-evaluates whenever the calendar's state or current event
-  changes, when Home Assistant starts, when template entities reload, and once
-  a minute. The minute check catches a user renamed just after their booking
-  starts, and a template that reads the time
-- A condition template that fails to render leaves the sensor where it was:
-  Home Assistant skips the update instead of turning it off, so a template
-  that errors once an event ends can leave a PIN active. Give filters a
-  default for empty values, e.g. `as_datetime(none)`
-
-> **Breaking: `lock_entity_ids` is gone.** It came from the credential used
-> event entity, which no longer lists the config entry's locks as its event
-> types, and nothing else exposes a config entry's locks to a template.
-> **A condition template that still references it fails quietly.** Home
-> Assistant treats an undefined template variable as empty rather than as an
-> error, so the binary sensor stays available, reads `off`, and the PIN never
-> activates. The one signal is a log line — `Template variable warning:
-> 'lock_entity_ids' is undefined when rendering ...` — so check the Home
-> Assistant log after upgrading. Nothing can make that louder: the sensor
-> cannot tell an undefined variable from a condition that is honestly false.
-> There is no replacement and nothing worth stubbing it to. The list was
-> identical for every slot in the config entry, so
-> `{{ 'lock.front_door' in lock_entity_ids }}` could only ever be constantly
-> true or constantly false: a condition entity gates a *user* across every
-> lock in the entry, and never one lock. Delete the reference to fix the
-> sensor.
+Creates a template binary sensor that is ON while a calendar event belongs to
+one user. Assign the sensor as that user's condition entity to control when
+their PIN is active. One shared calendar can gate many users: create one
+sensor per user, each matching that user's events.
 
 [![Import Blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Ftemplate%2Flock_code_manager%2Fcalendar_condition.yaml)
 
 | Input | Description | Default |
 | ----- | ----------- | ------- |
 | Lock Code Manager config entry | Config entry holding the user | Required |
-| Slot number | The user's slot number (see [Finding a slot number](#finding-a-slot-number)), as a number or a template | Required |
+| Slot number | The user's slot number (see [Finding a slot number](#finding-a-slot-number)) | Required |
 | Calendar entity | Calendar to monitor | Required |
-| Condition template | Jinja2 template that must also be true for the sensor to turn on, in addition to the calendar event being active | `{{ true }}` |
+| Match | Which events belong to the user (below) | Any event, for sensors from before Match existed |
+| Match text | Text the event's title or description must also contain, ignoring case | None |
 
-**Slot number** can be a static number such as `3`, or a Jinja2 template
-that resolves to a number from the calendar event's attributes:
+| Match | The sensor is on while the current event… |
+| ----- | ----------------------------------------- |
+| Any event | is any event |
+| User's name in the event title | has the user's name in its title |
+| User's name in the event description | has the user's name in its description |
+| "slot N" in the event description | says `slot 3` in its description, for the user on slot 3 (`slot 12` does not count as `slot 1`) |
 
-```jinja
-{{ description | regex_findall('slot (\\d+)') | first }}
-```
+- Name matching ignores case. A user the sensor can't find (no such slot, or
+  their name entity unavailable while all the configuration's locks are)
+  matches no event
+- The sensor updates as soon as the calendar moves to another event or the
+  user is renamed
+- It is unavailable while the calendar entity is `unknown` or `unavailable`,
+  and if its template fails to render, so a problem leaves the PIN inactive
+  rather than active
+- Free-form condition templates are not supported. For a rule these choices
+  don't cover, make your own [template binary
+  sensor](https://www.home-assistant.io/integrations/template/) and use it as
+  the condition entity
 
-The condition template can use these variables:
-
-| Variable | Meaning |
-| -------- | ------- |
-| `message` | The event's summary (title) |
-| `description` | The event's description |
-| `location` | The event's location |
-| `start_time` | The event's start time |
-| `end_time` | The event's end time |
-| `all_day` | Whether the event is an all-day event |
-| `slot_number` | The resolved slot number |
-| `config_entry_title` | The Lock Code Manager config entry's title |
-| `name_state` | The current name of the user in that slot, or empty if the slot has no name entity |
-
-Example condition templates:
-
-- Allow when the event title contains "Guest": `{{ 'Guest' in message }}`
-- Allow when the slot is named for a known guest: `{{ name_state == 'Guest' }}`
+> **Breaking: the condition template is gone, replaced by Match and Match
+> text.** A sensor set up before this version that never set a condition
+> template keeps working as **Any event**. One that set its own template is
+> unavailable, so its user's PIN stays inactive, until you choose a Match.
+> Re-import the blueprint to get this version: Home Assistant keeps its own
+> copy of an imported blueprint.
 
 To set it up:
 
 1. Import the blueprint with the button above.
-1. Configure it with your Lock Code Manager config entry, the slot number,
-   the calendar entity, and optionally a condition template.
+1. Configure it with your Lock Code Manager config entry, the user's slot
+   number, the calendar entity, and a Match.
 1. Assign the binary sensor it creates as that user's condition entity.
 
 ### Date Range Condition

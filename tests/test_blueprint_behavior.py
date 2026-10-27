@@ -5,9 +5,8 @@ exercised end-to-end: trigger fires from a real LCM event entity, the
 automation runs, and we assert on the side effects via mocked services.
 """
 
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import Iterator
 import contextlib
-from datetime import timedelta
 import pathlib
 from typing import Any
 from unittest.mock import patch
@@ -22,10 +21,7 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.components import automation
 from homeassistant.components.blueprint import models
 from homeassistant.components.event import ATTR_EVENT_TYPE
-from homeassistant.components.template import (
-    DATA_COORDINATORS,
-    config as template_config,
-)
+from homeassistant.components.template import config as template_config
 from homeassistant.components.text import (
     ATTR_VALUE,
     DOMAIN as TEXT_DOMAIN,
@@ -59,7 +55,6 @@ from .common import (
     SLOT_1_NAME_ENTITY,
     SLOT_2_EVENT_ENTITY,
 )
-from .conftest import async_advance_time
 
 BLUEPRINTS_ROOT = pathlib.Path(__file__).resolve().parent.parent / "blueprints"
 BLUEPRINT_FOLDER = BLUEPRINTS_ROOT / "automation" / "lock_code_manager"
@@ -1029,34 +1024,13 @@ async def test_limiter_derives_slot_and_config_entry(
 
 
 CALENDAR_CONDITION_ENTITY = "binary_sensor.guest_condition"
-# The documented way to match a user against a shared calendar's event. The
-# guard matters: ``name_state`` is empty whenever the user's name entity can't
-# be found, and an empty string is in every message.
-GUEST_MATCH = "{{ name_state and name_state in message }}"
-
-
-@pytest.fixture
-async def template_teardown(hass: HomeAssistant) -> AsyncGenerator[None]:
-    """
-    Shut down trigger-based template entities after the test.
-
-    Home Assistant detaches a trigger-based template entity's triggers only
-    when templates reload, not when it stops, so the Calendar Condition's
-    minute backstop would outlive the test and trip the lingering-timer
-    check in verify_cleanup. Do what a reload does.
-    """
-    yield
-    for coordinator in hass.data.pop(DATA_COORDINATORS, None) or ():
-        await coordinator.async_shutdown()
-    await hass.async_block_till_done()
 
 
 async def _setup_calendar_condition(
     hass: HomeAssistant,
     lock_code_manager_config_entry: MockConfigEntry,
     calendar_entity: str,
-    condition_template: str,
-    slot_number: int = 1,
+    **inputs: Any,
 ) -> None:
     """Instantiate the shipped Calendar Condition blueprint as one sensor."""
     with patch_blueprint(
@@ -1075,8 +1049,8 @@ async def _setup_calendar_condition(
                         "input": {
                             "config_entry": lock_code_manager_config_entry.entry_id,
                             "calendar_entity": calendar_entity,
-                            "slot_number": slot_number,
-                            "condition_template": condition_template,
+                            "slot_number": 1,
+                            **inputs,
                         },
                     },
                 }
@@ -1085,69 +1059,123 @@ async def _setup_calendar_condition(
     await hass.async_block_till_done()
 
 
+async def _calendar_at(
+    hass: HomeAssistant, state: str, message: str = "", description: str = ""
+) -> str:
+    """Move the calendar to an event and return the sensor's state."""
+    hass.states.async_set(
+        "calendar.bookings", state, {"message": message, "description": description}
+    )
+    await hass.async_block_till_done()
+    sensor = hass.states.get(CALENDAR_CONDITION_ENTITY)
+    assert sensor is not None
+    return sensor.state
+
+
+@pytest.mark.parametrize(
+    ("inputs", "event", "expected"),
+    [
+        ({"match": "any"}, ("on", "Anything", ""), "on"),
+        ({"match": "any"}, ("off", "", ""), "off"),
+        ({"match": "name_in_title"}, ("on", "TEST1 arriving", ""), "on"),
+        ({"match": "name_in_title"}, ("on", "test2 arriving", ""), "off"),
+        ({"match": "name_in_title"}, ("on", "Stay", "test1"), "off"),
+        ({"match": "name_in_description"}, ("on", "Stay", "Guest: Test1"), "on"),
+        ({"match": "name_in_description"}, ("on", "test1", "Guest: test2"), "off"),
+        ({"match": "slot_in_description"}, ("on", "Stay", "Slot 1, two nights"), "on"),
+        ({"match": "slot_in_description"}, ("on", "Stay", "slot 12"), "off"),
+        ({"match": "slot_in_description"}, ("on", "slot 1", "slot 2"), "off"),
+        ({"match": "any", "match_text": "cleaning"}, ("on", "Cleaning", ""), "on"),
+        ({"match": "any", "match_text": "cleaning"}, ("on", "Party", "cleaning"), "on"),
+        ({"match": "any", "match_text": "cleaning"}, ("on", "Party", ""), "off"),
+        (
+            {"match": "name_in_title", "match_text": "guest"},
+            ("on", "test1 (owner)", ""),
+            "off",
+        ),
+    ],
+    ids=[
+        "any-event",
+        "any-no-event",
+        "name-in-title-ignores-case",
+        "name-in-title-other-user",
+        "name-in-title-not-description",
+        "name-in-description",
+        "name-in-description-not-title",
+        "slot-in-description",
+        "slot-12-is-not-slot-1",
+        "slot-in-description-not-title",
+        "match-text-in-title",
+        "match-text-in-description",
+        "match-text-missing",
+        "match-text-narrows-a-name-match",
+    ],
+)
+async def test_calendar_condition_matches_the_event_to_the_user(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    inputs: dict[str, str],
+    event: tuple[str, str, str],
+    expected: str,
+) -> None:
+    """Each Match choice, and Match text, against events for slot 1 (test1)."""
+    hass.states.async_set("calendar.bookings", "off", {})
+    await _setup_calendar_condition(
+        hass, lock_code_manager_config_entry, "calendar.bookings", **inputs
+    )
+
+    assert await _calendar_at(hass, *event) == expected
+
+
 async def test_calendar_condition_follows_the_current_event(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-    template_teardown,
 ) -> None:
     """
     One shared calendar gates each guest by the event that is on now.
 
     A booking calendar stays ``on`` across back-to-back stays and only its
-    event attributes change, so matching the guest against the event has to
-    re-render on attribute changes. When the match was frozen at load, the
-    first guest's sensor stayed on through every later booking and the next
+    event attributes change. When the match was frozen at load, the first
+    guest's sensor stayed on through every later booking and the next
     guest's never turned on.
     """
-    calendar_entity = "calendar.bookings"
-    hass.states.async_set(calendar_entity, "off", {"message": ""})
+    hass.states.async_set("calendar.bookings", "off", {})
     await _setup_calendar_condition(
         hass,
         lock_code_manager_config_entry,
-        calendar_entity,
-        GUEST_MATCH,
+        "calendar.bookings",
+        match="name_in_title",
     )
 
-    for calendar_state, message, expected in (
-        ("on", "test1 arriving", "on"),
-        ("on", "test2 arriving", "off"),
-        ("on", "test1 back again", "on"),
-        ("off", "", "off"),
-    ):
-        hass.states.async_set(calendar_entity, calendar_state, {"message": message})
-        await hass.async_block_till_done()
-        state = hass.states.get(CALENDAR_CONDITION_ENTITY)
-        assert state is not None
-        assert state.state == expected, (calendar_state, message)
+    assert await _calendar_at(hass, "on", "test1 arriving") == "on"
+    assert await _calendar_at(hass, "on", "test2 arriving") == "off"
+    assert await _calendar_at(hass, "on", "test1 back again") == "on"
+    assert await _calendar_at(hass, "off") == "off"
 
 
-async def test_calendar_condition_catches_a_rename_within_a_minute(
+async def test_calendar_condition_follows_a_rename(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-    template_teardown,
 ) -> None:
     """
-    A user renamed just after their booking starts is matched within a minute.
+    A user renamed after their booking starts is matched at once.
 
     Rotating a standing user per booking renames them when the event starts,
-    which can land after the calendar change has already been evaluated.
-    Nothing about the calendar changes again until checkout, so without the
-    minute backstop the guest would be locked out for the whole stay.
+    which can land after the calendar change. Nothing about the calendar
+    changes again until checkout, so the sensor has to follow the user's name
+    entity itself.
     """
-    calendar_entity = "calendar.bookings"
-    hass.states.async_set(calendar_entity, "off", {"message": ""})
+    hass.states.async_set("calendar.bookings", "off", {})
     await _setup_calendar_condition(
         hass,
         lock_code_manager_config_entry,
-        calendar_entity,
-        GUEST_MATCH,
+        "calendar.bookings",
+        match="name_in_title",
     )
-
-    hass.states.async_set(calendar_entity, "on", {"message": "Sarah Chen"})
-    await hass.async_block_till_done()
-    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "off"
+    assert await _calendar_at(hass, "on", "Sarah Chen") == "off"
 
     await hass.services.async_call(
         TEXT_DOMAIN,
@@ -1158,149 +1186,102 @@ async def test_calendar_condition_catches_a_rename_within_a_minute(
     )
     await hass.async_block_till_done()
 
-    await async_advance_time(hass, timedelta(minutes=1))
     assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "on"
-
-
-async def test_calendar_condition_turns_off_when_a_parsed_slot_number_goes_empty(
-    hass: HomeAssistant,
-    mock_lock_config_entry,
-    lock_code_manager_config_entry,
-    template_teardown,
-) -> None:
-    """
-    A slot number read out of the event doesn't hold the sensor on after it.
-
-    The blueprint documents reading the slot number from the event
-    description. When the event ends the description is empty, and a
-    variable that fails to render skips the update entirely, which leaves a
-    trigger-based sensor wherever it was: on, for a guest whose booking is
-    over.
-    """
-    calendar_entity = "calendar.bookings"
-    hass.states.async_set(calendar_entity, "off", {"description": ""})
-    with patch_blueprint(
-        CALENDAR_PATH,
-        BLUEPRINTS_ROOT / "template" / CALENDAR_PATH,
-        schema=template_config.TEMPLATE_BLUEPRINT_SCHEMA,
-    ):
-        assert await async_setup_component(
-            hass,
-            "template",
-            {
-                "template": {
-                    "name": "Guest Condition",
-                    "use_blueprint": {
-                        "path": CALENDAR_PATH,
-                        "input": {
-                            "config_entry": lock_code_manager_config_entry.entry_id,
-                            "calendar_entity": calendar_entity,
-                            "slot_number": (
-                                "{{ description | regex_findall('slot (\\\\d+)')"
-                                " | first | default('') }}"
-                            ),
-                            "condition_template": GUEST_MATCH,
-                        },
-                    },
-                }
-            },
-        )
-    await hass.async_block_till_done()
-
-    hass.states.async_set(
-        calendar_entity, "on", {"message": "test1", "description": "slot 1"}
-    )
-    await hass.async_block_till_done()
-    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "on"
-
-    hass.states.async_set(calendar_entity, "off", {"message": "", "description": ""})
-    await hass.async_block_till_done()
-    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "off"
 
 
 async def test_calendar_condition_does_not_match_a_user_it_cannot_find(
     hass: HomeAssistant,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-    template_teardown,
 ) -> None:
     """
     A slot with no name entity matches no event, rather than every event.
 
-    ``name_state`` is empty when the user's name entity can't be found: no
-    such slot, or the entity is unavailable and so has no attributes. An
-    empty string is in every message, so an unguarded match would turn the
-    sensor on for any booking at all.
+    An empty name is in every title, so a name match against a user that
+    can't be found (no such slot, or the name entity unavailable and so
+    without attributes) would otherwise turn the sensor on for any booking.
     """
-    calendar_entity = "calendar.bookings"
-    hass.states.async_set(calendar_entity, "off", {"message": ""})
+    hass.states.async_set("calendar.bookings", "off", {})
     await _setup_calendar_condition(
         hass,
         lock_code_manager_config_entry,
-        calendar_entity,
-        GUEST_MATCH,
+        "calendar.bookings",
+        match="name_in_title",
         slot_number=99,
     )
 
-    hass.states.async_set(calendar_entity, "on", {"message": "Somebody else"})
-    await hass.async_block_till_done()
-    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "off"
+    assert await _calendar_at(hass, "on", "Somebody else") == "off"
+
+
+async def test_calendar_condition_is_unavailable_with_its_calendar(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """An unavailable calendar makes the sensor unavailable, which LCM treats as inactive."""
+    hass.states.async_set("calendar.bookings", "off", {})
+    await _setup_calendar_condition(
+        hass, lock_code_manager_config_entry, "calendar.bookings", match="any"
+    )
+
+    assert await _calendar_at(hass, STATE_UNAVAILABLE) == STATE_UNAVAILABLE
 
 
 @pytest.mark.parametrize(
-    ("condition_template", "expected_state", "expect_warning"),
+    ("legacy_inputs", "expected"),
     [
-        ("{{ true }}", "on", False),
-        ("{{ 'lock.front_door' in lock_entity_ids }}", "off", True),
+        ({}, "on"),
+        ({"condition_template": "{{ 'Guest' in message }}"}, STATE_UNAVAILABLE),
+        ({"condition_template": "{{ true }}"}, STATE_UNAVAILABLE),
     ],
-    ids=["valid_template", "removed_lock_entity_ids"],
+    ids=["never-set-a-condition", "custom-condition", "explicit-default-condition"],
 )
-async def test_calendar_condition_fails_quietly_on_the_removed_variable(
+async def test_calendar_condition_from_an_earlier_version(
     hass: HomeAssistant,
-    caplog,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
-    template_teardown,
-    condition_template: str,
-    expected_state: str,
-    expect_warning: bool,
+    legacy_inputs: dict[str, str],
+    expected: str,
 ) -> None:
     """
-    A template still naming the removed ``lock_entity_ids`` reads ``off``.
+    A sensor set up before Match existed keeps working or fails closed.
 
-    This is the claim the blueprint's description and BLUEPRINTS.md make to
-    anybody upgrading, so it is pinned rather than reasoned about: Home
-    Assistant renders an undefined template variable as empty instead of
-    raising, which leaves the sensor available, reading ``off``, and the PIN
-    it gates permanently inactive. The only signal is a template variable
-    warning in the log. The valid-template case is what makes the ``off``
-    mean something -- the same calendar, the same setup, reading ``on``.
+    One that never set a condition template had "any event" and keeps it.
+    One that set its own template is unavailable, and so inactive, until it
+    has a Match: honouring the template live isn't possible, and treating it
+    as "any event" would turn a filtered sensor on during every event. Its
+    stored template can't be read back to tell ``{{ true }}`` from a real
+    filter, so an explicit default counts as set too.
     """
-    calendar_entity = "calendar.guest_stay"
-    hass.states.async_set(calendar_entity, "on", {"message": "Guest"})
-    caplog.clear()
-
+    hass.states.async_set("calendar.bookings", "off", {})
     await _setup_calendar_condition(
-        hass, lock_code_manager_config_entry, calendar_entity, condition_template
+        hass, lock_code_manager_config_entry, "calendar.bookings", **legacy_inputs
     )
-    # A sensor created while Home Assistant is running renders on its first
-    # trigger; the minute backstop is the one that fires here.
-    await async_advance_time(hass, timedelta(minutes=1))
 
-    state = hass.states.get(CALENDAR_CONDITION_ENTITY)
-    assert state is not None
-    assert state.state == expected_state
-    warned = (
-        "Template variable warning" in caplog.text
-        and "'lock_entity_ids' is undefined" in caplog.text
+    assert await _calendar_at(hass, "on", "Anything") == expected
+
+
+async def test_calendar_condition_with_a_match_ignores_an_old_condition(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+) -> None:
+    """Choosing a Match brings a sensor with an old condition template back."""
+    hass.states.async_set("calendar.bookings", "off", {})
+    await _setup_calendar_condition(
+        hass,
+        lock_code_manager_config_entry,
+        "calendar.bookings",
+        match="name_in_title",
+        condition_template="{{ 'Guest' in message }}",
     )
-    assert warned is expect_warning
+
+    assert await _calendar_at(hass, "on", "test1") == "on"
 
 
 @pytest.mark.parametrize(
     ("blueprint", "variable", "slot_field"),
     [
-        ("template/lock_code_manager/calendar_condition.yaml", "_name_entity", "name"),
         (
             "automation/lock_code_manager/calendar_pin_setter.yaml",
             "pin_entity",
