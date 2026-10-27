@@ -1,0 +1,7 @@
+{
+  "tool_use_id": "toolu_019BLs8AWrMnsj2SNK4Lp8gc",
+  "agent_id": "af197f83da344fb8b",
+  "subagent_type": "pr-review-toolkit:code-reviewer",
+  "task_description": "Review reworked calendar condition PR",
+  "started_at": "2026-10-27T00:18:02.795007-04:00"
+}
