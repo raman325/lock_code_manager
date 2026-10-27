@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "1f9f13140e49",
+  "session_id": "551e587c-a8de-4f70-922d-c037cad26aa6",
+  "strategy": "manual-commit",
+  "created_at": "2026-10-27T04:02:54.316723Z",
+  "branch": "fix/calendar-condition-follows-events",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "BLUEPRINTS.md",
+    "blueprints/template/lock_code_manager/calendar_condition.yaml",
+    "tests/test_blueprint_behavior.py"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5-5",
+  "turn_id": "7e16d241271e",
+  "checkpoint_transcript_start": 2687,
+  "transcript_lines_at_start": 2687,
+  "compact_transcript_start": 275,
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 23323,
+    "cache_read_tokens": 7384865,
+    "output_tokens": 15506,
+    "api_call_count": 15,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 75176,
+      "cache_read_tokens": 64523,
+      "output_tokens": 325,
+      "api_call_count": 2
+    }
+  },
+  "session_metrics": {
+    "turn_count": 31
+  }
+}

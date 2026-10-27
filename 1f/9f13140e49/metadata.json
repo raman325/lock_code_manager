@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "1f9f13140e49",
+  "strategy": "manual-commit",
+  "branch": "fix/calendar-condition-follows-events",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "BLUEPRINTS.md",
+    "blueprints/template/lock_code_manager/calendar_condition.yaml",
+    "tests/test_blueprint_behavior.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1f/9f13140e49/0/metadata.json",
+      "transcript": "/1f/9f13140e49/0/full.jsonl",
+      "compact_transcript": "/1f/9f13140e49/0/transcript.jsonl",
+      "content_hash": "/1f/9f13140e49/0/content_hash.txt",
+      "prompt": "/1f/9f13140e49/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 23323,
+    "cache_read_tokens": 7384865,
+    "output_tokens": 15506,
+    "api_call_count": 15,
+    "subagent_tokens": {
+      "input_tokens": 4,
+      "cache_creation_tokens": 75176,
+      "cache_read_tokens": 64523,
+      "output_tokens": 325,
+      "api_call_count": 2
+    }
+  }
+}
