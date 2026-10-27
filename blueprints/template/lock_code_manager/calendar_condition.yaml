@@ -65,11 +65,13 @@ blueprint:
     - Allow when the slot is named for a known guest: `{{ name_state == 'Guest' }}`
 
 
-    **Note:** The condition template and calendar attributes are evaluated when the
-    sensor is first loaded and when Home Assistant reloads template entities. For
-    the default `{{ true }}`, the sensor dynamically tracks the calendar on/off
-    state. For conditions that reference event attributes, reload template entities
-    after calendar event changes to re-evaluate.
+    **When it updates**
+
+    The sensor re-evaluates whenever the calendar's state or current event
+    changes, when Home Assistant starts, when template entities reload, and
+    once a minute. The minute check catches what the calendar can't signal: a
+    user renamed just after their booking starts, or a template that reads the
+    time.
 
 
     **Template debugging**
@@ -120,6 +122,16 @@ blueprint:
       default: "{{ true }}"
       selector:
         template:
+
+triggers:
+  - trigger: state
+    entity_id: !input calendar_entity
+  - trigger: homeassistant
+    event: start
+  - trigger: event
+    event_type: event_template_reloaded
+  - trigger: time_pattern
+    minutes: "/1"
 
 variables:
   config_entry: !input config_entry

@@ -107,12 +107,12 @@ their PIN is active.
 - Supports any HA calendar integration (local, Google, CalDAV, etc.)
 - The sensor is unavailable while the calendar entity is `unknown` or
   `unavailable`
-- The condition template and the calendar attributes are evaluated when the
-  sensor is first loaded and when Home Assistant reloads template entities.
-  With the default `{{ true }}` the sensor tracks the calendar turning on and
-  off. A condition that reads event attributes is not re-evaluated when the
-  calendar moves to a different event: reload template entities after the
-  calendar's events change
+- One shared calendar can gate many users: match each user against the
+  current event, e.g. `{{ name_state in message }}`
+- The sensor re-evaluates whenever the calendar's state or current event
+  changes, when Home Assistant starts, when template entities reload, and once
+  a minute. The minute check catches a user renamed just after their booking
+  starts, and a template that reads the time
 
 > **Breaking: `lock_entity_ids` is gone.** It came from the credential used
 > event entity, which no longer lists the config entry's locks as its event

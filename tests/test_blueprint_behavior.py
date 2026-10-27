@@ -5,8 +5,9 @@ exercised end-to-end: trigger fires from a real LCM event entity, the
 automation runs, and we assert on the side effects via mocked services.
 """
 
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
 import contextlib
+from datetime import timedelta
 import pathlib
 from typing import Any
 from unittest.mock import patch
@@ -21,8 +22,16 @@ from pytest_homeassistant_custom_component.common import (
 from homeassistant.components import automation
 from homeassistant.components.blueprint import models
 from homeassistant.components.event import ATTR_EVENT_TYPE
-from homeassistant.components.template import config as template_config
-from homeassistant.const import ATTR_FRIENDLY_NAME, STATE_UNAVAILABLE
+from homeassistant.components.template import (
+    DATA_COORDINATORS,
+    config as template_config,
+)
+from homeassistant.components.text import (
+    ATTR_VALUE,
+    DOMAIN as TEXT_DOMAIN,
+    SERVICE_SET_VALUE,
+)
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_FRIENDLY_NAME, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant, ServiceCall, State, callback
 from homeassistant.helpers import entity_registry as er, template
 from homeassistant.setup import async_setup_component
@@ -47,8 +56,10 @@ from .common import (
     SLOT_1_ACTIVE_ENTITY,
     SLOT_1_ENABLED_ENTITY,
     SLOT_1_EVENT_ENTITY,
+    SLOT_1_NAME_ENTITY,
     SLOT_2_EVENT_ENTITY,
 )
+from .conftest import async_advance_time
 
 BLUEPRINTS_ROOT = pathlib.Path(__file__).resolve().parent.parent / "blueprints"
 BLUEPRINT_FOLDER = BLUEPRINTS_ROOT / "automation" / "lock_code_manager"
@@ -1017,6 +1028,136 @@ async def test_limiter_derives_slot_and_config_entry(
 # --------------------------------------------------------------------------- #
 
 
+CALENDAR_CONDITION_ENTITY = "binary_sensor.guest_condition"
+
+
+@pytest.fixture
+async def template_teardown(hass: HomeAssistant) -> AsyncGenerator[None]:
+    """
+    Shut down trigger-based template entities after the test.
+
+    Home Assistant detaches a trigger-based template entity's triggers only
+    when templates reload, not when it stops, so the Calendar Condition's
+    minute backstop would outlive the test and trip the lingering-timer
+    check in verify_cleanup. Do what a reload does.
+    """
+    yield
+    for coordinator in hass.data.pop(DATA_COORDINATORS, None) or ():
+        await coordinator.async_shutdown()
+    await hass.async_block_till_done()
+
+
+async def _setup_calendar_condition(
+    hass: HomeAssistant,
+    lock_code_manager_config_entry: MockConfigEntry,
+    calendar_entity: str,
+    condition_template: str,
+    slot_number: int = 1,
+) -> None:
+    """Instantiate the shipped Calendar Condition blueprint as one sensor."""
+    with patch_blueprint(
+        CALENDAR_PATH,
+        BLUEPRINTS_ROOT / "template" / CALENDAR_PATH,
+        schema=template_config.TEMPLATE_BLUEPRINT_SCHEMA,
+    ):
+        assert await async_setup_component(
+            hass,
+            "template",
+            {
+                "template": {
+                    "name": "Guest Condition",
+                    "use_blueprint": {
+                        "path": CALENDAR_PATH,
+                        "input": {
+                            "config_entry": lock_code_manager_config_entry.entry_id,
+                            "calendar_entity": calendar_entity,
+                            "slot_number": slot_number,
+                            "condition_template": condition_template,
+                        },
+                    },
+                }
+            },
+        )
+    await hass.async_block_till_done()
+
+
+async def test_calendar_condition_follows_the_current_event(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    template_teardown,
+) -> None:
+    """
+    One shared calendar gates each guest by the event that is on now.
+
+    A booking calendar stays ``on`` across back-to-back stays and only its
+    event attributes change, so matching the guest against the event has to
+    re-render on attribute changes. When the match was frozen at load, the
+    first guest's sensor stayed on through every later booking and the next
+    guest's never turned on.
+    """
+    calendar_entity = "calendar.bookings"
+    hass.states.async_set(calendar_entity, "off", {"message": ""})
+    await _setup_calendar_condition(
+        hass,
+        lock_code_manager_config_entry,
+        calendar_entity,
+        "{{ name_state in message }}",
+    )
+
+    for calendar_state, message, expected in (
+        ("on", "test1 arriving", "on"),
+        ("on", "test2 arriving", "off"),
+        ("on", "test1 back again", "on"),
+        ("off", "", "off"),
+    ):
+        hass.states.async_set(calendar_entity, calendar_state, {"message": message})
+        await hass.async_block_till_done()
+        state = hass.states.get(CALENDAR_CONDITION_ENTITY)
+        assert state is not None
+        assert state.state == expected, (calendar_state, message)
+
+
+async def test_calendar_condition_catches_a_rename_within_a_minute(
+    hass: HomeAssistant,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+    template_teardown,
+) -> None:
+    """
+    A user renamed just after their booking starts is matched within a minute.
+
+    Rotating a standing user per booking renames them when the event starts,
+    which can land after the calendar change has already been evaluated.
+    Nothing about the calendar changes again until checkout, so without the
+    minute backstop the guest would be locked out for the whole stay.
+    """
+    calendar_entity = "calendar.bookings"
+    hass.states.async_set(calendar_entity, "off", {"message": ""})
+    await _setup_calendar_condition(
+        hass,
+        lock_code_manager_config_entry,
+        calendar_entity,
+        "{{ name_state in message }}",
+    )
+
+    hass.states.async_set(calendar_entity, "on", {"message": "Sarah Chen"})
+    await hass.async_block_till_done()
+    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "off"
+
+    await hass.services.async_call(
+        TEXT_DOMAIN,
+        SERVICE_SET_VALUE,
+        service_data={ATTR_VALUE: "Sarah Chen"},
+        target={ATTR_ENTITY_ID: SLOT_1_NAME_ENTITY},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+
+    await async_advance_time(hass, timedelta(minutes=1))
+    assert hass.states.get(CALENDAR_CONDITION_ENTITY).state == "on"
+
+
 @pytest.mark.parametrize(
     ("condition_template", "expected_state", "expect_warning"),
     [
@@ -1030,6 +1171,7 @@ async def test_calendar_condition_fails_quietly_on_the_removed_variable(
     caplog,
     mock_lock_config_entry,
     lock_code_manager_config_entry,
+    template_teardown,
     condition_template: str,
     expected_state: str,
     expect_warning: bool,
@@ -1049,32 +1191,14 @@ async def test_calendar_condition_fails_quietly_on_the_removed_variable(
     hass.states.async_set(calendar_entity, "on", {"message": "Guest"})
     caplog.clear()
 
-    with patch_blueprint(
-        CALENDAR_PATH,
-        BLUEPRINTS_ROOT / "template" / CALENDAR_PATH,
-        schema=template_config.TEMPLATE_BLUEPRINT_SCHEMA,
-    ):
-        assert await async_setup_component(
-            hass,
-            "template",
-            {
-                "template": {
-                    "name": "Guest Condition",
-                    "use_blueprint": {
-                        "path": CALENDAR_PATH,
-                        "input": {
-                            "config_entry": lock_code_manager_config_entry.entry_id,
-                            "calendar_entity": calendar_entity,
-                            "slot_number": 1,
-                            "condition_template": condition_template,
-                        },
-                    },
-                }
-            },
-        )
-    await hass.async_block_till_done()
+    await _setup_calendar_condition(
+        hass, lock_code_manager_config_entry, calendar_entity, condition_template
+    )
+    # A sensor created while Home Assistant is running renders on its first
+    # trigger; the minute backstop is the one that fires here.
+    await async_advance_time(hass, timedelta(minutes=1))
 
-    state = hass.states.get("binary_sensor.guest_condition")
+    state = hass.states.get(CALENDAR_CONDITION_ENTITY)
     assert state is not None
     assert state.state == expected_state
     warned = (
