@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_015nyzix4RC7NqVAxYHL8iLv",
+  "agent_id": "a918b4b03fafcc5b3",
+  "subagent_type": "general-purpose",
+  "task_description": "Split Managing Guests recipes page",
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 78576,
+    "cache_read_tokens": 592922,
+    "output_tokens": 8870,
+    "api_call_count": 8
+  },
+  "started_at": "2026-10-26T22:22:06.984982-04:00",
+  "completed_at": "2026-10-26T22:29:37.24252-04:00"
+}

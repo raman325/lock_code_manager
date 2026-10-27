@@ -1,0 +1,15 @@
+{
+  "tool_use_id": "toolu_01HgULMECcjVSvHfiFhYNN9X",
+  "agent_id": "ab6ea0b259aa34af3",
+  "subagent_type": "general-purpose",
+  "task_description": "De-duplicate provider developer pages",
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 180289,
+    "cache_read_tokens": 6795708,
+    "output_tokens": 34646,
+    "api_call_count": 43
+  },
+  "started_at": "2026-10-26T22:21:58.990299-04:00",
+  "completed_at": "2026-10-26T22:29:37.216019-04:00"
+}
