@@ -15,141 +15,55 @@ Features:
 - Give each person a name and a PIN; Lock Code Manager works out which slot
   on which lock they land in
 - Synchronize PIN codes across multiple locks and providers
-- Automatic sync — codes are set and cleared as needed, and every write is
-  read back from the lock to confirm it, with retries and drift detection
+- Automatic sync — every write is read back from the lock to confirm it, with
+  retries and drift detection
 - Never touches codes it didn't create: new users go only in free slots, a
   lock that already holds codes in the configuration's slots is refused until
   you clear them, clearing or removing a user never deletes a lock user
   without Lock Code Manager's tag, and on Matter only PINs Home Assistant
   created are removed
-- Shows what each lock reports for each slot, including when a lock can't
-  tell (masked, unanswered, disabled on the lock, not reported). What Lock
-  Code Manager wrote is remembered across restarts, so codes a lock masks
-  aren't rewritten on every start
-- [Repairs](https://github.com/raman325/lock_code_manager/wiki/Repair-Issues)
-  tell you when a code can't be set or cleared, a lock is offline, or a
-  lock was re-paired
-- Condition entities control when a code is active:
-  - `calendar` — active during events
-  - `binary_sensor` / `switch` / `input_boolean` — active when on
-  - `schedule` — active during scheduled times
-- [Services and actions](https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions)
-  for adding and removing users, setting/clearing PINs, attaching condition
-  entities, hard-refreshing from the lock, and generating safe random PINs
-  from automations
-- [Blueprints](https://github.com/raman325/lock_code_manager/wiki/Blueprints)
-  for advanced use cases like usage limiting, calendar-driven PINs, and more
-- [External keypads and code readers](https://github.com/raman325/lock_code_manager/wiki/External-Keypads)
-  — check codes entered somewhere Lock Code Manager doesn't control, such as a
-  do-it-yourself ESPHome keypad or an intercom, against the same users and
-  schedules, and record the use like any other
-- [Guest and rental workflows](https://github.com/raman325/lock_code_manager/wiki/Managing-Guests-and-Rentals)
-  — rotate a standing user per booking, or add and remove them per stay
-- Dashboard strategies and custom cards for managing codes and viewing lock
-  status — from one-line auto-generated dashboards to fully hand-composed
-  layouts
+- Shows what each lock reports for each slot, including when a lock can't tell
+- [Repairs][wiki-repairs] tell you when a code can't be set or cleared, a lock
+  is offline, or a lock was re-paired
+- [Condition entities][wiki-conditions] control when a code is active: a
+  calendar, a schedule, or anything on/off. Any other state, such as people
+  being home, works through a template binary sensor
+- [Services and actions][wiki-services] for managing users, PINs, and
+  conditions from automations
+- [Blueprints](BLUEPRINTS.md) for usage limiting, calendar-driven PINs, and more
+- [External keypads and code readers][wiki-external-keypads], such as an
+  ESPHome keypad, checked against the same users and schedules
+- [Guest and rental workflows][wiki-guests]
+- [Dashboard strategies and custom cards](#ui--dashboards), from one-line
+  auto-generated dashboards to fully hand-composed layouts
 
-Supported lock integrations and code sources:
+## Supported Integrations
 
 | Integration | Read PINs | Push Updates | Code Events | Notes |
 | --- | --- | --- | --- | --- |
 | [Z-Wave][wiki-zwave] | Varies | ✅ | ✅ | Some locks mask PINs |
-| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Drift detection fallback if lock lacks programming events; see ⁵ for locks that cannot report PINs |
-| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT)² | Varies | ✅ | ✅ | Same broker as Z2M; PIN support depends on lock; see ⁵ for locks that cannot report PINs |
-| [Z-Wave JS UI][wiki-zwave-js-ui] (MQTT)³ | Varies | ✅ | ✅ | Locks bridged via zwave-js-ui's MQTT gateway; some locks mask PINs |
-| [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs write-only per spec; only PINs Home Assistant created are removed |
+| [ZHA][wiki-zha] | ✅ | ✅ | ✅ | Some locks can't report their PINs |
+| [Zigbee2MQTT][wiki-zigbee2mqtt] (MQTT) | Varies | ✅ | ✅ | PIN support depends on the lock; some can't report their PINs |
+| [Z-Wave JS UI][wiki-zwave-js-ui] (MQTT) | Varies | ✅ | ✅ | For locks bridged through zwave-js-ui's MQTT gateway; the Z-Wave row is recommended |
+| [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs are write-only per the spec |
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
-| [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | A credential store rather than a device: records uses reported by the `use_credential` action, and lets you try Lock Code Manager without a real lock |
-| [ESPHome][wiki-external-keypads]⁴ | ❌ | ❌ | ✅ | Keypads and readers, not locks: the device reports the entered code through the `use_credential` action, and Lock Code Manager checks and records it. Nothing is written to the device |
+| [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | Try Lock Code Manager without a real lock |
+| [ESPHome][wiki-external-keypads] | ❌ | ❌ | ✅ | Keypads and readers, not locks: codes are checked, nothing is written to the device |
+
+**Code Events** means Lock Code Manager can tell which user's code was used and
+[emits an event][wiki-events] for it: the `lock_code_manager_credential_used`
+bus event and the user's event entity, either of which can trigger automations.
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
 
-² **Zigbee2MQTT (MQTT)** — Pair the lock in [Zigbee2MQTT][zigbee2mqtt] with PIN/user-code support for your firmware.
-The **Code Events** column refers to PIN-used automations from Lock Code Manager’s event entity
-(which slots were used to lock/unlock).
-Zigbee2MQTT lock/unlock actions with user identification are mapped to code slot events for PIN-used automations.
-Configure Home Assistant’s **MQTT** integration on the **same broker** Zigbee2MQTT uses.
-Custom Zigbee2MQTT base topics — including multi-level topics (e.g. `home/z2m`) and multiple
-bridges on one broker — are supported automatically: Lock Code Manager reads each lock’s exact
-MQTT topic from the discovery data Zigbee2MQTT publishes to Home Assistant, so no extra
-configuration is needed. Locks must be added to Home Assistant via MQTT discovery
-(Zigbee2MQTT’s default).
-During LCM setup, choose your `lock.*` entity from **MQTT**.
+Each integration's wiki page covers its setup and limitations. Adding support
+for a new lock integration is straightforward — see the
+[Adding a Provider][wiki-adding-provider] guide. Contributors welcome!
 
-³ **Z-Wave JS UI (MQTT)** — For Z-Wave locks exposed to Home Assistant through
-[zwave-js-ui][zwave-js-ui]'s MQTT discovery gateway rather than the official websocket
-integration (which the [Z-Wave][wiki-zwave] row covers, and which zwave-js-ui itself
-recommends — switching needs no re-pairing). Reads and writes go through zwave-js-ui's
-MQTT api; gateway type **Named** or **ValueID** gives full functionality including
-push updates and PIN-used events, while **Manual** runs polling-only. Configure Home
-Assistant’s **MQTT** integration on the same broker zwave-js-ui uses.
-
-⁴ **ESPHome and other keypads** — ESPHome's lock component has no user-code API, so
-there is no ESPHome provider and Lock Code Manager cannot push PINs onto an ESPHome
-device. Support runs the other way: the device, or an automation watching it, calls
-[`lock_code_manager.use_credential`][wiki-use-credential] with the code that was entered.
-The response says whether the code is valid and for which user, and a valid code fires the
-same credential-used event a real lock does, so one PIN and one schedule cover the keypad
-and your locks together. A configuration needs no lock at all for this. See
-[External Keypads][wiki-external-keypads] for ESPHome recipes, including a device that
-asks for itself and never publishes the code to an entity, and
-[Unsupported Integrations][wiki-unsupported] for what a real provider would need.
-
-⁵ **Locks that can't report their codes** — Some locks take PINs but cannot report
-them: they never answer a read, or answer that user status is not supported
-(`not_supported_255` in Zigbee2MQTT; status 0xFF through ZHA, which is handled the same way).
-Lock Code Manager still sets and keeps the codes it manages on such a lock, but it
-cannot see a code programmed at the lock itself. So when it picks slots for new users
-(starting from slot 1), or when such a lock is added to an existing configuration, which
-then writes that configuration's codes to it, it may write over one. Setup, adding users,
-adding a lock and swapping one in (reauth) tell you when a lock cannot report its codes, and
-which slots will be used. On these locks, add codes through Lock Code Manager only, or keep
-any others in the highest slots. A lock that reports its free slots and answers not
-supported only for occupied ones has those left alone, once Lock Code Manager has seen it
-report a free slot; it remembers that across restarts. If a lock that can't report its codes
-is treated as one that can, so new users can't be placed, run **Hard refresh usercodes** with
-**Forget that the lock can report codes** (`forget_reporting`) enabled. Only do this for a
-lock that can't report its codes: a lock that reports its free slots is then no longer known to
-report, and until Lock Code Manager sees it report a free slot again it may place a new user
-over a code set at the keypad.
-
-[zigbee2mqtt]: https://www.zigbee2mqtt.io/
-[wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
-[wiki-zigbee2mqtt]: https://github.com/raman325/lock_code_manager/wiki/Zigbee2MQTT-integration
-[wiki-zwave-js-ui]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-JS-UI-(MQTT)
-[zwave-js-ui]: https://github.com/zwave-js/zwave-js-ui
-[wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
-[wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
-[wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
-[wiki-external-keypads]: https://github.com/raman325/lock_code_manager/wiki/External-Keypads
-[wiki-use-credential]: https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions#use_credential
-[wiki-unsupported]: https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations#esphome
-[local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
-[hass-virtual]: https://github.com/twrecked/hass-virtual
-[wiki-zha]: https://github.com/raman325/lock_code_manager/wiki/ZHA-integration
-[wiki-zwave]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-integration
-
-Adding support for new lock integrations is straightforward — see the
-[Adding a Provider](https://github.com/raman325/lock_code_manager/wiki/Adding-a-Provider)
-guide. Contributors welcome!
-
-## Integrations That Cannot Currently Be Supported
-
-Some lock integrations cannot currently be supported due to limitations in their underlying
-libraries. See the [wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations)
-for details. Having no provider is not always the end of it: ESPHome keypads work through
-the `use_credential` action instead, as described above.
-
-## Condition Entity Integrations Not Supported
-
-Some integrations create entities whose states don't map to LCM condition entity
-semantics ("access allowed" / "access denied"). The integration may still be usable
-with LCM by driving slot Enabled switches from its own automation logic instead of
-attaching its entities as condition entities. See the
-[wiki](https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations)
-for details and the scheduler-component workaround.
+Some lock integrations [can't currently be supported][wiki-unsupported], and
+some integrations' entities [don't work as condition entities][wiki-unsupported-conditions].
 
 ## Installation
 
@@ -163,42 +77,8 @@ The best way to install this integration is via HACS.
 5. Follow the prompts - additional information about the configuration options are
    available in the Wiki
 
-## Blueprints
-
-Pre-built automations and templates for common lock management
-patterns. See [BLUEPRINTS.md](BLUEPRINTS.md) for full details,
-input tables, and import buttons.
-
-### Template blueprints
-
-- **Calendar Condition** — Binary sensor for calendar-based access
-- **Date Range Condition** — Binary sensor for start/end date access
-
-### Automation blueprints
-
-- **Slot Usage Limiter** — Disable a user after a set number of uses
-- **Calendar PIN Setter** — Extract and set PINs from calendar events
-- **Auto Re-lock** — Re-lock after a delay with day/night support
-- **Lock on Door Close** — Lock when a door sensor detects closure
-- **Slot Usage Notifier** — Notify when someone's credential is used
-- **Credential Used** — Run any actions when a credential is used, from a
-  lock's own keypad or an external one
-- **Condition Linker** — Assign a condition entity to a user via UI
-
-## Learn More
-
-Visit the [Wiki](https://github.com/raman325/lock_code_manager/wiki) for detailed
-documentation including configuration, troubleshooting, dashboard setup, and development guides.
-
-**Upgrading from 5.x?** 6.0 makes each user a config subentry and removes the
-remaining slot-addressed actions and event. Read
-[Upgrading to 6.0](https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-6.0)
-first — the migration is one-way.
-
-**Upgrading from 4.x?** 5.0 is configured by user rather than by slot number,
-and migrating renames every entity ID. Read
-[Upgrading to 5.0](https://github.com/raman325/lock_code_manager/wiki/Upgrading-to-5.0)
-first — the migration is one-way.
+**Upgrading across a major version?** Read its upgrade guide in the
+[wiki][wiki] first — major-version migrations are one-way.
 
 ## UI & Dashboards
 
@@ -213,9 +93,10 @@ you want where you want it.
 - [UI Strategies][wiki-ui-strategies] — dashboard, view, and section strategies
 - [Custom Cards][wiki-ui-cards] — user card, add-user card, lock-codes card, and code-display modes
 
-[wiki-ui-overview]: https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management
-[wiki-ui-strategies]: https://github.com/raman325/lock_code_manager/wiki/UI-Strategies
-[wiki-ui-cards]: https://github.com/raman325/lock_code_manager/wiki/Custom-Cards
+## Learn More
+
+Visit the [Wiki][wiki] for detailed documentation including configuration,
+troubleshooting, dashboard setup, and development guides.
 
 ## AI Usage
 
@@ -235,3 +116,27 @@ AI, I completely understand and that is your prerogative. If you ever want
 to chat about it — whether it's to convince me that what I'm doing is
 wrong, to learn more about it, or anything in between — find me on the
 [Home Assistant Discord](https://www.home-assistant.io/join-chat/).
+
+[wiki]: https://github.com/raman325/lock_code_manager/wiki
+[wiki-repairs]: https://github.com/raman325/lock_code_manager/wiki/Repair-Issues
+[wiki-conditions]: https://github.com/raman325/lock_code_manager/wiki/Using-Condition-Entities
+[wiki-services]: https://github.com/raman325/lock_code_manager/wiki/Services-and-Actions
+[wiki-events]: https://github.com/raman325/lock_code_manager/wiki/Tracking-lock-state-change-events
+[wiki-guests]: https://github.com/raman325/lock_code_manager/wiki/Managing-Guests-and-Rentals
+[wiki-adding-provider]: https://github.com/raman325/lock_code_manager/wiki/Adding-a-Provider
+[wiki-unsupported]: https://github.com/raman325/lock_code_manager/wiki/Unsupported-Integrations
+[wiki-unsupported-conditions]: https://github.com/raman325/lock_code_manager/wiki/Unsupported-Condition-Entity-Integrations
+[wiki-zwave]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-integration
+[wiki-zha]: https://github.com/raman325/lock_code_manager/wiki/ZHA-integration
+[wiki-zigbee2mqtt]: https://github.com/raman325/lock_code_manager/wiki/Zigbee2MQTT-integration
+[wiki-zwave-js-ui]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-JS-UI-(MQTT)
+[wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
+[wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
+[wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
+[wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
+[wiki-external-keypads]: https://github.com/raman325/lock_code_manager/wiki/External-Keypads
+[wiki-ui-overview]: https://github.com/raman325/lock_code_manager/wiki/Add-a-UI-for-lock-code-management
+[wiki-ui-strategies]: https://github.com/raman325/lock_code_manager/wiki/UI-Strategies
+[wiki-ui-cards]: https://github.com/raman325/lock_code_manager/wiki/Custom-Cards
+[local-akuvox]: https://github.com/pjaudiomv/hass-local-akuvox
+[hass-virtual]: https://github.com/twrecked/hass-virtual
