@@ -17,11 +17,13 @@ Features:
 - Synchronize PIN codes across multiple locks and providers
 - Automatic sync — every write is read back from the lock to confirm it, with
   retries and drift detection
-- Never touches codes it didn't create: new users go only in free slots, a
-  lock that already holds codes in the configuration's slots is refused until
-  you clear them, clearing or removing a user never deletes a lock user
-  without Lock Code Manager's tag, and on Matter only PINs Home Assistant
-  created are removed
+- Never touches codes it didn't create: a new user gets a slot number that's
+  free on every lock in the configuration, and a lock you add or swap in later
+  must have its users' numbers free, or it's refused until you clear them.
+  Clearing or removing a user never deletes a lock user without Lock Code
+  Manager's tag, and on Matter only PINs Home Assistant created are removed.
+  The one exception is a lock that can't report its codes: Lock Code Manager
+  warns you which slots it will use
 - Shows what each lock reports for each slot, including when a lock can't tell
 - [Repairs][wiki-repairs] tell you when a code can't be set or cleared, a lock
   is offline, or a lock was re-paired
