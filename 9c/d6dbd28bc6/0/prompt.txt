@@ -1,0 +1,17 @@
+research #1768. Consider various group types (there are legacy groups and new style groups - I think the new style gets exposed in the same domain as the underlying entities
+
+---
+
+actually I think the right answer is to use template entities as the condition. That's what allows us to keep thing simple
+
+---
+
+post it but don't close it yet. Go ahead and update the wiki
+
+---
+
+the README is starting to get pretty big. Should we shrink/split it?
+
+---
+
+yes

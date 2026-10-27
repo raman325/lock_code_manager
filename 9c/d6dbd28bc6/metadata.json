@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "9cd6dbd28bc6",
+  "strategy": "manual-commit",
+  "branch": "docs/readme-shrink",
+  "checkpoints_count": 4,
+  "files_touched": [
+    "README.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9c/d6dbd28bc6/0/metadata.json",
+      "transcript": "/9c/d6dbd28bc6/0/full.jsonl",
+      "compact_transcript": "/9c/d6dbd28bc6/0/transcript.jsonl",
+      "content_hash": "/9c/d6dbd28bc6/0/content_hash.txt",
+      "prompt": "/9c/d6dbd28bc6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 82,
+    "cache_creation_tokens": 132916,
+    "cache_read_tokens": 3953162,
+    "output_tokens": 22603,
+    "api_call_count": 36
+  }
+}
