@@ -30,6 +30,14 @@ jobs:
               - '**.py'
               - 'requirements*.txt'
               - 'pyproject.toml'
+              # Files the tests read: the blueprints and their reference,
+              # the integration's own JSON and YAML, and test fixtures.
+              - 'BLUEPRINTS.md'
+              - 'blueprints/**'
+              - 'custom_components/**'
+              - 'hacs.json'
+              - 'tests/**'
+              - '.github/workflows/release.yaml'
               - '.github/workflows/integration.yaml'
               - '.github/workflows/python-checks.yml'
             frontend:

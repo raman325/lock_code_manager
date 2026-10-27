@@ -40,6 +40,7 @@ def _documented_inputs() -> dict[str, list[str]]:
     """Map each blueprint's file name to the input names its table lists."""
     sections: dict[str, list[str]] = {}
     current: list[str] | None = None
+    table: list[str] | None = None
     for line in _DOC.read_text().splitlines():
         if match := _IMPORT_LINK.search(line):
             current = sections.setdefault(match[1], [])
@@ -48,10 +49,17 @@ def _documented_inputs() -> dict[str, list[str]]:
         # they read as extra inputs of whichever one was documented last.
         elif line.startswith("#"):
             current = None
-        elif current is not None and line.startswith("|"):
-            name = line.split("|")[1].strip()
-            if name != "Input" and not name.startswith("--"):
-                current.append(name)
+        # A table ends at the first line that is not a row. A section can
+        # hold more than one, such as the variables an automation's actions
+        # can use, and only the one headed "Input" lists inputs.
+        if not line.startswith("|"):
+            table = None
+            continue
+        name = line.split("|")[1].strip()
+        if name == "Input":
+            table = current
+        elif table is not None and not name.startswith("--"):
+            table.append(name)
     return sections
 
 
