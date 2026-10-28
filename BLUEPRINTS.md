@@ -112,6 +112,7 @@ sensor per user, each matching that user's events.
 | Calendar entity | Calendar to monitor | Required |
 | Match | Which events belong to the user (below) | Any event, for sensors from before Match existed |
 | Match text | Text the event's title or description must also contain, ignoring case | None |
+| Condition template (no longer used) | Leave as `not set` and choose a Match instead. A sensor that still has a template here is unavailable until it has a Match | `not set` |
 
 | Match | The sensor is on while the current event… |
 | ----- | ----------------------------------------- |
@@ -134,8 +135,8 @@ sensor per user, each matching that user's events.
   sensor](https://www.home-assistant.io/integrations/template/) and use it as
   the condition entity
 
-> **Breaking: the condition template is gone, replaced by Match and Match
-> text.** A sensor set up before this version that never set a condition
+> **Breaking: the condition template no longer works, replaced by Match and
+> Match text.** A sensor set up before this version that never set a condition
 > template keeps working as **Any event**. One that set its own template is
 > unavailable, so its user's PIN stays inactive, until you choose a Match.
 > Re-import the blueprint to get this version: Home Assistant keeps its own
