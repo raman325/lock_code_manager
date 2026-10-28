@@ -59,6 +59,29 @@ def test_mqtt_payload_pin_has_code_value_rejects_bool() -> None:
         pytest.param(
             {"status": "not_supported_2"}, SlotCredential.unreadable(), id="reserved"
         ),
+        # The form zigbee-herdsman-converters published before v26.50.0, and
+        # Zigbee2MQTT still republishes for a user it has not read since: the
+        # code's octets keyed by position (#1791).
+        pytest.param(
+            {"status": "enabled", "pin_code": {"0": 50, "1": 52, "2": 54, "3": 56}},
+            SlotCredential.known("2468"),
+            id="enabled with a PIN as bytes",
+        ),
+        pytest.param(
+            {"status": "enabled", "pin_code": {}},
+            SlotCredential.empty(),
+            id="enabled with no bytes",
+        ),
+        pytest.param(
+            {"status": "available", "pin_code": {}},
+            SlotCredential.empty(),
+            id="available with no bytes",
+        ),
+        pytest.param(
+            {"status": "enabled", "pin_code": {"1": 50}},
+            SlotCredential.unreadable(),
+            id="enabled with an object that is not bytes",
+        ),
     ],
 )
 def test_each_user_status_projects_to_what_it_says(
