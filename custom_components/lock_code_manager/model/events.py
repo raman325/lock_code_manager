@@ -5,7 +5,7 @@ from enum import StrEnum
 from homeassistant.components.logbook import async_log_entry
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Context, HomeAssistant, callback
 
 from ..const import (
     ATTR_CONFIG_ENTRY_ID,
@@ -97,6 +97,7 @@ def async_fire_credential_used(
     target: str,
     credential_type: CredentialType,
     operation: CredentialOperation,
+    context: Context | None,
 ) -> None:
     """
     Announce that a credential belonging to ``name`` was used.
@@ -132,6 +133,13 @@ def async_fire_credential_used(
 
     Every use is also written to the logbook under ``target``, so it shows in
     that entity's activity alongside the state change it explains.
+
+    ``context`` is whatever reported the use -- the action call, for a use
+    reported through ``use_credential`` -- and both the event and the logbook
+    entry carry it, so the logbook names that automation or person as the
+    cause. It is required so that every caller decides: a lock that observed
+    a use passes ``None``, because the lock's own state change has the lock
+    integration's context and nothing of ours caused it.
     """
     hass.bus.async_fire(
         BUS_EVENT_CREDENTIAL_USED,
@@ -144,6 +152,7 @@ def async_fire_credential_used(
             ATTR_CREDENTIAL_TYPE: credential_type,
             ATTR_OPERATION: operation,
         },
+        context=context,
     )
     # Filed on the target as a manual logbook entry, because the logbook
     # shows an entity only its own integration's described events and Lock
@@ -155,4 +164,5 @@ def async_fire_credential_used(
         credential_use_message(name, credential_type, operation),
         domain=DOMAIN,
         entity_id=target,
+        context=context,
     )

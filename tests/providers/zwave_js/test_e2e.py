@@ -302,6 +302,7 @@ class TestEvents:
             target=lock_entity.entity_id,
             credential_type=CredentialType.RFID,
             operation=CredentialOperation.UNLOCK,
+            context=None,
         )
         await hass.async_block_till_done()
 

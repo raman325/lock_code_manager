@@ -18,8 +18,9 @@ from pytest_homeassistant_custom_component.components.recorder.common import (
     async_wait_recording_done,
 )
 
+from homeassistant.components.automation import DOMAIN as AUTOMATION_DOMAIN
 from homeassistant.components.logbook import DOMAIN as LOGBOOK_DOMAIN
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
@@ -27,6 +28,7 @@ from custom_components.lock_code_manager.const import (
     ATTR_CODE,
     ATTR_SOURCE,
     ATTR_TARGET,
+    BUS_EVENT_CREDENTIAL_USED,
     DOMAIN,
     SERVICE_USE_CREDENTIAL,
 )
@@ -143,6 +145,57 @@ async def test_a_reported_use_is_in_its_targets_logbook(
     # The source can hold the code that was typed; it is never where the
     # entry is filed.
     assert _uses(await _logbook_for(hass_ws_client, hass, EXTERNAL_KEYPAD)) == []
+
+
+async def test_a_use_an_automation_reported_names_that_automation_as_its_cause(
+    hass: HomeAssistant,
+    hass_ws_client,
+    logbook,
+    mock_lock_config_entry,
+    lock_code_manager_config_entry,
+):
+    """
+    The entry carries the action call's context, so the logbook can say why.
+
+    A keypad automation is the usual caller of ``use_credential``. With the
+    call's context, the logbook links the entry to the automation run that
+    reported it; without one, the entry claims no cause at all.
+    """
+    assert await async_setup_component(
+        hass,
+        AUTOMATION_DOMAIN,
+        {
+            AUTOMATION_DOMAIN: {
+                "id": "side_gate_keypad",
+                "alias": "Side gate keypad",
+                "triggers": {"trigger": "event", "event_type": "keypad_code_entered"},
+                "actions": {
+                    "action": f"{DOMAIN}.{SERVICE_USE_CREDENTIAL}",
+                    "data": {
+                        "config_entry_id": lock_code_manager_config_entry.entry_id,
+                        ATTR_CODE: "1234",
+                        ATTR_SOURCE: EXTERNAL_KEYPAD,
+                        ATTR_TARGET: EXTERNAL_TARGET,
+                    },
+                },
+            }
+        },
+    )
+    runs: list[Event] = []
+    used: list[Event] = []
+    hass.bus.async_listen("automation_triggered", runs.append)
+    hass.bus.async_listen(BUS_EVENT_CREDENTIAL_USED, used.append)
+    hass.bus.async_fire("keypad_code_entered")
+    await hass.async_block_till_done()
+
+    # The bus event carries it too, so an automation reacting to the use
+    # traces back to the one that reported it.
+    assert [event.context.id for event in used] == [runs[0].context.id]
+
+    uses = _uses(await _logbook_for(hass_ws_client, hass, EXTERNAL_TARGET))
+    assert len(uses) == 1
+    assert uses[0]["context_event_type"] == "automation_triggered"
+    assert uses[0]["context_entity_id"] == "automation.side_gate_keypad"
 
 
 @pytest.mark.parametrize(

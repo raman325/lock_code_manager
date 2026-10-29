@@ -248,6 +248,7 @@ def _fire_used(
         target=EXTERNAL_TARGET,
         credential_type=kind,
         operation=CredentialOperation.UNKNOWN,
+        context=None,
     )
 
 
