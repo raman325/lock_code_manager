@@ -1,0 +1,31 @@
+show me a mock of what the new card will look like
+
+---
+
+then run code review on this PR
+
+---
+
+is this accurate now?
+
+You're not missing anything. Lock Code Manager records the information, but Home Assistant doesn't show it in either place you looked.
+
+
+
+**Why the lock says "No cause was recorded":** that field only gets filled when something inside Home Assistant caused the change, like an automation or a button you pressed in the UI. A keypad or fingerprint unlock happens on the lock itself. The lock integration reports the new state, and Lock Code Manager hears separately which user it was. Lock Code Manager can't attach that to the lock's state change, so that line will keep saying it.
+
+
+
+**What's coming in the next release:**
+
+- **Each use goes into the logbook of the lock it was used on.** Open Front Door Lock's activity (or the Logbook page, filtered to that lock) and you'll see "Alice used a PIN to unlock" right next to the "Unlocked" entry. Card readers, fingerprint and face recognition show up the same way on locks that report which kind was used.
+
+- **Clicking "Last used" on the user card lists their recent uses.** Each one shows which lock, what kind of credential and whether it locked or unlocked, plus when. A "Full history" link underneath opens the complete history.
+
+
+
+~~**Until then:** you can get the logbook entries now with the \[Credential Used blueprint\](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Framan325%2Flock_code_manager%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Flock_code_manager%2Fcredential_used.yaml). Leave its filters empty and use this as the action:~~
+
+EDIT: There isn't actually a good way to get the logbook to show these events without the integration doing it. So wait for the next release which will have it
+so I should correct the forum post?
+?
