@@ -1,0 +1,44 @@
+How do I respond to this forum post
+
+
+M aybe I’m missing something, but how do I get the history of who unlocked which door and when?
+
+If I look at the lock entity history, it records that the door was unlocked, but doesn’t record anything else. Under “activity details” it says: “No cause was recorded for this activity.” So from there, I can’t tell if it was unlocked manually, via keypad, fingerprint, etc. I only see a cause if it was unlocked via an automation or a button press in HA.
+
+If I look at the LCM dashboard, it shows that my credential was last used on, say, Front Door Lock at XX minutes / days ago. Clicking on that just shows that my pin was used, but doesn’t show which lock it was used on.
+
+So where do I find the history of a given lock or credential that shows which credential was used on which lock and when?
+
+---
+
+Let’s do research into that feature it seems useful
+
+---
+
+isnt the clean room core and regression net done?
+
+---
+
+lets do A and C in one PR. But is that a hack or do core integrations do this?
+
+---
+
+check the most popular custom integrations. They used to be availabile at analytics.home-assistant.io/custom_integrations.json but that may have changed with the change to move HACS to be the marketplace. If you can't find it there, check home-assistnat's github analytics repo
+
+---
+
+go for it, also draft a new reply based on the assumption that we are building this
+
+---
+
+what is the drafted response?
+
+---
+
+<task-notification>
+<task-id>bg04rra4d</task-id>
+<tool-use-id>toolu_01K1f2TJfipvnBYsUnj7foKo</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/bg04rra4d.output</output-file>
+<status>completed</status>
+<summary>Background command "source /Users/raman/projects/lock_code_manager/.venv/bin/activate &amp;&amp; pytest tests -q -p no:cacheprovider 2&gt;&amp;1 | grep -E "^FAILED|^ERROR tests|passed|failed" &gt; /tmp/lcm-serial.txt; tail -5 /tmp/lcm-serial.txt" completed (exit code 0)</summary>
+</task-notification>
