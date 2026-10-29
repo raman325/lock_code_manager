@@ -20,9 +20,10 @@ import { until } from 'lit/directives/until.js';
 import { DEFAULT_CODE_DISPLAY } from './const';
 import {
     CompressedState,
-    HistoryResponse,
-    buildCredentialUsesQuery,
+    HistoryStreamMessage,
+    buildCredentialUsesStream,
     describeCredentialUse,
+    mergeUseRows,
     parseCredentialUses
 } from './credential-uses';
 import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
@@ -115,16 +116,17 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     @state() private _removeClearsCredentials = true;
     @state() private _removing = false;
     @state() private _usesExpanded = false;
-    // The recorded states read on expanding: undefined while loading, null
-    // when the history could not be read.
+    // The uses streamed from the history: undefined while loading, null
+    // when the stream could not be opened.
     @state() private _useRows?: CompressedState[] | null;
 
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
     private _actionErrorTimer?: ReturnType<typeof setTimeout>;
     private _revealedForEdit = false;
-    // Counts history requests, so a slow older answer cannot replace a newer one.
-    private _usesRequest = 0;
+    // The open history stream, and the event entity it follows.
+    private _usesUnsub?: Promise<() => void>;
+    private _usesEntityId?: string;
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -133,7 +135,6 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     @property({ attribute: false })
     set hass(hass: HomeAssistant) {
         this._hass = hass;
-        this._rememberCurrentUse();
         void this._subscribe();
     }
 
@@ -196,10 +197,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         ) {
             this._unsubscribe();
             this._data = undefined;
-            // Another user's uses: drop the read rows and any read in flight.
+            // Another user's uses: close the list and its stream.
             this._usesExpanded = false;
-            this._useRows = undefined;
-            this._usesRequest += 1;
+            this._closeUses();
         }
         this._config = config;
 
@@ -239,6 +239,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             clearTimeout(this._actionErrorTimer);
             this._actionErrorTimer = undefined;
         }
+        // A card off screen holds no stream; the list closes with it.
+        this._usesExpanded = false;
+        this._closeUses();
     }
 
     // Mixin abstract method implementations
@@ -272,7 +275,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
 
     protected _handleSubscriptionData(data: unknown): void {
         this._data = data as SlotCardData;
-        this._rememberCurrentUse();
+        // The slot now names someone else's entity (the user was replaced):
+        // follow theirs instead of listing the previous person's uses.
+        if (this._usesExpanded && this._data?.event_entity_id !== this._usesEntityId) {
+            this._closeUses();
+            this._openUses();
+        }
     }
 
     protected updated(changedProperties: Map<string, unknown>): void {
@@ -400,14 +408,13 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     }
 
     /**
-     * Render the click-through event row at the bottom of the card. Shows the
-     * lock and a relative timestamp for the slot's most recent PIN use, or a
-     * "Never used" empty state when the slot has been configured but the PIN
-     * has not been used yet. Returns `nothing` when there is no event entity
-     * (e.g. the slot has no PIN at all), when the event entity is missing
-     * from `hass.states` entirely (registry race or removed entity), or when
-     * it is in the `unavailable` state — clicking through to a more-info
-     * dialog with no useful content would be misleading.
+     * Render the event row at the bottom of the card. Shows what the user's
+     * most recent credential use was against and a relative timestamp, or a
+     * "Never used" empty state when the credential has not been used yet.
+     * Returns `nothing` when there is no event entity (e.g. the slot has no
+     * PIN at all), when the event entity is missing from `hass.states`
+     * entirely (registry race or removed entity), or when it is in the
+     * `unavailable` state — there is no history to list or open.
      *
      * Clicking the row expands the user's recent uses, each naming what the
      * credential was used against, read from the recorder's history of the
@@ -482,8 +489,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     /**
      * The expanded list of recent uses, with a way through to the full history.
      *
-     * Uses that happen while the list is open join it from the event
-     * entity's state (`_rememberCurrentUse`), not from another history read.
+     * The stream keeps the rows current while the list is open.
      */
     private _renderUses(): TemplateResult {
         const eventEntityId = this._data?.event_entity_id ?? '';
@@ -505,9 +511,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         } else if (uses === null) {
             body = html`<div class="uses-message">Couldn't read the history</div>`;
         } else if (uses.length === 0) {
-            // No recorded state carries a use's payload: the history was
-            // purged or excludes this entity, and the current state was
-            // restored from before 6.0, when the payload named no target.
+            // The entity records a use, but the history holds none: it was
+            // purged, the recorder excludes this entity, or every use in it
+            // predates 6.0, whose payload named no target.
             body = html`<div class="uses-message">No uses in the recorded history</div>`;
         } else {
             body = html`${uses.map(
@@ -534,50 +540,47 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         `;
     }
 
-    /**
-     * Keep the event entity's current state among the read rows while the
-     * list is open.
-     *
-     * The recorder commits in batches, so a use that happens while the list
-     * is open is not in the history read on expanding, and it is the current
-     * state only until the next use replaces it. Kept here, it stays listed.
-     */
-    private _rememberCurrentUse(): void {
-        if (!Array.isArray(this._useRows)) return;
-        const current = this._hass?.states[this._data?.event_entity_id ?? ''];
-        if (!current || this._useRows.some((row) => row.s === current.state)) return;
-        this._useRows = [...this._useRows, { a: current.attributes, s: current.state }];
-    }
-
     private _toggleUses(): void {
         this._usesExpanded = !this._usesExpanded;
-        // Rows already read stay current through `_rememberCurrentUse`, so
-        // only a first expand, or one after a failed read, reads the history.
-        if (this._usesExpanded && !Array.isArray(this._useRows)) {
-            void this._loadUses();
+        if (this._usesExpanded) {
+            this._openUses();
+        } else {
+            this._closeUses();
         }
     }
 
-    /** Read the user's recent uses from the recorder's history of the event entity. */
-    private async _loadUses(): Promise<void> {
+    /**
+     * Stream the user's uses from the history of their event entity.
+     *
+     * The stream sends what the recorder holds, then what it had not yet
+     * committed, then each new use as it happens, so the list is complete
+     * while it is open with nothing here keeping it up to date.
+     */
+    private _openUses(): void {
         const eventEntityId = this._data?.event_entity_id;
-        if (!eventEntityId || !this._hass) return;
-        this._usesRequest += 1;
-        const request = this._usesRequest;
+        const connection = this._hass?.connection;
+        if (!eventEntityId || !connection?.subscribeMessage) return;
+        this._usesEntityId = eventEntityId;
         this._useRows = undefined;
-        let rows: CompressedState[] | null;
-        try {
-            const response = await this._hass.callWS<HistoryResponse>(
-                buildCredentialUsesQuery(eventEntityId)
+        const unsub = connection.subscribeMessage<HistoryStreamMessage>((message) => {
+            if (this._usesEntityId !== eventEntityId) return;
+            this._useRows = mergeUseRows(
+                this._useRows ?? [],
+                message.states?.[eventEntityId] ?? []
             );
-            rows = response?.[eventEntityId] ?? [];
-        } catch {
-            rows = null;
-        }
-        if (request === this._usesRequest) {
-            this._useRows = rows;
-            this._rememberCurrentUse();
-        }
+        }, buildCredentialUsesStream(eventEntityId));
+        this._usesUnsub = unsub;
+        unsub.catch(() => {
+            if (this._usesUnsub === unsub) this._useRows = null;
+        });
+    }
+
+    private _closeUses(): void {
+        const unsub = this._usesUnsub;
+        this._usesUnsub = undefined;
+        this._usesEntityId = undefined;
+        this._useRows = undefined;
+        unsub?.then((u) => u()).catch(() => undefined);
     }
 
     /**

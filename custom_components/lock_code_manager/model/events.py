@@ -2,9 +2,13 @@
 
 from enum import StrEnum
 
-from homeassistant.components.logbook import async_log_entry
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_NAME
+from homeassistant.const import (
+    ATTR_DOMAIN,
+    ATTR_ENTITY_ID,
+    ATTR_NAME,
+    EVENT_LOGBOOK_ENTRY,
+)
 from homeassistant.core import Context, HomeAssistant, callback
 
 from ..const import (
@@ -48,6 +52,9 @@ class CredentialOperation(StrEnum):
             return cls.UNKNOWN
         return cls.LOCK if to_locked else cls.UNLOCK
 
+
+# The logbook entry's message key, which only the logbook's own constants name.
+_LOGBOOK_MESSAGE = "message"
 
 # How a logbook entry names each kind: "Unlocked by Alice with a PIN".
 _CREDENTIAL_PHRASES: dict[CredentialType, str] = {
@@ -158,11 +165,19 @@ def async_fire_credential_used(
     # shows an entity only its own integration's described events and Lock
     # Code Manager owns none of the targets. A described event of ours would
     # reach the unfiltered Logbook alone, never the lock's own activity.
-    async_log_entry(
-        hass,
-        name,
-        credential_use_message(name, credential_type, operation),
-        domain=DOMAIN,
-        entity_id=target,
+    #
+    # Fired directly rather than through ``logbook.async_log_entry``, which
+    # fires exactly this: importing the logbook would pull its recorder and
+    # frontend modules into every provider, and depending on it would hold
+    # this integration's setup behind the recorder's. The recorder stores the
+    # event whether or not the logbook is loaded yet.
+    hass.bus.async_fire(
+        EVENT_LOGBOOK_ENTRY,
+        {
+            ATTR_NAME: name,
+            _LOGBOOK_MESSAGE: credential_use_message(name, credential_type, operation),
+            ATTR_DOMAIN: DOMAIN,
+            ATTR_ENTITY_ID: target,
+        },
         context=context,
     )

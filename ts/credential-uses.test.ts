@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
     CREDENTIAL_USE_LIMIT,
     HistoryResponse,
-    buildCredentialUsesQuery,
+    buildCredentialUsesStream,
     describeCredentialUse,
+    mergeUseRows,
     parseCredentialUses
 } from './credential-uses';
 import { HomeAssistant } from './ha_type_stubs';
@@ -26,18 +27,37 @@ const STATES = {
     'lock.front_door': { attributes: { friendly_name: 'Front Door' }, state: 'locked' }
 } as unknown as HomeAssistant['states'];
 
-describe('buildCredentialUsesQuery', () => {
-    it('asks for every state of the one entity, attributes included', () => {
+describe('buildCredentialUsesStream', () => {
+    it('streams every state of the one entity, attributes included', () => {
         const now = new Date('2026-10-28T12:00:00Z');
-        const query = buildCredentialUsesQuery(EVENT, now);
-        expect(query).toMatchObject({
+        const msg = buildCredentialUsesStream(EVENT, now);
+        expect(msg).toMatchObject({
             entity_ids: [EVENT],
             minimal_response: false,
             no_attributes: false,
             significant_changes_only: false,
-            type: 'history/history_during_period'
+            type: 'history/stream'
         });
-        expect(Date.parse(query.start_time as string)).toBeLessThan(now.getTime());
+        expect(Date.parse(msg.start_time as string)).toBeLessThan(now.getTime());
+    });
+});
+
+describe('mergeUseRows', () => {
+    it('keeps only uses, one per time, newest first, and never more than are listed', () => {
+        const many = Array.from({ length: CREDENTIAL_USE_LIMIT + 5 }, (_, i) =>
+            use(new Date(Date.UTC(2026, 9, 1, i)).toISOString())
+        );
+        const kept = mergeUseRows([{ s: 'unknown' }, ...many.slice(0, 3)], many.slice(3));
+        expect(kept).toHaveLength(CREDENTIAL_USE_LIMIT);
+        expect(kept[0].s).toBe(many[many.length - 1].s);
+    });
+
+    it('lists an attribute-only repeat of a use once, as its latest row', () => {
+        const first = use('2026-10-27T08:00:00.000+00:00');
+        const repeat = use('2026-10-27T08:00:00.000+00:00', 'lock.front_door', {
+            event_types: ['pin', 'rfid']
+        });
+        expect(mergeUseRows([first], [repeat])).toEqual([repeat]);
     });
 });
 

@@ -621,9 +621,8 @@ const slotCardComponentStyles = css`
     }
 
     /* Event row — row at the bottom of the card that expands the user's
-       recent credential uses. Sits
-       below the content flex container so the gap above provides natural
-       separation (no top border needed). */
+       recent credential uses. Sits below the content flex container so the
+       gap above provides natural separation (no top border needed). */
     .event-row {
         align-items: center;
         cursor: pointer;

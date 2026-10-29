@@ -41,8 +41,15 @@ const OPERATION_LABELS: Record<string, string> = {
     unlock: 'Unlocked'
 };
 
-/** The history query for one event entity's recent states, attributes included. */
-export function buildCredentialUsesQuery(
+/**
+ * The history stream for one event entity, attributes included.
+ *
+ * A stream rather than a one-off read: Home Assistant sends what the recorder
+ * holds, then the states it had not yet committed, then every new state as
+ * it happens. A one-off read misses uses still waiting on the recorder's next
+ * commit, and every use after it.
+ */
+export function buildCredentialUsesStream(
     eventEntityId: string,
     now: Date = new Date()
 ): { [key: string]: unknown; type: string } {
@@ -52,21 +59,56 @@ export function buildCredentialUsesQuery(
         include_start_time_state: false,
         minimal_response: false,
         no_attributes: false,
-        // An event entity's state only ever moves forward to the next use's
-        // time; asking for every change costs nothing and drops nothing.
+        // Every state, not only those whose state changed. The entity also
+        // writes attribute-only states (its event_types move as locks are
+        // probed), which repeat the last use's time; `mergeUseRows` keys
+        // rows by time, so each use is still listed once.
         significant_changes_only: false,
         start_time: start.toISOString(),
-        type: 'history/history_during_period'
+        type: 'history/stream'
     };
+}
+
+/** One message on the history stream. */
+export interface HistoryStreamMessage {
+    states?: HistoryResponse;
+}
+
+/**
+ * Whether a recorded state is a use.
+ *
+ * A state that is not a timestamp (`unknown`, `unavailable`) is not, and
+ * neither is one recorded before 6.0, whose payload named no `target`.
+ */
+function isUse(row: CompressedState): boolean {
+    return !Number.isNaN(Date.parse(row.s)) && typeof row.a?.target === 'string';
+}
+
+/**
+ * Fold rows from the stream into the rows kept, holding only what is listed.
+ *
+ * Keeps the newest `CREDENTIAL_USE_LIMIT` uses, one row per use time (a later
+ * row for the same time wins), so the kept rows never grow past what the
+ * card shows however long it stays open.
+ */
+export function mergeUseRows(
+    kept: CompressedState[],
+    incoming: CompressedState[]
+): CompressedState[] {
+    const byTime = new Map<string, CompressedState>();
+    for (const row of [...kept, ...incoming]) {
+        if (isUse(row)) byTime.set(row.s, row);
+    }
+    return [...byTime.values()]
+        .sort((a, b) => Date.parse(b.s) - Date.parse(a.s))
+        .slice(0, CREDENTIAL_USE_LIMIT);
 }
 
 /**
  * Turn the history response into uses, newest first.
  *
- * A state that is not a timestamp (`unknown`, `unavailable`) is not a use,
- * and neither is one recorded before 6.0, whose payload named no `target`. A
- * restart writes the last use's state again, so uses are keyed by their time
- * and each is listed once.
+ * Only uses are listed (see `isUse`). A restart writes the last use's state
+ * again, so uses are keyed by their time and each is listed once.
  *
  * Only the target is looked up. The source can be a keypad entity whose state
  * is the code that was typed, so it is never read.
@@ -77,9 +119,7 @@ export function parseCredentialUses(
     states: HomeAssistant['states'] = {}
 ): CredentialUse[] {
     const byTime = new Map<string, CredentialUse>();
-    const uses = (response?.[eventEntityId] ?? []).filter(
-        (row) => !Number.isNaN(Date.parse(row.s)) && typeof row.a?.target === 'string'
-    );
+    const uses = (response?.[eventEntityId] ?? []).filter(isUse);
     for (const row of uses) {
         const attributes = row.a ?? {};
         const target = attributes.target as string;

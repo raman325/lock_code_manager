@@ -185,8 +185,9 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
    (`lock_code_manager_credential_used`) when a credential is used, carrying
    the user's name, the config entry, and the `source`/`target` entities. This
    is the event consumers should build on. The same call
-   (`model/events.py` `async_fire_credential_used`) writes a manual logbook
-   entry (`logbook.async_log_entry`) under the `target`. It has to be a
+   (`model/events.py` `async_fire_credential_used`) fires a manual logbook
+   entry (`EVENT_LOGBOOK_ENTRY`) under the `target`, with the reporter's
+   context. It has to be a
    manual entry: the logbook shows an entity only events described by the
    integration that owns it, so a `logbook.py` describing our event would
    never reach a lock's own activity.
@@ -750,9 +751,10 @@ Primary card for managing individual code slots. Features:
 - **Lock status**: Per-lock sync status, actual code on lock (masked/revealed)
 - **Collapsible sections**: Conditions and lock status can be collapsed
 - **Recent uses**: Clicking "Last used" lists the user's recent uses (what each
-  was used against, the kind, what the device did), read from the recorder's
-  history of the `credential_used` event entity (`ts/credential-uses.ts`);
-  "Full history" opens the entity's more-info dialog
+  was used against, the kind, what the device did), streamed with
+  `history/stream` from the `credential_used` event entity's history while
+  the list is open (`ts/credential-uses.ts`); "Full history" opens the
+  entity's more-info dialog
 - **Real-time updates**: WebSocket subscription for instant state changes
 
 **Config options:**

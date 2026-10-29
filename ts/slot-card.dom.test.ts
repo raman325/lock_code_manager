@@ -187,61 +187,121 @@ describe('slot card, rendered from a fresh mount', () => {
 
     describe('recent uses', () => {
         const EVENT = 'event.lcm_slot_1_pin_used';
+        const BOB_EVENT = 'event.lcm_slot_1_bob_pin_used';
         const FIRST = '2026-10-27T08:00:00.000+00:00';
         const SECOND = '2026-10-28T09:00:00.000+00:00';
+        const THIRD = '2026-10-28T10:00:00.000+00:00';
         const STATES = {
+            [BOB_EVENT]: { state: SECOND },
             [EVENT]: { state: SECOND },
             'lock.front_door': { attributes: { friendly_name: 'Front Door' }, state: 'locked' }
         };
 
-        function history(...uses: Array<[string, string, string]>): unknown {
-            return {
-                [EVENT]: uses.map(([when, target, operation]) => {
-                    return {
-                        a: { credential_type: 'pin', operation, source: target, target },
-                        s: when
-                    };
-                })
-            };
+        interface Stream {
+            msg: { [key: string]: unknown; type: string };
+            send: (rows: Array<[string, string, string, string?]>) => void;
+            unsub: ReturnType<typeof vi.fn>;
         }
 
-        // Stands in for Home Assistant translating the entity's event_type.
-        function translateKinds(): void {
+        let streams: Stream[];
+        let pushSlot: (data: Partial<SlotCardData>) => void;
+
+        /**
+         * Mount the card on a connection whose history streams the test drives.
+         * `failStream` makes opening a stream fail, as when the recorder is
+         * not loaded.
+         */
+        async function mountWithStreams(
+            data: Partial<SlotCardData>,
+            failStream = false
+        ): Promise<ShadowRoot> {
+            streams = [];
             const labels: Record<string, string> = { pin: 'PIN', rfid: 'RFID' };
-            Object.assign(card!.hass, {
+            let slotCallback: ((data: SlotCardData) => void) | undefined;
+            const hass = createMockHassWithConnection({ states: STATES });
+            Object.assign(hass, {
+                // Stands in for Home Assistant translating the event_type.
                 formatEntityAttributeValue: (_state: unknown, _attribute: string, value: string) =>
                     labels[value]
             });
+            Object.assign(hass.connection, {
+                subscribeMessage: vi.fn(
+                    (
+                        callback: (message: unknown) => void,
+                        msg: { [key: string]: unknown; type: string }
+                    ) => {
+                        if (msg.type !== 'history/stream') {
+                            slotCallback = callback as (data: SlotCardData) => void;
+                            return Promise.resolve(() => {});
+                        }
+                        if (failStream) return Promise.reject(new Error('recorder not loaded'));
+                        const unsub = vi.fn();
+                        const entityId = (msg.entity_ids as string[])[0];
+                        streams.push({
+                            msg,
+                            send: (rows) =>
+                                callback({
+                                    states: {
+                                        [entityId]: rows.map(([when, target, kind, operation]) => {
+                                            return {
+                                                a: {
+                                                    credential_type: kind,
+                                                    operation,
+                                                    source: target,
+                                                    target
+                                                },
+                                                s: when
+                                            };
+                                        })
+                                    }
+                                }),
+                            unsub
+                        });
+                        return Promise.resolve(unsub);
+                    }
+                )
+            });
+            card = document.createElement('lcm-user') as SlotCard;
+            card.setConfig({ config_entry_id: 'test-entry', name: 'Mom', type: 'custom:lcm-user' });
+            card.hass = hass;
+            document.body.appendChild(card);
+            await settle();
+            pushSlot = (next) => slotCallback!({ ...baseData, ...next });
+            pushSlot(data);
+            await settle();
+            return card.shadowRoot!;
         }
 
         async function settle(): Promise<void> {
             await new Promise((r) => setTimeout(r, 0));
-            await card!.updateComplete;
+            await card?.updateComplete;
         }
 
-        it('clicking "Last used" lists each use with what it was used against', async () => {
-            const root = await mount(
-                {},
-                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
-                STATES,
-                (msg) =>
-                    msg.type === 'history/history_during_period'
-                        ? history(
-                              [FIRST, 'lock.front_door', 'unlock'],
-                              [SECOND, 'cover.side_gate', 'unknown']
-                          )
-                        : undefined
-            );
-            expect(root.querySelector('.use-row')).toBeNull();
-
-            translateKinds();
-            (root.querySelector('.event-row') as HTMLElement).click();
-            await settle();
-
-            const rows = [...root.querySelectorAll('.use-row')].map((row) =>
+        function rows(root: ShadowRoot): string[] {
+            return [...root.querySelectorAll('.use-row')].map((row) =>
                 row.textContent.replace(/\s+/g, ' ').trim()
             );
-            expect(rows).toEqual([
+        }
+
+        const USED = { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' };
+
+        it('clicking "Last used" streams each use with what it was used against', async () => {
+            const root = await mountWithStreams(USED);
+            expect(root.querySelector('.use-row')).toBeNull();
+
+            (root.querySelector('.event-row') as HTMLElement).click();
+            await settle();
+            expect(streams).toHaveLength(1);
+            expect(streams[0].msg).toMatchObject({ entity_ids: [EVENT], type: 'history/stream' });
+            expect(root.querySelector('.uses-message')?.textContent).toContain('Loading');
+
+            streams[0].send([
+                [FIRST, 'lock.front_door', 'pin', 'unlock'],
+                [SECOND, 'cover.side_gate', 'pin', 'unknown']
+            ]);
+            await settle();
+
+            expect(rows(root)).toEqual([
                 expect.stringContaining('cover.side_gate PIN'),
                 expect.stringContaining('Front Door PIN · Unlocked')
             ]);
@@ -249,116 +309,89 @@ describe('slot card, rendered from a fresh mount', () => {
             expect(root.querySelector('.event-row')?.getAttribute('aria-expanded')).toBe('true');
         });
 
-        it('a new use while the list is open joins it without reading the history again', async () => {
-            const THIRD = '2026-10-28T10:00:00.000+00:00';
-            // The recorder has not committed the newest use yet: the history
-            // answer stops at the use before it.
-            const states: Record<string, { attributes?: Record<string, unknown>; state: string }> =
-                {
-                    ...STATES,
-                    [EVENT]: {
-                        attributes: {
-                            credential_type: 'pin',
-                            operation: 'unlock',
-                            target: 'lock.front_door'
-                        },
-                        state: SECOND
-                    }
-                };
-            const callWS = vi.fn(() => history([FIRST, 'lock.front_door', 'unlock']));
-            const root = await mount(
-                {},
-                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
-                states,
-                callWS
-            );
-            translateKinds();
+        it('uses the stream sends after the history join the list', async () => {
+            const root = await mountWithStreams(USED);
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
-            expect(root.querySelectorAll('.use-row')).toHaveLength(2);
-
-            states[EVENT] = {
-                attributes: {
-                    credential_type: 'rfid',
-                    operation: 'lock',
-                    target: 'lock.front_door'
-                },
-                state: THIRD
-            };
-            pushData({ event_entity_id: EVENT, last_used: THIRD, last_used_lock: 'Front Door' });
+            streams[0].send([[FIRST, 'lock.front_door', 'pin', 'unlock']]);
+            // Then the states the recorder had not committed, and a live one.
+            streams[0].send([[SECOND, 'lock.front_door', 'pin', 'unlock']]);
+            streams[0].send([[THIRD, 'lock.front_door', 'rfid', 'lock']]);
             await settle();
 
-            const rows = [...root.querySelectorAll('.use-row')].map((row) => row.textContent);
-            expect(rows).toHaveLength(3);
-            expect(rows[0]).toContain('RFID · Locked');
-            expect(callWS).toHaveBeenCalledTimes(1);
+            const listed = rows(root);
+            expect(listed).toHaveLength(3);
+            expect(listed[0]).toContain('RFID · Locked');
         });
 
-        it('expanding again reuses the rows already read', async () => {
-            const callWS = vi.fn((msg: { type: string }) =>
-                msg.type === 'history/history_during_period'
-                    ? history([FIRST, 'lock.front_door', 'unlock'])
-                    : undefined
-            );
-            const root = await mount(
-                {},
-                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
-                STATES,
-                callWS
-            );
+        it('collapsing closes the stream, and expanding opens a fresh one', async () => {
+            const root = await mountWithStreams(USED);
             const row = root.querySelector('.event-row') as HTMLElement;
             row.click();
             await settle();
+            streams[0].send([[FIRST, 'lock.front_door', 'pin', 'unlock']]);
             row.click();
             await settle();
-            row.click();
-            await settle();
+            expect(streams[0].unsub).toHaveBeenCalledTimes(1);
 
-            const reads = callWS.mock.calls.filter(
-                ([msg]) => msg.type === 'history/history_during_period'
-            );
-            expect(reads).toHaveLength(1);
-            expect(root.querySelectorAll('.use-row')).toHaveLength(1);
+            row.click();
+            await settle();
+            expect(streams).toHaveLength(2);
+            // Nothing from the closed stream is shown before the new one answers.
+            expect(root.querySelector('.use-row')).toBeNull();
+        });
+
+        it('a card taken off the page closes its stream', async () => {
+            const root = await mountWithStreams(USED);
+            (root.querySelector('.event-row') as HTMLElement).click();
+            await settle();
+            card!.remove();
+            await settle();
+            expect(streams[0].unsub).toHaveBeenCalledTimes(1);
         });
 
         it("switching the card to another user drops the previous user's uses", async () => {
-            const root = await mount(
-                {},
-                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
-                STATES,
-                () => history([FIRST, 'lock.front_door', 'unlock'])
-            );
+            const root = await mountWithStreams(USED);
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
-            expect(root.querySelectorAll('.use-row')).toHaveLength(1);
+            streams[0].send([[FIRST, 'lock.front_door', 'pin', 'unlock']]);
+            await settle();
+            expect(rows(root)).toHaveLength(1);
 
             card!.setConfig({
                 config_entry_id: 'test-entry',
                 name: 'Bob',
                 type: 'custom:lcm-user'
             });
-            pushData({
-                event_entity_id: EVENT,
-                last_used: SECOND,
-                last_used_lock: 'Front Door',
-                name: 'Bob'
-            });
             await settle();
 
+            expect(streams[0].unsub).toHaveBeenCalledTimes(1);
             expect(root.querySelector('.use-row')).toBeNull();
-            expect(root.querySelector('.event-row')?.getAttribute('aria-expanded')).toBe('false');
+            expect(root.querySelector('.event-row')?.getAttribute('aria-expanded')).not.toBe(
+                'true'
+            );
         });
 
-        it('says so when the history cannot be read', async () => {
-            const root = await mount(
-                {},
-                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
-                STATES,
-                () => {
-                    throw new Error('recorder not loaded');
-                }
-            );
-            translateKinds();
+        it('follows the new entity when the slot comes to name someone else', async () => {
+            const root = await mountWithStreams(USED);
+            (root.querySelector('.event-row') as HTMLElement).click();
+            await settle();
+            streams[0].send([[FIRST, 'lock.front_door', 'pin', 'unlock']]);
+            await settle();
+
+            pushSlot({ ...USED, event_entity_id: BOB_EVENT, name: 'Bob' });
+            await settle();
+
+            expect(streams[0].unsub).toHaveBeenCalledTimes(1);
+            expect(streams[1].msg).toMatchObject({ entity_ids: [BOB_EVENT] });
+            // A late message on the old stream is not the new person's.
+            streams[0].send([[SECOND, 'lock.front_door', 'pin', 'unlock']]);
+            await settle();
+            expect(root.querySelector('.use-row')).toBeNull();
+        });
+
+        it('says so when the history cannot be streamed', async () => {
+            const root = await mountWithStreams(USED, true);
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
             expect(root.querySelector('.uses-message')?.textContent).toContain(
