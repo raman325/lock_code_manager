@@ -1,0 +1,39 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "f07172769779",
+  "strategy": "manual-commit",
+  "branch": "feat/credential-use-logbook",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/__init__.py",
+    "custom_components/lock_code_manager/ha/services.py",
+    "custom_components/lock_code_manager/model/events.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "tests/providers/zwave_js/test_e2e.py",
+    "tests/test_event.py",
+    "tests/test_logbook.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/7172769779/0/metadata.json",
+      "transcript": "/f0/7172769779/0/full.jsonl",
+      "compact_transcript": "/f0/7172769779/0/transcript.jsonl",
+      "content_hash": "/f0/7172769779/0/content_hash.txt",
+      "prompt": "/f0/7172769779/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28,
+    "cache_creation_tokens": 13821,
+    "cache_read_tokens": 3659885,
+    "output_tokens": 9185,
+    "api_call_count": 12,
+    "subagent_tokens": {
+      "input_tokens": 42,
+      "cache_creation_tokens": 123608,
+      "cache_read_tokens": 1966341,
+      "output_tokens": 14090,
+      "api_call_count": 20
+    }
+  }
+}
