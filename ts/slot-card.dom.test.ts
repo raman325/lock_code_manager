@@ -205,6 +205,15 @@ describe('slot card, rendered from a fresh mount', () => {
             };
         }
 
+        // Stands in for Home Assistant translating the entity's event_type.
+        function translateKinds(): void {
+            const labels: Record<string, string> = { pin: 'PIN', rfid: 'RFID' };
+            Object.assign(card!.hass, {
+                formatEntityAttributeValue: (_state: unknown, _attribute: string, value: string) =>
+                    labels[value]
+            });
+        }
+
         async function settle(): Promise<void> {
             await new Promise((r) => setTimeout(r, 0));
             await card!.updateComplete;
@@ -225,6 +234,7 @@ describe('slot card, rendered from a fresh mount', () => {
             );
             expect(root.querySelector('.use-row')).toBeNull();
 
+            translateKinds();
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
 
@@ -262,6 +272,7 @@ describe('slot card, rendered from a fresh mount', () => {
                 states,
                 callWS
             );
+            translateKinds();
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
             expect(root.querySelectorAll('.use-row')).toHaveLength(2);
@@ -283,6 +294,61 @@ describe('slot card, rendered from a fresh mount', () => {
             expect(callWS).toHaveBeenCalledTimes(1);
         });
 
+        it('expanding again reuses the rows already read', async () => {
+            const callWS = vi.fn((msg: { type: string }) =>
+                msg.type === 'history/history_during_period'
+                    ? history([FIRST, 'lock.front_door', 'unlock'])
+                    : undefined
+            );
+            const root = await mount(
+                {},
+                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
+                STATES,
+                callWS
+            );
+            const row = root.querySelector('.event-row') as HTMLElement;
+            row.click();
+            await settle();
+            row.click();
+            await settle();
+            row.click();
+            await settle();
+
+            const reads = callWS.mock.calls.filter(
+                ([msg]) => msg.type === 'history/history_during_period'
+            );
+            expect(reads).toHaveLength(1);
+            expect(root.querySelectorAll('.use-row')).toHaveLength(1);
+        });
+
+        it("switching the card to another user drops the previous user's uses", async () => {
+            const root = await mount(
+                {},
+                { event_entity_id: EVENT, last_used: SECOND, last_used_lock: 'Front Door' },
+                STATES,
+                () => history([FIRST, 'lock.front_door', 'unlock'])
+            );
+            (root.querySelector('.event-row') as HTMLElement).click();
+            await settle();
+            expect(root.querySelectorAll('.use-row')).toHaveLength(1);
+
+            card!.setConfig({
+                config_entry_id: 'test-entry',
+                name: 'Bob',
+                type: 'custom:lcm-user'
+            });
+            pushData({
+                event_entity_id: EVENT,
+                last_used: SECOND,
+                last_used_lock: 'Front Door',
+                name: 'Bob'
+            });
+            await settle();
+
+            expect(root.querySelector('.use-row')).toBeNull();
+            expect(root.querySelector('.event-row')?.getAttribute('aria-expanded')).toBe('false');
+        });
+
         it('says so when the history cannot be read', async () => {
             const root = await mount(
                 {},
@@ -292,6 +358,7 @@ describe('slot card, rendered from a fresh mount', () => {
                     throw new Error('recorder not loaded');
                 }
             );
+            translateKinds();
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
             expect(root.querySelector('.uses-message')?.textContent).toContain(

@@ -49,8 +49,7 @@ class CredentialOperation(StrEnum):
         return cls.LOCK if to_locked else cls.UNLOCK
 
 
-# How a logbook entry names each kind. The logbook prints the user's name in
-# front of the message, so each reads on from a name: "Alice used a PIN".
+# How a logbook entry names each kind: "Unlocked by Alice with a PIN".
 _CREDENTIAL_PHRASES: dict[CredentialType, str] = {
     CredentialType.PIN: "a PIN",
     CredentialType.RFID: "an RFID tag",
@@ -60,20 +59,32 @@ _CREDENTIAL_PHRASES: dict[CredentialType, str] = {
     CredentialType.NFC: "an NFC tag",
 }
 
+# What the device did, for a message that leads with it. ``UNKNOWN`` is
+# deliberately absent: the message then says only that the credential was used.
+_OPERATION_PHRASES: dict[CredentialOperation, str] = {
+    CredentialOperation.UNLOCK: "Unlocked",
+    CredentialOperation.LOCK: "Locked",
+}
+
 
 def credential_use_message(
-    credential_type: CredentialType, operation: CredentialOperation
+    name: str, credential_type: CredentialType, operation: CredentialOperation
 ) -> str:
     """
-    Describe a use for the logbook, to follow the user's name.
+    Describe a use for the logbook, naming the person in the message itself.
+
+    The entry's own ``name`` never reaches the screen: for an entry with an
+    ``entity_id`` the frontend shows the entity's name in its place, and the
+    entity's own activity view shows the message alone. So the message has
+    to say who, and stand on its own after the target's name.
 
     An unknown operation is left unsaid rather than guessed, the same
     discipline as the payload.
     """
-    message = f"used {_CREDENTIAL_PHRASES[credential_type]}"
-    if operation == CredentialOperation.UNKNOWN:
-        return message
-    return f"{message} to {operation}"
+    credential = _CREDENTIAL_PHRASES[credential_type]
+    if (done := _OPERATION_PHRASES.get(operation)) is None:
+        return f"{name} used {credential}"
+    return f"{done} by {name} with {credential}"
 
 
 @callback
@@ -141,7 +152,7 @@ def async_fire_credential_used(
     async_log_entry(
         hass,
         name,
-        credential_use_message(credential_type, operation),
+        credential_use_message(name, credential_type, operation),
         domain=DOMAIN,
         entity_id=target,
     )

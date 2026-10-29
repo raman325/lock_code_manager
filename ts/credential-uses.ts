@@ -36,18 +36,6 @@ export interface CompressedState {
 
 export type HistoryResponse = Record<string, CompressedState[] | undefined>;
 
-// The labels strings.json gives the event entity's `event_type` states, so
-// the card names a kind the way Home Assistant does
-// (tests/test_frontend_contract.py holds the two together).
-export const CREDENTIAL_LABELS: Record<string, string> = {
-    face: 'Face',
-    fingerprint: 'Fingerprint',
-    nfc: 'NFC',
-    password: 'Password',
-    pin: 'PIN',
-    rfid: 'RFID'
-};
-
 const OPERATION_LABELS: Record<string, string> = {
     lock: 'Locked',
     unlock: 'Unlocked'
@@ -109,9 +97,18 @@ export function parseCredentialUses(
         .slice(0, CREDENTIAL_USE_LIMIT);
 }
 
-/** One line saying what was used and, when the device said, what it did. */
-export function describeCredentialUse(use: CredentialUse): string {
-    const kind = CREDENTIAL_LABELS[use.credentialType] ?? use.credentialType;
+/**
+ * One line saying what was used and, when the device said, what it did.
+ *
+ * `formatKind` turns a kind into its translated label (the event entity's
+ * `event_type` translations), so the card names a kind the way the entity's
+ * own history does.
+ */
+export function describeCredentialUse(
+    use: CredentialUse,
+    formatKind: (kind: string) => string = (kind) => kind
+): string {
+    const kind = formatKind(use.credentialType);
     const operation = OPERATION_LABELS[use.operation];
     return operation ? `${kind} · ${operation}` : kind;
 }

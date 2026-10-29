@@ -1,4 +1,10 @@
-import { Connection, HassConfig, HassEntities, MessageBase } from 'home-assistant-js-websocket';
+import {
+    Connection,
+    HassConfig,
+    HassEntities,
+    HassEntity,
+    MessageBase
+} from 'home-assistant-js-websocket';
 
 export interface ConfigEntry {
     entry_id: string;
@@ -37,6 +43,9 @@ export interface HomeAssistant {
         returnResponse?: boolean
     ): Promise<ServiceCallResponse>;
     callWS<T>(msg: MessageBase): Promise<T>; // eslint-disable-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
+    // Translates an attribute's value the way the rest of the UI shows it;
+    // optional because a test's mock hass may not provide it.
+    formatEntityAttributeValue?(stateObj: HassEntity, attribute: string, value?: unknown): string; // eslint-disable-line typescript-sort-keys/interface -- Methods grouped logically, not alphabetically
 }
 
 export interface LovelaceBaseViewConfig {

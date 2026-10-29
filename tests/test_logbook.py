@@ -104,8 +104,7 @@ async def test_a_lock_observed_use_is_in_the_locks_logbook(
     uses = _uses(await _logbook_for(hass_ws_client, hass, LOCK_1_ENTITY_ID))
     assert len(uses) == 1
     assert uses[0]["entity_id"] == LOCK_1_ENTITY_ID
-    assert uses[0]["name"] == "test2"
-    assert uses[0]["message"] == "used a PIN to unlock"
+    assert uses[0]["message"] == "Unlocked by test2 with a PIN"
 
     assert _uses(await _logbook_for(hass_ws_client, hass, LOCK_2_ENTITY_ID)) == []
 
@@ -139,8 +138,7 @@ async def test_a_reported_use_is_in_its_targets_logbook(
     uses = _uses(await _logbook_for(hass_ws_client, hass, EXTERNAL_TARGET))
     assert len(uses) == 1
     assert uses[0]["entity_id"] == EXTERNAL_TARGET
-    assert uses[0]["name"] == "test1"
-    assert uses[0]["message"] == "used a PIN"
+    assert uses[0]["message"] == "test1 used a PIN"
 
     # The source can hold the code that was typed; it is never where the
     # entry is filed.
@@ -151,27 +149,30 @@ async def test_a_reported_use_is_in_its_targets_logbook(
     ("credential_type", "operation"),
     list(itertools.product(CredentialType, CredentialOperation)),
 )
-def test_every_use_reads_as_a_sentence_naming_its_kind(
+def test_every_use_names_who_and_only_a_known_operation(
     credential_type: CredentialType, operation: CredentialOperation
 ):
     """
-    Every kind and operation has a message, and only a known operation is named.
+    Every message names the person, and names what the device did only when known.
 
-    The logbook prints the user's name in front of the message, so it has to
-    read on from a name. Exhaustive rather than sampled: the space is small
-    and a new member of either enum must not ship without words.
+    The frontend never shows the entry's ``name`` for an entry filed on an
+    entity, so a message without the person in it says nobody did anything.
+    Exhaustive rather than sampled: the space is small and a new member of
+    either enum must not ship without words.
     """
-    message = credential_use_message(credential_type, operation)
+    message = credential_use_message("Alice", credential_type, operation)
 
-    assert message.startswith("used ")
+    assert "Alice" in message
     if operation is CredentialOperation.UNKNOWN:
-        assert " to " not in message
+        assert message.startswith("Alice used ")
     else:
-        assert message.endswith(f" to {operation}")
+        assert message.startswith(f"{operation.capitalize()}ed by Alice with ")
 
 
 @pytest.mark.parametrize("operation", list(CredentialOperation))
 def test_no_two_kinds_read_the_same(operation: CredentialOperation):
     """A card read and a fingerprint must not both read as the same use."""
-    messages = {credential_use_message(kind, operation) for kind in CredentialType}
+    messages = {
+        credential_use_message("Alice", kind, operation) for kind in CredentialType
+    }
     assert len(messages) == len(CredentialType)

@@ -111,10 +111,16 @@ describe('describeCredentialUse', () => {
             EVENT,
             STATES
         );
-        expect(describeCredentialUse(parsed)).toBe('PIN · Unlocked');
-        expect(describeCredentialUse({ ...parsed, operation: 'unknown' })).toBe('PIN');
+        const labels: Record<string, string> = { fingerprint: 'Fingerprint', pin: 'PIN' };
+        const formatKind = (kind: string): string => labels[kind];
+        expect(describeCredentialUse(parsed, formatKind)).toBe('PIN · Unlocked');
+        expect(describeCredentialUse({ ...parsed, operation: 'unknown' }, formatKind)).toBe('PIN');
+        expect(describeCredentialUse(parsed)).toBe('pin · Unlocked');
         expect(
-            describeCredentialUse({ ...parsed, credentialType: 'fingerprint', operation: 'lock' })
+            describeCredentialUse(
+                { ...parsed, credentialType: 'fingerprint', operation: 'lock' },
+                formatKind
+            )
         ).toBe('Fingerprint · Locked');
     });
 });

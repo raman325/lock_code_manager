@@ -337,41 +337,6 @@ def test_every_credential_kind_the_event_can_publish_is_translated() -> None:
     assert set(translated) == {member.value for member in CredentialType}
 
 
-_CREDENTIAL_USES_TS = (
-    pathlib.Path(__file__).resolve().parent.parent / "ts" / "credential-uses.ts"
-)
-
-
-def test_the_card_names_each_credential_kind_as_home_assistant_does() -> None:
-    """
-    The card's recent uses label a kind with the event type's translation.
-
-    The card cannot read backend translations, so it carries its own copy.
-    Without this the card would say "RFID tag" in its list while the
-    entity's history, a click away, says "RFID".
-    """
-    strings = json.loads(
-        (
-            pathlib.Path(__file__).resolve().parent.parent
-            / "custom_components"
-            / "lock_code_manager"
-            / "strings.json"
-        ).read_text(encoding="utf-8")
-    )
-    translated = strings["entity"]["event"][EVENT_CREDENTIAL_USED]["state_attributes"][
-        "event_type"
-    ]["state"]
-
-    source = _CREDENTIAL_USES_TS.read_text(encoding="utf-8")
-    block = re.search(
-        r"export const CREDENTIAL_LABELS[^=]*=\s*\{(?P<body>[^}]*)\}", source
-    )
-    assert block, "CREDENTIAL_LABELS not found in ts/credential-uses.ts"
-    labels = dict(re.findall(r"(\w+):\s*'([^']*)'", block["body"]))
-
-    assert labels == translated
-
-
 _ADD_USER_CARD_TS = (
     pathlib.Path(__file__).resolve().parent.parent / "ts" / "add-user-card.ts"
 )

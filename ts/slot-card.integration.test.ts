@@ -3075,7 +3075,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(dispatched).toHaveLength(0);
         });
 
-        it('event row exposes role=button, tabindex=0, an aria-label and aria-expanded for a11y', () => {
+        it('event row exposes role=button, tabindex=0 and aria-expanded, named by its own text', () => {
             (card as any)._data = makeSlotCardData({
                 event_entity_id: 'event.lcm_slot_1_pin_used',
                 last_used: '2026-05-01T18:23:00Z',
@@ -3085,7 +3085,9 @@ describe('LockCodeManagerSlotCard integration', () => {
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('role="button"');
             expect(joined).toContain('tabindex="0"');
-            expect(joined).toContain('aria-label="Recent uses"');
+            // No aria-label: the row's own text ("Last used", the lock, the
+            // time) is its accessible name.
+            expect(joined).not.toContain('aria-label=');
             expect(joined).toContain('aria-expanded=');
         });
 
@@ -4290,7 +4292,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 const tmpl = (card as any)._renderEventRow();
                 const joined = deepStrings(tmpl);
                 expect(joined).toContain('role="button"');
-                expect(joined).toContain('aria-label="Recent uses"');
+                expect(joined).toContain('aria-expanded=');
                 expect(joined).toContain('class="event-arrow"');
             });
         });

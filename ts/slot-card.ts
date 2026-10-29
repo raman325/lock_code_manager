@@ -196,6 +196,10 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         ) {
             this._unsubscribe();
             this._data = undefined;
+            // Another user's uses: drop the read rows and any read in flight.
+            this._usesExpanded = false;
+            this._useRows = undefined;
+            this._usesRequest += 1;
         }
         this._config = config;
 
@@ -449,7 +453,6 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 class="event-row"
                 role="button"
                 tabindex="0"
-                aria-label="Recent uses"
                 aria-expanded=${this._usesExpanded ? 'true' : 'false'}
                 @click=${() => this._toggleUses()}
                 @keydown=${(e: KeyboardEvent) => {
@@ -484,6 +487,11 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
      */
     private _renderUses(): TemplateResult {
         const eventEntityId = this._data?.event_entity_id ?? '';
+        const eventState = this._hass?.states[eventEntityId];
+        const formatKind = (kind: string): string =>
+            (eventState &&
+                this._hass?.formatEntityAttributeValue?.(eventState, 'event_type', kind)) ||
+            kind;
         const uses =
             this._useRows &&
             parseCredentialUses(
@@ -497,15 +505,16 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         } else if (uses === null) {
             body = html`<div class="uses-message">Couldn't read the history</div>`;
         } else if (uses.length === 0) {
-            // The entity says there was a use, but the recorder no longer
-            // holds it: its history was purged or excludes this entity.
+            // No recorded state carries a use's payload: the history was
+            // purged or excludes this entity, and the current state was
+            // restored from before 6.0, when the payload named no target.
             body = html`<div class="uses-message">No uses in the recorded history</div>`;
         } else {
             body = html`${uses.map(
                 (use) => html`
                     <div class="use-row">
                         <span class="use-target">${use.targetName}</span>
-                        <span class="use-kind">${describeCredentialUse(use)}</span>
+                        <span class="use-kind">${describeCredentialUse(use, formatKind)}</span>
                         <ha-relative-time
                             class="use-time"
                             .hass=${this._hass}
@@ -542,7 +551,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
 
     private _toggleUses(): void {
         this._usesExpanded = !this._usesExpanded;
-        if (this._usesExpanded) {
+        // Rows already read stay current through `_rememberCurrentUse`, so
+        // only a first expand, or one after a failed read, reads the history.
+        if (this._usesExpanded && !Array.isArray(this._useRows)) {
             void this._loadUses();
         }
     }
