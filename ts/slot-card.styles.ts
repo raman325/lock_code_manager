@@ -620,8 +620,8 @@ const slotCardComponentStyles = css`
         letter-spacing: var(--lcm-code-letter-spacing);
     }
 
-    /* Event row — single click-through row at the bottom of the card that
-       opens the more-info dialog for the slot's PIN-used event entity. Sits
+    /* Event row — row at the bottom of the card that expands the user's
+       recent credential uses. Sits
        below the content flex container so the gap above provides natural
        separation (no top border needed). */
     .event-row {
@@ -673,6 +673,48 @@ const slotCardComponentStyles = css`
     .event-arrow {
         --mdc-icon-size: 14px;
         color: var(--disabled-text-color);
+    }
+
+    /* Recent uses, expanded under the event row. */
+    .uses {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 0 16px 12px 40px;
+    }
+
+    .use-row {
+        align-items: baseline;
+        display: flex;
+        font-size: 12px;
+        gap: 8px;
+    }
+
+    .use-target {
+        color: var(--primary-text-color);
+        font-weight: 500;
+    }
+
+    .use-kind {
+        color: var(--secondary-text-color);
+        flex: 1;
+    }
+
+    .use-time,
+    .uses-message {
+        color: var(--secondary-text-color);
+        font-size: 12px;
+    }
+
+    .uses-full-history {
+        align-self: flex-start;
+        background: none;
+        border: none;
+        color: var(--primary-color);
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        padding: 0;
     }
 
     /* Message states */

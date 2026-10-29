@@ -2,6 +2,7 @@
 
 from enum import StrEnum
 
+from homeassistant.components.logbook import async_log_entry
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_NAME
 from homeassistant.core import HomeAssistant, callback
@@ -14,6 +15,7 @@ from ..const import (
     ATTR_SOURCE,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
+    DOMAIN,
 )
 from .credentials import CredentialType
 
@@ -45,6 +47,33 @@ class CredentialOperation(StrEnum):
         if to_locked is None:
             return cls.UNKNOWN
         return cls.LOCK if to_locked else cls.UNLOCK
+
+
+# How a logbook entry names each kind. The logbook prints the user's name in
+# front of the message, so each reads on from a name: "Alice used a PIN".
+_CREDENTIAL_PHRASES: dict[CredentialType, str] = {
+    CredentialType.PIN: "a PIN",
+    CredentialType.RFID: "an RFID tag",
+    CredentialType.FINGERPRINT: "a fingerprint",
+    CredentialType.FACE: "face recognition",
+    CredentialType.PASSWORD: "a password",
+    CredentialType.NFC: "an NFC tag",
+}
+
+
+def credential_use_message(
+    credential_type: CredentialType, operation: CredentialOperation
+) -> str:
+    """
+    Describe a use for the logbook, to follow the user's name.
+
+    An unknown operation is left unsaid rather than guessed, the same
+    discipline as the payload.
+    """
+    message = f"used {_CREDENTIAL_PHRASES[credential_type]}"
+    if operation == CredentialOperation.UNKNOWN:
+        return message
+    return f"{message} to {operation}"
 
 
 @callback
@@ -89,6 +118,9 @@ def async_fire_credential_used(
     and is never looked up or read. ``target`` is read for its friendly name
     -- the slot card names what a use happened against -- and for nothing
     else.
+
+    Every use is also written to the logbook under ``target``, so it shows in
+    that entity's activity alongside the state change it explains.
     """
     hass.bus.async_fire(
         BUS_EVENT_CREDENTIAL_USED,
@@ -101,4 +133,15 @@ def async_fire_credential_used(
             ATTR_CREDENTIAL_TYPE: credential_type,
             ATTR_OPERATION: operation,
         },
+    )
+    # Filed on the target as a manual logbook entry, because the logbook
+    # shows an entity only its own integration's described events and Lock
+    # Code Manager owns none of the targets. A described event of ours would
+    # reach the unfiltered Logbook alone, never the lock's own activity.
+    async_log_entry(
+        hass,
+        name,
+        credential_use_message(credential_type, operation),
+        domain=DOMAIN,
+        entity_id=target,
     )
