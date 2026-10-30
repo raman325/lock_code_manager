@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "6c29e84ea9bf",
+  "strategy": "manual-commit",
+  "branch": "docs/readme-dashboard-screenshot",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "README.md",
+    "assets/all-locks.png"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6c/29e84ea9bf/0/metadata.json",
+      "transcript": "/6c/29e84ea9bf/0/full.jsonl",
+      "compact_transcript": "/6c/29e84ea9bf/0/transcript.jsonl",
+      "content_hash": "/6c/29e84ea9bf/0/content_hash.txt",
+      "prompt": "/6c/29e84ea9bf/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 26,
+    "cache_creation_tokens": 29106,
+    "cache_read_tokens": 4464545,
+    "output_tokens": 5369,
+    "api_call_count": 11,
+    "subagent_tokens": {
+      "input_tokens": 42,
+      "cache_creation_tokens": 122245,
+      "cache_read_tokens": 1821432,
+      "output_tokens": 23346,
+      "api_call_count": 21
+    }
+  }
+}
