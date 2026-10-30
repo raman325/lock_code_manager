@@ -24,7 +24,7 @@ export interface CredentialUse {
     target: string;
     /** Display name of the target, falling back to its entity ID */
     targetName: string;
-    /** When the use was recorded (ISO timestamp, the event entity's state) */
+    /** When the use was recorded (International Organization for Standardization (ISO) 8601 timestamp, the event entity's state) */
     when: string;
 }
 
@@ -34,7 +34,7 @@ export interface CompressedState {
     s: string;
 }
 
-export type HistoryResponse = Record<string, CompressedState[] | undefined>;
+type HistoryStates = Record<string, CompressedState[] | undefined>;
 
 const OPERATION_LABELS: Record<string, string> = {
     lock: 'Locked',
@@ -59,11 +59,10 @@ export function buildCredentialUsesStream(
         include_start_time_state: false,
         minimal_response: false,
         no_attributes: false,
-        // Every state, not only those whose state changed. The entity also
-        // writes attribute-only states (its event_types move as locks are
-        // probed), which repeat the last use's time; `mergeUseRows` keys
-        // rows by time, so each use is still listed once.
-        significant_changes_only: false,
+        // Every use moves the state to its own time, so state changes are
+        // every use; the entity's attribute-only writes (its event_types
+        // move as locks are probed) are left out.
+        significant_changes_only: true,
         start_time: start.toISOString(),
         type: 'history/stream'
     };
@@ -71,7 +70,7 @@ export function buildCredentialUsesStream(
 
 /** One message on the history stream. */
 export interface HistoryStreamMessage {
-    states?: HistoryResponse;
+    states?: HistoryStates;
 }
 
 /**
@@ -87,9 +86,10 @@ function isUse(row: CompressedState): boolean {
 /**
  * Fold rows from the stream into the rows kept, holding only what is listed.
  *
- * Keeps the newest `CREDENTIAL_USE_LIMIT` uses, one row per use time (a later
- * row for the same time wins), so the kept rows never grow past what the
- * card shows however long it stays open.
+ * Keeps the newest `CREDENTIAL_USE_LIMIT` uses, newest first, one row per
+ * use time (a restart writes the last use's state again; the later row
+ * wins), so the kept rows never grow past what the card shows however long
+ * it stays open.
  */
 export function mergeUseRows(
     kept: CompressedState[],
@@ -105,36 +105,27 @@ export function mergeUseRows(
 }
 
 /**
- * Turn the history response into uses, newest first.
- *
- * Only uses are listed (see `isUse`). A restart writes the last use's state
- * again, so uses are keyed by their time and each is listed once.
+ * Turn the kept rows (`mergeUseRows`) into uses, naming each target.
  *
  * Only the target is looked up. The source can be a keypad entity whose state
  * is the code that was typed, so it is never read.
  */
-export function parseCredentialUses(
-    response: HistoryResponse | undefined,
-    eventEntityId: string,
+export function toCredentialUses(
+    rows: CompressedState[],
     states: HomeAssistant['states'] = {}
 ): CredentialUse[] {
-    const byTime = new Map<string, CredentialUse>();
-    const uses = (response?.[eventEntityId] ?? []).filter(isUse);
-    for (const row of uses) {
+    return rows.map((row) => {
         const attributes = row.a ?? {};
         const target = attributes.target as string;
         const friendlyName = states[target]?.attributes?.friendly_name;
-        byTime.set(row.s, {
+        return {
             credentialType: String(attributes.credential_type ?? attributes.event_type ?? ''),
             operation: String(attributes.operation ?? 'unknown'),
             target,
             targetName: typeof friendlyName === 'string' && friendlyName ? friendlyName : target,
             when: row.s
-        });
-    }
-    return [...byTime.values()]
-        .sort((a, b) => Date.parse(b.when) - Date.parse(a.when))
-        .slice(0, CREDENTIAL_USE_LIMIT);
+        };
+    });
 }
 
 /**

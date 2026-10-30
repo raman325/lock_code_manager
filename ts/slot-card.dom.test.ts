@@ -372,7 +372,7 @@ describe('slot card, rendered from a fresh mount', () => {
             );
         });
 
-        it('follows the new entity when the slot comes to name someone else', async () => {
+        it('closes when the slot comes to name someone else', async () => {
             const root = await mountWithStreams(USED);
             (root.querySelector('.event-row') as HTMLElement).click();
             await settle();
@@ -383,11 +383,28 @@ describe('slot card, rendered from a fresh mount', () => {
             await settle();
 
             expect(streams[0].unsub).toHaveBeenCalledTimes(1);
-            expect(streams[1].msg).toMatchObject({ entity_ids: [BOB_EVENT] });
-            // A late message on the old stream is not the new person's.
-            streams[0].send([[SECOND, 'lock.front_door', 'pin', 'unlock']]);
-            await settle();
+            expect(streams).toHaveLength(1);
             expect(root.querySelector('.use-row')).toBeNull();
+            expect(root.querySelector('.event-row')?.getAttribute('aria-expanded')).toBe('false');
+        });
+
+        it("a closed stream's late messages never reach a list opened after it", async () => {
+            const root = await mountWithStreams(USED);
+            const row = root.querySelector('.event-row') as HTMLElement;
+            row.click();
+            row.click();
+            row.click();
+            await settle();
+            expect(streams).toHaveLength(2);
+
+            // The first stream, already closed, answers late for the same entity.
+            streams[0].send([[THIRD, 'lock.front_door', 'rfid', 'lock']]);
+            await settle();
+            expect(root.querySelector('.uses-message')?.textContent).toContain('Loading');
+
+            streams[1].send([[FIRST, 'lock.front_door', 'pin', 'unlock']]);
+            await settle();
+            expect(rows(root)).toEqual([expect.stringContaining('PIN · Unlocked')]);
         });
 
         it('says so when the history cannot be streamed', async () => {

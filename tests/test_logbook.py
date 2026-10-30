@@ -11,7 +11,7 @@ the entry lands anywhere a person looking at the lock would not see it.
 
 from datetime import timedelta
 import itertools
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pytest_homeassistant_custom_component.components.recorder.common import (
@@ -220,6 +220,20 @@ def test_every_use_names_who_and_only_a_known_operation(
         assert message.startswith("Alice used ")
     else:
         assert message.startswith(f"{operation.capitalize()}ed by Alice with ")
+
+
+def test_a_kind_with_no_words_yet_still_reads():
+    """
+    A kind added without a phrase reads as its value instead of raising.
+
+    The message is built inside a provider's notification callback, after
+    the bus event has fired; raising there would lose the logbook entry.
+    """
+    unworded = cast(CredentialType, "palm")
+    assert (
+        credential_use_message("Alice", unworded, CredentialOperation.UNLOCK)
+        == "Unlocked by Alice with palm"
+    )
 
 
 @pytest.mark.parametrize("operation", list(CredentialOperation))

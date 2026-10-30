@@ -2,11 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
     CREDENTIAL_USE_LIMIT,
-    HistoryResponse,
     buildCredentialUsesStream,
     describeCredentialUse,
     mergeUseRows,
-    parseCredentialUses
+    toCredentialUses
 } from './credential-uses';
 import { HomeAssistant } from './ha_type_stubs';
 
@@ -28,14 +27,14 @@ const STATES = {
 } as unknown as HomeAssistant['states'];
 
 describe('buildCredentialUsesStream', () => {
-    it('streams every state of the one entity, attributes included', () => {
+    it('streams every state change of the one entity, attributes included', () => {
         const now = new Date('2026-10-28T12:00:00Z');
         const msg = buildCredentialUsesStream(EVENT, now);
         expect(msg).toMatchObject({
             entity_ids: [EVENT],
             minimal_response: false,
             no_attributes: false,
-            significant_changes_only: false,
+            significant_changes_only: true,
             type: 'history/stream'
         });
         expect(Date.parse(msg.start_time as string)).toBeLessThan(now.getTime());
@@ -61,47 +60,40 @@ describe('mergeUseRows', () => {
     });
 });
 
-describe('parseCredentialUses', () => {
-    it('lists uses newest first, naming the target by its friendly name', () => {
-        const response: HistoryResponse = {
-            [EVENT]: [
-                use('2026-10-27T08:00:00.000+00:00'),
-                use('2026-10-28T09:00:00.000+00:00', 'cover.side_gate')
-            ]
-        };
-        const uses = parseCredentialUses(response, EVENT, STATES);
-        expect(uses.map((u) => u.targetName)).toEqual(['cover.side_gate', 'Front Door']);
-        expect(uses[1].when).toBe('2026-10-27T08:00:00.000+00:00');
-    });
-
+describe('mergeUseRows, which states are uses', () => {
     it('skips states that are not uses and lists a restored use once', () => {
-        const response: HistoryResponse = {
-            [EVENT]: [
+        const rows = mergeUseRows(
+            [],
+            [
                 { s: 'unknown' },
                 use('2026-10-27T08:00:00.000+00:00'),
                 { s: 'unavailable' },
                 // Home Assistant restarted: the restored state repeats the use.
                 use('2026-10-27T08:00:00.000+00:00')
             ]
-        };
-        expect(parseCredentialUses(response, EVENT, STATES)).toHaveLength(1);
+        );
+        expect(rows).toHaveLength(1);
     });
 
     it('skips a use recorded before 6.0, whose payload named no target', () => {
-        const response: HistoryResponse = {
-            // The old payload's event_type was the lock, not the kind.
-            [EVENT]: [{ a: { event_type: 'lock.front_door' }, s: '2026-09-01T08:00:00.000+00:00' }]
-        };
-        expect(parseCredentialUses(response, EVENT, STATES)).toEqual([]);
+        // The old payload's event_type was the lock, not the kind.
+        const old = { a: { event_type: 'lock.front_door' }, s: '2026-09-01T08:00:00.000+00:00' };
+        expect(mergeUseRows([], [old])).toEqual([]);
     });
+});
 
-    it('keeps only the most recent uses', () => {
-        const rows = Array.from({ length: CREDENTIAL_USE_LIMIT + 5 }, (_, i) =>
-            use(new Date(Date.UTC(2026, 9, 1, i)).toISOString())
+describe('toCredentialUses', () => {
+    it('names each target by its friendly name, its entity ID when it has none', () => {
+        const rows = mergeUseRows(
+            [],
+            [
+                use('2026-10-27T08:00:00.000+00:00'),
+                use('2026-10-28T09:00:00.000+00:00', 'cover.side_gate')
+            ]
         );
-        const uses = parseCredentialUses({ [EVENT]: rows }, EVENT, STATES);
-        expect(uses).toHaveLength(CREDENTIAL_USE_LIMIT);
-        expect(uses[0].when).toBe(rows[rows.length - 1].s);
+        const uses = toCredentialUses(rows, STATES);
+        expect(uses.map((u) => u.targetName)).toEqual(['cover.side_gate', 'Front Door']);
+        expect(uses[1].when).toBe('2026-10-27T08:00:00.000+00:00');
     });
 
     it('never reads the source, which can hold the typed code', () => {
@@ -109,28 +101,17 @@ describe('parseCredentialUses', () => {
             ...STATES,
             'sensor.keypad': { attributes: { friendly_name: '4815' }, state: '4815' }
         } as unknown as HomeAssistant['states'];
-        const response: HistoryResponse = {
-            [EVENT]: [
-                use('2026-10-27T08:00:00.000+00:00', 'lock.front_door', { source: 'sensor.keypad' })
-            ]
-        };
-        const [parsed] = parseCredentialUses(response, EVENT, states);
+        const [parsed] = toCredentialUses(
+            [use('2026-10-27T08:00:00.000+00:00', 'lock.front_door', { source: 'sensor.keypad' })],
+            states
+        );
         expect(JSON.stringify(parsed)).not.toContain('4815');
-    });
-
-    it('returns nothing for a missing or empty response', () => {
-        expect(parseCredentialUses(undefined, EVENT)).toEqual([]);
-        expect(parseCredentialUses({}, EVENT)).toEqual([]);
     });
 });
 
 describe('describeCredentialUse', () => {
     it('names the kind and, when known, what the device did', () => {
-        const [parsed] = parseCredentialUses(
-            { [EVENT]: [use('2026-10-27T08:00:00.000+00:00')] },
-            EVENT,
-            STATES
-        );
+        const [parsed] = toCredentialUses([use('2026-10-27T08:00:00.000+00:00')], STATES);
         const labels: Record<string, string> = { fingerprint: 'Fingerprint', pin: 'PIN' };
         const formatKind = (kind: string): string => labels[kind];
         expect(describeCredentialUse(parsed, formatKind)).toBe('PIN · Unlocked');

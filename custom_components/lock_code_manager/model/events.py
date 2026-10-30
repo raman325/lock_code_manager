@@ -88,7 +88,9 @@ def credential_use_message(
     An unknown operation is left unsaid rather than guessed, the same
     discipline as the payload.
     """
-    credential = _CREDENTIAL_PHRASES[credential_type]
+    # A kind with no words yet reads as its own value rather than failing
+    # the provider callback this runs in.
+    credential = _CREDENTIAL_PHRASES.get(credential_type, str(credential_type))
     if (done := _OPERATION_PHRASES.get(operation)) is None:
         return f"{name} used {credential}"
     return f"{done} by {name} with {credential}"

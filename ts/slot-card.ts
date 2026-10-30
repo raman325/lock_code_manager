@@ -24,7 +24,7 @@ import {
     buildCredentialUsesStream,
     describeCredentialUse,
     mergeUseRows,
-    parseCredentialUses
+    toCredentialUses
 } from './credential-uses';
 import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
@@ -124,9 +124,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     private _entityRowCache = new Map<string, HTMLElement>();
     private _actionErrorTimer?: ReturnType<typeof setTimeout>;
     private _revealedForEdit = false;
-    // The open history stream, and the event entity it follows.
-    private _usesUnsub?: Promise<() => void>;
-    private _usesEntityId?: string;
+    // The open history stream: the entity it follows and its unsubscribe.
+    // Compared by identity, so a closed stream's late messages are dropped.
+    private _usesStream?: { entityId: string; unsub?: Promise<() => void> };
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -276,10 +276,10 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     protected _handleSubscriptionData(data: unknown): void {
         this._data = data as SlotCardData;
         // The slot now names someone else's entity (the user was replaced):
-        // follow theirs instead of listing the previous person's uses.
-        if (this._usesExpanded && this._data?.event_entity_id !== this._usesEntityId) {
+        // the open list is the previous person's, so it closes.
+        if (this._usesStream && this._data?.event_entity_id !== this._usesStream.entityId) {
+            this._usesExpanded = false;
             this._closeUses();
-            this._openUses();
         }
     }
 
@@ -498,13 +498,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             (eventState &&
                 this._hass?.formatEntityAttributeValue?.(eventState, 'event_type', kind)) ||
             kind;
-        const uses =
-            this._useRows &&
-            parseCredentialUses(
-                { [eventEntityId]: this._useRows },
-                eventEntityId,
-                this._hass?.states
-            );
+        const uses = this._useRows && toCredentialUses(this._useRows, this._hass?.states);
         let body: TemplateResult;
         if (uses === undefined) {
             body = html`<div class="uses-message">Loading…</div>`;
@@ -559,28 +553,32 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     private _openUses(): void {
         const eventEntityId = this._data?.event_entity_id;
         const connection = this._hass?.connection;
-        if (!eventEntityId || !connection?.subscribeMessage) return;
-        this._usesEntityId = eventEntityId;
+        if (!eventEntityId || !connection?.subscribeMessage) {
+            this._useRows = null;
+            return;
+        }
+        const stream: { entityId: string; unsub?: Promise<() => void> } = {
+            entityId: eventEntityId
+        };
+        this._usesStream = stream;
         this._useRows = undefined;
-        const unsub = connection.subscribeMessage<HistoryStreamMessage>((message) => {
-            if (this._usesEntityId !== eventEntityId) return;
+        stream.unsub = connection.subscribeMessage<HistoryStreamMessage>((message) => {
+            if (this._usesStream !== stream) return;
             this._useRows = mergeUseRows(
                 this._useRows ?? [],
                 message.states?.[eventEntityId] ?? []
             );
         }, buildCredentialUsesStream(eventEntityId));
-        this._usesUnsub = unsub;
-        unsub.catch(() => {
-            if (this._usesUnsub === unsub) this._useRows = null;
+        stream.unsub.catch(() => {
+            if (this._usesStream === stream) this._useRows = null;
         });
     }
 
     private _closeUses(): void {
-        const unsub = this._usesUnsub;
-        this._usesUnsub = undefined;
-        this._usesEntityId = undefined;
+        const stream = this._usesStream;
+        this._usesStream = undefined;
         this._useRows = undefined;
-        unsub?.then((u) => u()).catch(() => undefined);
+        stream?.unsub?.then((u) => u()).catch(() => undefined);
     }
 
     /**
