@@ -3,8 +3,13 @@
 from enum import StrEnum
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_NAME
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import (
+    ATTR_DOMAIN,
+    ATTR_ENTITY_ID,
+    ATTR_NAME,
+    EVENT_LOGBOOK_ENTRY,
+)
+from homeassistant.core import Context, HomeAssistant, callback
 
 from ..const import (
     ATTR_CONFIG_ENTRY_ID,
@@ -14,6 +19,7 @@ from ..const import (
     ATTR_SOURCE,
     ATTR_TARGET,
     BUS_EVENT_CREDENTIAL_USED,
+    DOMAIN,
 )
 from .credentials import CredentialType
 
@@ -47,6 +53,49 @@ class CredentialOperation(StrEnum):
         return cls.LOCK if to_locked else cls.UNLOCK
 
 
+# The logbook entry's message key, which only the logbook's own constants name.
+_LOGBOOK_MESSAGE = "message"
+
+# How a logbook entry names each kind: "Unlocked by Alice with a PIN".
+_CREDENTIAL_PHRASES: dict[CredentialType, str] = {
+    CredentialType.PIN: "a PIN",
+    CredentialType.RFID: "an RFID tag",
+    CredentialType.FINGERPRINT: "a fingerprint",
+    CredentialType.FACE: "face recognition",
+    CredentialType.PASSWORD: "a password",
+    CredentialType.NFC: "an NFC tag",
+}
+
+# What the device did, for a message that leads with it. ``UNKNOWN`` is
+# deliberately absent: the message then says only that the credential was used.
+_OPERATION_PHRASES: dict[CredentialOperation, str] = {
+    CredentialOperation.UNLOCK: "Unlocked",
+    CredentialOperation.LOCK: "Locked",
+}
+
+
+def credential_use_message(
+    name: str, credential_type: CredentialType, operation: CredentialOperation
+) -> str:
+    """
+    Describe a use for the logbook, naming the person in the message itself.
+
+    The entry's own ``name`` never reaches the screen: for an entry with an
+    ``entity_id`` the frontend shows the entity's name in its place, and the
+    entity's own activity view shows the message alone. So the message has
+    to say who, and stand on its own after the target's name.
+
+    An unknown operation is left unsaid rather than guessed, the same
+    discipline as the payload.
+    """
+    # A kind with no words yet reads as its own value rather than failing
+    # the provider callback this runs in.
+    credential = _CREDENTIAL_PHRASES.get(credential_type, str(credential_type))
+    if (done := _OPERATION_PHRASES.get(operation)) is None:
+        return f"{name} used {credential}"
+    return f"{done} by {name} with {credential}"
+
+
 @callback
 def async_fire_credential_used(
     hass: HomeAssistant,
@@ -57,6 +106,7 @@ def async_fire_credential_used(
     target: str,
     credential_type: CredentialType,
     operation: CredentialOperation,
+    context: Context | None,
 ) -> None:
     """
     Announce that a credential belonging to ``name`` was used.
@@ -89,6 +139,16 @@ def async_fire_credential_used(
     and is never looked up or read. ``target`` is read for its friendly name
     -- the slot card names what a use happened against -- and for nothing
     else.
+
+    Every use is also written to the logbook under ``target``, so it shows in
+    that entity's activity alongside the state change it explains.
+
+    ``context`` is whatever reported the use -- the action call, for a use
+    reported through ``use_credential`` -- and both the event and the logbook
+    entry carry it, so the logbook names that automation or person as the
+    cause. It is required so that every caller decides: a lock that observed
+    a use passes ``None``, because the lock's own state change has the lock
+    integration's context and nothing of ours caused it.
     """
     hass.bus.async_fire(
         BUS_EVENT_CREDENTIAL_USED,
@@ -101,4 +161,25 @@ def async_fire_credential_used(
             ATTR_CREDENTIAL_TYPE: credential_type,
             ATTR_OPERATION: operation,
         },
+        context=context,
+    )
+    # Filed on the target as a manual logbook entry, because the logbook
+    # shows an entity only its own integration's described events and Lock
+    # Code Manager owns none of the targets. A described event of ours would
+    # reach the unfiltered Logbook alone, never the lock's own activity.
+    #
+    # Fired directly rather than through ``logbook.async_log_entry``, which
+    # fires exactly this: importing the logbook would pull its recorder and
+    # frontend modules into every provider, and depending on it would hold
+    # this integration's setup behind the recorder's. The recorder stores the
+    # event whether or not the logbook is loaded yet.
+    hass.bus.async_fire(
+        EVENT_LOGBOOK_ENTRY,
+        {
+            ATTR_NAME: name,
+            _LOGBOOK_MESSAGE: credential_use_message(name, credential_type, operation),
+            ATTR_DOMAIN: DOMAIN,
+            ATTR_ENTITY_ID: target,
+        },
+        context=context,
     )

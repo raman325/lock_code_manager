@@ -56,6 +56,9 @@ Features:
 **Code Events** means Lock Code Manager can tell which user's code was used and
 [emits an event][wiki-events] for it: the `lock_code_manager_credential_used`
 bus event and the user's event entity, either of which can trigger automations.
+Each use is also written to the logbook of the lock it was used on ("Unlocked by
+Alice with a PIN"), and clicking **Last used** on a user's card lists their
+recent uses and which lock each was on.
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])

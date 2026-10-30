@@ -2099,4 +2099,8 @@ class BaseLock:
                 # provider already hands this method. A provider that could
                 # not classify the notification passes None and says so.
                 operation=CredentialOperation.from_to_locked(to_locked),
+                # Nothing of ours caused the use. The lock's own state change
+                # carries the lock integration's context, and sharing it would
+                # tell the logbook the unlock caused the use.
+                context=None,
             )

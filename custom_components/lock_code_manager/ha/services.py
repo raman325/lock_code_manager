@@ -6,7 +6,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 
@@ -282,6 +282,7 @@ async def async_use_credential(
     *,
     source: str,
     target: str,
+    context: Context,
     config_entry_id: str | None = None,
     config_entry_title: str | None = None,
 ) -> dict[str, Any]:
@@ -327,6 +328,9 @@ async def async_use_credential(
             # actuates, so claiming an unlock would state a fact nobody saw;
             # a caller that later needs to say gets a parameter for it.
             operation=CredentialOperation.UNKNOWN,
+            # The action call's: the automation or person that reported the
+            # use is its cause.
+            context=context,
         )
 
     return {

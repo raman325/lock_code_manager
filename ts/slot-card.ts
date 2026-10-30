@@ -18,6 +18,14 @@ import { property, state } from 'lit/decorators.js';
 import { until } from 'lit/directives/until.js';
 
 import { DEFAULT_CODE_DISPLAY } from './const';
+import {
+    CompressedState,
+    HistoryStreamMessage,
+    buildCredentialUsesStream,
+    describeCredentialUse,
+    mergeUseRows,
+    toCredentialUses
+} from './credential-uses';
 import { CONDITION_DOMAINS, ensureEntityPickerLoaded, isConditionEntity } from './ha-components';
 import { HomeAssistant } from './ha_type_stubs';
 import { slotCardStyles } from './slot-card.styles';
@@ -107,11 +115,18 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     // this integration stops managing it.
     @state() private _removeClearsCredentials = true;
     @state() private _removing = false;
+    @state() private _usesExpanded = false;
+    // The uses streamed from the history: undefined while loading, null
+    // when the stream could not be opened.
+    @state() private _useRows?: CompressedState[] | null;
 
     _hass?: HomeAssistant;
     private _entityRowCache = new Map<string, HTMLElement>();
     private _actionErrorTimer?: ReturnType<typeof setTimeout>;
     private _revealedForEdit = false;
+    // The open history stream: the entity it follows and its unsubscribe.
+    // Compared by identity, so a closed stream's late messages are dropped.
+    private _usesStream?: { entityId: string; unsub?: Promise<() => void> };
 
     get hass(): HomeAssistant | undefined {
         return this._hass;
@@ -182,6 +197,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
         ) {
             this._unsubscribe();
             this._data = undefined;
+            // Another user's uses: close the list and its stream.
+            this._usesExpanded = false;
+            this._closeUses();
         }
         this._config = config;
 
@@ -221,6 +239,9 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
             clearTimeout(this._actionErrorTimer);
             this._actionErrorTimer = undefined;
         }
+        // A card off screen holds no stream; the list closes with it.
+        this._usesExpanded = false;
+        this._closeUses();
     }
 
     // Mixin abstract method implementations
@@ -254,6 +275,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
 
     protected _handleSubscriptionData(data: unknown): void {
         this._data = data as SlotCardData;
+        // The slot now names someone else's entity (the user was replaced):
+        // the open list is the previous person's, so it closes.
+        if (this._usesStream && this._data?.event_entity_id !== this._usesStream.entityId) {
+            this._usesExpanded = false;
+            this._closeUses();
+        }
     }
 
     protected updated(changedProperties: Map<string, unknown>): void {
@@ -381,19 +408,20 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
     }
 
     /**
-     * Render the click-through event row at the bottom of the card. Shows the
-     * lock and a relative timestamp for the slot's most recent PIN use, or a
-     * "Never used" empty state when the slot has been configured but the PIN
-     * has not been used yet. Returns `nothing` when there is no event entity
-     * (e.g. the slot has no PIN at all), when the event entity is missing
-     * from `hass.states` entirely (registry race or removed entity), or when
-     * it is in the `unavailable` state — clicking through to a more-info
-     * dialog with no useful content would be misleading.
+     * Render the event row at the bottom of the card. Shows what the user's
+     * most recent credential use was against and a relative timestamp, or a
+     * "Never used" empty state when the credential has not been used yet.
+     * Returns `nothing` when there is no event entity (e.g. the slot has no
+     * PIN at all), when the event entity is missing from `hass.states`
+     * entirely (registry race or removed entity), or when it is in the
+     * `unavailable` state — there is no history to list or open.
      *
-     * Clicking the row opens HA's more-info dialog on the event entity, which
-     * provides the full firing history. The row is keyboard-focusable
-     * (`role="button"`, `tabindex="0"`) and responds to Enter/Space so screen
-     * readers and keyboard users can reach the activity history too.
+     * Clicking the row expands the user's recent uses, each naming what the
+     * credential was used against, read from the recorder's history of the
+     * event entity. A "Full history" link under the list opens HA's more-info
+     * dialog for everything else. The row is keyboard-focusable
+     * (`role="button"`, `tabindex="0"`, `aria-expanded`) and responds to
+     * Enter/Space so screen readers and keyboard users can reach it too.
      */
     private _renderEventRow(): TemplateResult | typeof nothing {
         const lastUsed = this._data?.last_used;
@@ -406,9 +434,7 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
 
         // When there's no usage history, the row is purely informational —
         // drop the chevron arrow and click handler so it doesn't claim
-        // navigability when the more-info dialog has nothing useful to
-        // show. Otherwise it remains a click-through into HA's full event
-        // firing history.
+        // there is anything to expand.
         const isInteractive = !!lastUsed;
         const meta = lastUsed
             ? html`${lastUsedLock ?? 'Used'} ·
@@ -434,12 +460,12 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 class="event-row"
                 role="button"
                 tabindex="0"
-                aria-label="View activity history"
-                @click=${() => this._navigateToEventHistory()}
+                aria-expanded=${this._usesExpanded ? 'true' : 'false'}
+                @click=${() => this._toggleUses()}
                 @keydown=${(e: KeyboardEvent) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        this._navigateToEventHistory();
+                        this._toggleUses();
                     }
                 }}
             >
@@ -452,16 +478,112 @@ class LockCodeManagerUserCard extends LcmSlotCardBase {
                 <span class="event-meta">${meta}</span>
                 <ha-svg-icon
                     class="event-arrow"
-                    .path=${mdiChevronRight}
+                    .path=${this._usesExpanded ? mdiChevronDown : mdiChevronRight}
                     aria-hidden="true"
                 ></ha-svg-icon>
             </div>
+            ${this._usesExpanded ? this._renderUses() : nothing}
         `;
     }
 
     /**
-     * Click handler for the event row — opens the HA more-info dialog on the
-     * slot's PIN-used event entity, which surfaces the full event firing
+     * The expanded list of recent uses, with a way through to the full history.
+     *
+     * The stream keeps the rows current while the list is open.
+     */
+    private _renderUses(): TemplateResult {
+        const eventEntityId = this._data?.event_entity_id ?? '';
+        const eventState = this._hass?.states[eventEntityId];
+        const formatKind = (kind: string): string =>
+            (eventState &&
+                this._hass?.formatEntityAttributeValue?.(eventState, 'event_type', kind)) ||
+            kind;
+        const uses = this._useRows && toCredentialUses(this._useRows, this._hass?.states);
+        let body: TemplateResult;
+        if (uses === undefined) {
+            body = html`<div class="uses-message">Loading…</div>`;
+        } else if (uses === null) {
+            body = html`<div class="uses-message">Couldn't read the history</div>`;
+        } else if (uses.length === 0) {
+            // The entity records a use, but the history holds none: it was
+            // purged, the recorder excludes this entity, or every use in it
+            // predates 6.0, whose payload named no target.
+            body = html`<div class="uses-message">No uses in the recorded history</div>`;
+        } else {
+            body = html`${uses.map(
+                (use) => html`
+                    <div class="use-row">
+                        <span class="use-target">${use.targetName}</span>
+                        <span class="use-kind">${describeCredentialUse(use, formatKind)}</span>
+                        <ha-relative-time
+                            class="use-time"
+                            .hass=${this._hass}
+                            .datetime=${use.when}
+                        ></ha-relative-time>
+                    </div>
+                `
+            )}`;
+        }
+        return html`
+            <div class="uses">
+                ${body}
+                <button class="uses-full-history" @click=${() => this._navigateToEventHistory()}>
+                    Full history
+                </button>
+            </div>
+        `;
+    }
+
+    private _toggleUses(): void {
+        this._usesExpanded = !this._usesExpanded;
+        if (this._usesExpanded) {
+            this._openUses();
+        } else {
+            this._closeUses();
+        }
+    }
+
+    /**
+     * Stream the user's uses from the history of their event entity.
+     *
+     * The stream sends what the recorder holds, then what it had not yet
+     * committed, then each new use as it happens, so the list is complete
+     * while it is open with nothing here keeping it up to date.
+     */
+    private _openUses(): void {
+        const eventEntityId = this._data?.event_entity_id;
+        const connection = this._hass?.connection;
+        if (!eventEntityId || !connection?.subscribeMessage) {
+            this._useRows = null;
+            return;
+        }
+        const stream: { entityId: string; unsub?: Promise<() => void> } = {
+            entityId: eventEntityId
+        };
+        this._usesStream = stream;
+        this._useRows = undefined;
+        stream.unsub = connection.subscribeMessage<HistoryStreamMessage>((message) => {
+            if (this._usesStream !== stream) return;
+            this._useRows = mergeUseRows(
+                this._useRows ?? [],
+                message.states?.[eventEntityId] ?? []
+            );
+        }, buildCredentialUsesStream(eventEntityId));
+        stream.unsub.catch(() => {
+            if (this._usesStream === stream) this._useRows = null;
+        });
+    }
+
+    private _closeUses(): void {
+        const stream = this._usesStream;
+        this._usesStream = undefined;
+        this._useRows = undefined;
+        stream?.unsub?.then((u) => u()).catch(() => undefined);
+    }
+
+    /**
+     * The "Full history" link — opens the HA more-info dialog on the user's
+     * credential-used event entity, which surfaces the full event firing
      * history. No-op when there is no event entity, when the entity is
      * missing from `hass.states`, or when it is `unavailable` (the row
      * itself is also suppressed in those cases, so this is defense in
