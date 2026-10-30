@@ -94,6 +94,8 @@ just works (selectable directly from **Settings → Dashboards → Add Dashboard
 on Home Assistant 2026.5+) to a hand-authored layout that places exactly what
 you want where you want it.
 
+![The auto-generated dashboard: a card per user with their PIN, condition, lock status and last use, and a card per lock showing which slots Lock Code Manager manages](https://raw.githubusercontent.com/raman325/lock_code_manager/main/assets/all-locks.png)
+
 - [UI overview & decision guide][wiki-ui-overview] — start here
 - [UI Strategies][wiki-ui-strategies] — dashboard, view, and section strategies
 - [Custom Cards][wiki-ui-cards] — user card, add-user card, lock-codes card, and code-display modes
