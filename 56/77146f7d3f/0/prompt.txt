@@ -1,0 +1,55 @@
+Steps leading up to this error:
+  state = SharedLockMachine()
+  state.teardown()
+=============================== warnings summary ===============================
+tests/properties/test_identifier_codec.py::test_device_identifier_round_trips
+  /opt/hostedtoolcache/Python/3.14.8/x64/lib/python3.14/site-packages/hypothesis/internal/entropy.py:255: HypothesisWarning: It looks like `register_random` was passed an object that could be garbage collected immediately after `register_random` creates a weakref to it. This will prevent Hypothesis from managing this PRNG. See the docs for `register_random` for more details.
+    register_random(hypothesis.core.threadlocal._hypothesis_global_random)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+- generated xml file: /home/runner/work/lock_code_manager/lock_code_manager/junit.xml -
+================================ tests coverage ================================
+_______________ coverage: platform linux, python 3.14.8-final-0 ________________
+
+Coverage XML written to file coverage.xml
+Required test coverage of 80.0% reached. Total coverage: 99.41%
+=========================== short test summary info ============================
+FAILED tests/properties/test_shared_lock_machine.py::TestSharedLockMachine::runTest - hypothesis.errors.FlakyStrategyDefinition: Inconsistent data generation! Data generation behaved differently between test cases. Is your data generation depending on external state?
+
+---
+
+<task-notification>
+<task-id>b34y12lav</task-id>
+<tool-use-id>toolu_019kXGrSw4Sob9dD3zq6ckPJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/b34y12lav.output</output-file>
+<status>completed</status>
+<summary>Background command "Run the machine under CI profile with four seeds" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+it failed again
+
+---
+
+<task-notification>
+<task-id>bevnudg3s</task-id>
+<tool-use-id>toolu_01LwQuwVptfY3PLab9wXnBjh</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/bevnudg3s.output</output-file>
+<status>completed</status>
+<summary>Background command "Run property tests on the PR branch with coverage" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I've merged a bunch of the PRs but the test is still flaking, we've gotta do something
+
+---
+
+Update on pull request #1811 (https://github.com/raman325/lock_code_manager/pull/1811), which T3 Code is watching for you:
+- Checks failed on eb980d6:
+  - Python / Pytest (3.14) https://github.com/raman325/lock_code_manager/actions/runs/41780510751/job/126410798229
+- 1 new comment:
+  - codecov: "### :x: 1 Tests Failed: | Tests completed | Failed | Passed | Skipped | |---|---|---|---| | 3628 | 1 | 3627 | 12 | <details><summary>View the full list of 1 :snowflake: flaky test(s)</summary> > <p..." https://github.com/raman325/lock_code_manager/pull/1811#issuecomment-6623716216
+
+Look into each item and act on it as your task requires. This PR stays linked and watched, so do not link, watch, or list it again. End your turn when you are done, and T3 Code wakes you on the next change. When you hand the work back to the user, call unwatch_pull_request first so the thread returns to their inbox.

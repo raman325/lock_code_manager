@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "5677146f7d3f",
+  "strategy": "manual-commit",
+  "branch": "fix/shared-lock-machine-storage-per-example",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/properties/test_shared_lock_machine.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/56/77146f7d3f/0/metadata.json",
+      "transcript": "/56/77146f7d3f/0/full.jsonl",
+      "compact_transcript": "/56/77146f7d3f/0/transcript.jsonl",
+      "content_hash": "/56/77146f7d3f/0/content_hash.txt",
+      "prompt": "/56/77146f7d3f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 78781,
+    "cache_read_tokens": 14805077,
+    "output_tokens": 42326,
+    "api_call_count": 61,
+    "subagent_tokens": {
+      "input_tokens": 0,
+      "cache_creation_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "api_call_count": 0
+    }
+  }
+}
