@@ -55,7 +55,7 @@ from contextlib import ExitStack, suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import StrEnum
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import patch
 
 import freezegun
@@ -87,7 +87,11 @@ from homeassistant.config_entries import (
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, STATE_ON
 from homeassistant.core import CoreState, Event, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
-from homeassistant.helpers import entity_registry as er, issue_registry as ir
+from homeassistant.helpers import (
+    device_registry as dr,
+    entity_registry as er,
+    issue_registry as ir,
+)
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
@@ -214,6 +218,11 @@ class _Position:
 class SharedLockMachine(RuleBasedStateMachine):
     """Entries sharing locks, set up and torn down in random orders."""
 
+    # The test's mocked storage, which every example's Home Assistant saves to
+    # and loads from: the fixtures make one for the whole test, not one per
+    # example. Set by ``_one_store_per_example``.
+    storage: ClassVar[dict[str, Any]] = {}
+
     def __init__(self) -> None:
         super().__init__()
         self.positions = [_Position() for _ in range(ENTRY_COUNT)]
@@ -269,6 +278,12 @@ class SharedLockMachine(RuleBasedStateMachine):
         self._frozen = freezegun.freeze_time(FROZEN_AT, ignore=["hypothesis"])
         self.freezer: FrozenDateTimeFactory = self._frozen.start()
         try:
+            # Each example starts on empty storage, as a first boot does.
+            # Sharing one, an example loads the devices the last one saved;
+            # where Hypothesis seeds the IDs alike, an entry then takes over a
+            # device an earlier example disabled, and its entities never
+            # come up.
+            self._stack.enter_context(patch.dict(self.storage, clear=True))
             self._stack.enter_context(
                 mock_config_flow(LOCK_DEVICE_DOMAIN, _LockIntegrationFlow)
             )
@@ -290,6 +305,8 @@ class SharedLockMachine(RuleBasedStateMachine):
             # What the autouse custom-integration fixture does for the
             # fixture's Home Assistant, which this one is not.
             self.hass.data.pop(loader.DATA_CUSTOM_COMPONENTS, None)
+            assert not er.async_get(self.hass).entities, "started with entities"
+            assert not list(dr.async_get(self.hass).devices), "started with devices"
             self.lock_entry = self._run(
                 self._async_bounded(async_setup_mock_lock_entry(self.hass), "build"),
                 "build",
@@ -1126,6 +1143,8 @@ SharedLockMachine.TestCase.settings = settings(
     report_multiple_bugs=False,
 )
 TestSharedLockMachine = SharedLockMachine.TestCase
+
+
 # A last-resort backstop. A hang that awaits is each step's own bound to
 # report, as ExampleHung, the same on every replay; this catches only what
 # that bound cannot -- a synchronous spin that never yields -- and then
@@ -1134,3 +1153,9 @@ TestSharedLockMachine = SharedLockMachine.TestCase
 # and report as flaky; so it is raised past Hypothesis's own cutoff for a slow
 # shrink, which stops shrinking and reports what it has before this fires.
 TestSharedLockMachine.pytestmark = [pytest.mark.timeout(BACKSTOP_SECONDS)]
+
+
+@pytest.fixture(autouse=True)
+def _one_store_per_example(hass_storage: dict[str, Any]) -> None:
+    """Hand the machine the test's storage, which each example empties."""
+    SharedLockMachine.storage = hass_storage
