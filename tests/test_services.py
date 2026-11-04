@@ -2434,12 +2434,12 @@ async def _async_add_users(
     [
         pytest.param(
             [{CONF_NAME: "A", CONF_PIN: " 1234 "}],
-            "'A': Another user already has this PIN",
+            "A has a PIN another user already has",
             id="enabled user",
         ),
         pytest.param(
             [{CONF_NAME: "A", CONF_PIN: "5678"}],
-            "'A': Another user already has this PIN",
+            "A has a PIN another user already has",
             id="turned-off user",
         ),
         pytest.param(
@@ -2447,7 +2447,7 @@ async def _async_add_users(
                 {CONF_NAME: "A", CONF_PIN: "2468"},
                 {CONF_NAME: "B", CONF_PIN: "2468"},
             ],
-            "'B': Another user already has this PIN",
+            "B has a PIN another user already has",
             id="in the batch",
         ),
         pytest.param(
@@ -2455,7 +2455,7 @@ async def _async_add_users(
                 {CONF_NAME: "A", CONF_PIN: "2468", CONF_ENABLED: False},
                 {CONF_NAME: "B", CONF_PIN: "2468"},
             ],
-            "'B': Another user already has this PIN",
+            "B has a PIN another user already has",
             id="turned-off in the batch",
         ),
     ],
@@ -2511,7 +2511,7 @@ async def test_add_user_refuses_a_pin_a_user_with_no_slot_number_has(
     await hass.async_block_till_done()
 
     with pytest.raises(
-        ServiceValidationError, match="^'A': Another user already has this PIN$"
+        ServiceValidationError, match="^A has a PIN another user already has$"
     ):
         await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: "1234"}])
 
@@ -2564,7 +2564,7 @@ async def test_add_user_refuses_a_pin_longer_than_a_state(
     entry = lock_code_manager_config_entry
 
     with pytest.raises(
-        ServiceValidationError, match="^'A': PIN may be at most 255 characters$"
+        ServiceValidationError, match="^A has a PIN longer than 255 characters$"
     ) as refused:
         await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: OVERLONG_PIN}])
     await hass.async_block_till_done()
@@ -2607,7 +2607,7 @@ async def test_add_user_refuses_a_pin_held_in_another_entry_on_a_shared_lock(
 
     if refused:
         with pytest.raises(
-            ServiceValidationError, match="^'A': Another user already has this PIN$"
+            ServiceValidationError, match="^A has a PIN another user already has$"
         ):
             await _async_add_users(hass, entry, [{CONF_NAME: "A", CONF_PIN: pin}])
         assert "A" not in get_entry_config(entry).users
