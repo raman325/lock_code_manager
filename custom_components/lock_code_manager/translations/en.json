@@ -553,10 +553,10 @@
       "message": "PIN may be at most 255 characters."
     },
     "user_pin_not_unique": {
-      "message": "'{name}': Another user already has this PIN."
+      "message": "{name} has a PIN another user already has."
     },
     "user_pin_too_long": {
-      "message": "'{name}': PIN may be at most 255 characters."
+      "message": "{name} has a PIN longer than 255 characters."
     },
     "pin_generation_exhausted": {
       "message": "Could not generate a {length}-digit PIN that no user on this entry's locks already has. Try a longer PIN."
