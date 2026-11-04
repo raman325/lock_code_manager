@@ -53,7 +53,7 @@ pytest_plugins = ["pytest_homeassistant_custom_component"]
 # harness's timing noise and CI runner variance.
 hypothesis_settings.register_profile("dev", max_examples=15, deadline=None)
 hypothesis_settings.register_profile(
-    "ci", max_examples=200, deadline=None, print_blob=True
+    "ci", max_examples=200, deadline=None, print_blob=True, derandomize=True
 )
 hypothesis_settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "dev"))
 

@@ -97,6 +97,7 @@ from custom_components.lock_code_manager.const import (
     CONF_LOCKS,
     DOMAIN,
 )
+from custom_components.lock_code_manager.ha.runtime import lock_registry
 from custom_components.lock_code_manager.model.config import build_slot_unique_id
 from custom_components.lock_code_manager.model.exceptions import (
     ProviderNotImplementedError,
@@ -938,8 +939,41 @@ class SharedLockMachine(RuleBasedStateMachine):
 
         assert self._run(_async_ticks_until_in_sync(), "loaded_slots_are_in_sync"), (
             f"slots not in sync with the lock's codes after {MAX_TICKS_TO_SYNC} "
-            f"sync ticks: {expected}"
+            f"sync ticks: {expected}\n{self._diagnose(expected)}"
         )
+
+    def _diagnose(self, expected: dict[tuple[str, str], str]) -> str:
+        """Describe each lock's worker, instances and entities, for a failure."""
+        hass = self.hass
+        registry = lock_registry(hass)
+        lines = [f"loop time {self.loop.time()}, positions {self.positions}"]
+        for (in_sync_id, code_id), pin in expected.items():
+            lines.append(
+                f"{in_sync_id}={hass.states.get(in_sync_id)} "
+                f"{code_id}={hass.states.get(code_id)} want {pin}"
+            )
+        for lock in LOCKS:
+            lines.append(f"{lock}: physical {self.physical[lock]}")
+            worker = registry.worker(lock)
+            if worker is None:
+                lines.append("  no worker")
+            else:
+                lines.append(
+                    f"  worker started={worker._started} queue={worker._queue.qsize()} "
+                    f"down_until={worker._down_until} probe_at={worker._probe_at}"
+                )
+                lines.extend(
+                    f"  slot {key}: {slot!r}" for key, slot in worker.slots.items()
+                )
+            for instance in self._instances(lock):
+                calls = {
+                    name: len(calls) for name, calls in instance.service_calls.items()
+                }
+                lines.append(
+                    f"  instance {id(instance)} unready={id(instance) in self.unready} "
+                    f"deaf={id(instance) in self.deaf} calls={calls}"
+                )
+        return "\n".join(lines)
 
     @invariant()
     def one_live_instance_per_held_lock(self) -> None:
