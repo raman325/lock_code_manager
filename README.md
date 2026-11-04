@@ -56,6 +56,9 @@ Features:
 **Code Events** means Lock Code Manager can tell which user's code was used and
 [emits an event][wiki-events] for it: the `lock_code_manager_credential_used`
 bus event and the user's event entity, either of which can trigger automations.
+Each use is also written to the logbook of the lock it was used on ("Unlocked by
+Alice with a PIN"), and clicking **Last used** on a user's card lists their
+recent uses and which lock each was on.
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
@@ -90,6 +93,8 @@ one that matches how much control you want — from a one-click dashboard that
 just works (selectable directly from **Settings → Dashboards → Add Dashboard**
 on Home Assistant 2026.5+) to a hand-authored layout that places exactly what
 you want where you want it.
+
+![The auto-generated dashboard: a card per user with their PIN, condition, lock status and last use, and a card per lock showing which slots Lock Code Manager manages](https://raw.githubusercontent.com/raman325/lock_code_manager/main/assets/all-locks.png)
 
 - [UI overview & decision guide][wiki-ui-overview] — start here
 - [UI Strategies][wiki-ui-strategies] — dashboard, view, and section strategies

@@ -184,7 +184,13 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
 6. Provider fires `BUS_EVENT_CREDENTIAL_USED`
    (`lock_code_manager_credential_used`) when a credential is used, carrying
    the user's name, the config entry, and the `source`/`target` entities. This
-   is the event consumers should build on.
+   is the event consumers should build on. The same call
+   (`model/events.py` `async_fire_credential_used`) fires a manual logbook
+   entry (`EVENT_LOGBOOK_ENTRY`) under the `target`, with the reporter's
+   context. It has to be a
+   manual entry: the logbook shows an entity only events described by the
+   integration that owns it, so a `logbook.py` describing our event would
+   never reach a lock's own activity.
 7. That is the only bus event. The older lock-shaped
    `lock_code_manager_lock_state_changed` was removed in 6.0; it was built
    around the lock rather than the person and carried a `code_slot` that tied
@@ -744,6 +750,11 @@ Primary card for managing individual code slots. Features:
 - **Condition management**: Add/edit/remove condition entity via dialog
 - **Lock status**: Per-lock sync status, actual code on lock (masked/revealed)
 - **Collapsible sections**: Conditions and lock status can be collapsed
+- **Recent uses**: Clicking "Last used" lists the user's recent uses (what each
+  was used against, the kind, what the device did), streamed with
+  `history/stream` from the `credential_used` event entity's history while
+  the list is open (`ts/credential-uses.ts`); "Full history" opens the
+  entity's more-info dialog
 - **Real-time updates**: WebSocket subscription for instant state changes
 
 **Config options:**

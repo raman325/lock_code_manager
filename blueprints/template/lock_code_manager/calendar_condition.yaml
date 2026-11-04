@@ -2,91 +2,40 @@
 blueprint:
   name: "Lock Code Manager: Calendar Condition"
   description: >
-    Creates a binary sensor that turns ON when a calendar event is active and
-    an optional condition template is truthy. Assign the resulting binary sensor
-    as the condition entity for a Lock Code Manager code slot.
+    Creates a binary sensor that is ON while a calendar event belongs to one
+    Lock Code Manager user. Assign the sensor as that user's condition entity.
+    One shared calendar can gate many users: create one sensor per user, each
+    matching that user's events.
 
 
-    **Available template variables**
+    **Match** decides which events belong to the user:
 
-    Your condition template can use these variables:
+    - **Any event** — every event on the calendar.
 
-    - `message` — calendar event summary/title
+    - **User's name in the event title** — the title contains the user's name.
 
-    - `description` — calendar event description
+    - **User's name in the event description** — the description contains it.
 
-    - `location` — calendar event location
+    - **"slot N" in the event description** — the description says `slot 3`
+    for the user on slot 3. `slot 12` does not count as `slot 1`.
 
-    - `start_time` — event start time
-
-    - `end_time` — event end time
-
-    - `all_day` — whether the event is an all-day event
-
-    - `slot_number` — the resolved slot number
-
-    - `config_entry_title` — the LCM config entry title
-
-    - `name_state` — the current name of the code slot
+    Names match as whole words and ignore case, so `Al` doesn't match `Alice`.
+    **Match text** (optional) narrows any of these
+    further: the event's title or description must also contain it, again
+    ignoring case.
 
 
-    **Removed: `lock_entity_ids`**
+    The sensor updates as soon as the calendar moves to another event or the
+    user is renamed. It is off when it can't find the user, unavailable while
+    the calendar is, and unknown if its template fails to render, so a problem
+    leaves the PIN inactive rather than active.
 
 
-    This variable no longer exists. It was read off the credential used event
-    entity, which used to list the config entry's lock entity IDs as its event
-    types and now records one fixed event type instead. Nothing else in Home
-    Assistant exposes a config entry's locks to a template, so there is no
-    replacement.
-
-
-    A condition template that still references it fails quietly. Home
-    Assistant treats an undefined template variable as empty rather than as
-    an error, so the binary sensor stays available, reads `off`, and the PIN
-    never activates. The one signal is a line in the Home Assistant log:
-    `Template variable warning: 'lock_entity_ids' is undefined when rendering
-    ...`. Check the log after upgrading — nothing else will tell you.
-
-
-    Nothing here can make that louder, and there is nothing worth stubbing
-    the variable to: the sensor cannot tell an undefined variable from a
-    condition that is honestly false. Nor was the variable worth keeping. The
-    list was the same for every slot in the config entry, so
-    `{{ 'lock.front_door' in lock_entity_ids }}` could only ever be constantly
-    true or constantly false. A Lock Code Manager condition entity gates a
-    *user* across every lock in the entry; it cannot gate one lock. Remove the
-    reference to fix the sensor.
-
-
-    **Example condition templates**
-
-    - Allow when event title contains "Guest": `{{ 'Guest' in message }}`
-
-    - Allow when the slot is named for a known guest: `{{ name_state == 'Guest' }}`
-
-
-    **Note:** The condition template and calendar attributes are evaluated when the
-    sensor is first loaded and when Home Assistant reloads template entities. For
-    the default `{{ true }}`, the sensor dynamically tracks the calendar on/off
-    state. For conditions that reference event attributes, reload template entities
-    after calendar event changes to re-evaluate.
-
-
-    **Template debugging**
-
-    To test your condition template, go to Developer Tools → Template and paste:
-
-    ```
-
-    {% set message = state_attr('calendar.YOUR_CALENDAR', 'message') | default('', true) %}
-
-    {% set description = state_attr('calendar.YOUR_CALENDAR', 'description') | default('', true) %}
-
-    {% set location = state_attr('calendar.YOUR_CALENDAR', 'location') | default('', true) %}
-
-    {{ YOUR_CONDITION_TEMPLATE_HERE }}
-
-    ```
+    **Upgrading:** free-form condition templates are no longer supported. A
+    sensor from an earlier version that never set one keeps working as **Any
+    event**. A sensor that set one is unavailable, so its user's PIN stays
+    inactive, until you choose a Match. For a rule these choices don't cover,
+    make your own template binary sensor and use it as the condition entity.
   domain: template
   # yamllint disable-line rule:line-length
   source_url: https://github.com/raman325/lock_code_manager/blob/main/blueprints/template/lock_code_manager/calendar_condition.yaml
@@ -100,59 +49,105 @@ blueprint:
     slot_number:
       name: Slot number
       description: >
-        The code slot number. Can be a static number (e.g. `3`) or a Jinja2
-        template that resolves to a number using calendar event attributes
-        (e.g. `{{ description | regex_findall('slot (\d+)') | first }}`).
+        The slot number of the user this sensor gates. See "Finding a slot
+        number" in the blueprint documentation.
       selector:
-        template:
+        number:
+          min: 1
+          max: 9999
+          mode: box
     calendar_entity:
       name: Calendar entity
-      description: The calendar entity whose events control this condition.
+      description: The calendar whose events this sensor follows.
       selector:
         entity:
           domain: calendar
-    condition_template:
-      name: Condition template
-      description: >
-        A Jinja2 template that must evaluate to truthy for the sensor to turn
-        ON (in addition to the calendar being active). Leave as `{{ true }}`
-        to activate whenever the calendar event is active.
-      default: "{{ true }}"
+    match:
+      name: Match
+      description: Which events belong to this user.
+      default: not set
       selector:
-        template:
+        select:
+          options:
+            - label: Any event
+              value: any
+            - label: User's name in the event title
+              value: name_in_title
+            - label: User's name in the event description
+              value: name_in_description
+            - label: '"slot N" in the event description'
+              value: slot_in_description
+    match_text:
+      name: Match text
+      description: >
+        Optional. The event's title or description must also contain this text
+        (ignoring case), e.g. `Guest` or `Cleaning`.
+      default: ""
+      selector:
+        text:
+    condition_template:
+      name: Condition template (no longer used)
+      description: >
+        Leave this as `not set` and choose a Match instead. A sensor that still
+        has a template here is unavailable until it has a Match.
+      default: not set
+      selector:
+        text:
 
 variables:
   config_entry: !input config_entry
   calendar_entity: !input calendar_entity
-  config_entry_title: >
-    {{ config_entry_attr(config_entry, 'title') }}
-  _all_entities: >
-    {{ integration_entities(config_entry_title) }}
-  message: >
-    {{ state_attr(calendar_entity, 'message') | default('', true) }}
-  description: >
-    {{ state_attr(calendar_entity, 'description') | default('', true) }}
-  location: >
-    {{ state_attr(calendar_entity, 'location') | default('', true) }}
-  start_time: >
-    {{ state_attr(calendar_entity, 'start_time') | default('', true) }}
-  end_time: >
-    {{ state_attr(calendar_entity, 'end_time') | default('', true) }}
-  all_day: >
-    {{ state_attr(calendar_entity, 'all_day') | default(false, true) }}
   slot_number: !input slot_number
-  _name_entity: >
-    {{ expand(_all_entities)
-       | selectattr('attributes.slot_field', 'defined')
-       | selectattr('attributes.slot_field', 'eq', 'name')
-       | selectattr('attributes.code_slot', 'eq', slot_number | int)
-       | map(attribute='entity_id') | first | default('') }}
-  name_state: >
-    {{ states(_name_entity) if _name_entity else '' }}
-  _condition_result: !input condition_template
+  match_text: !input match_text
+  _chosen_match: !input match
+  _legacy_condition: !input condition_template
+  # A sensor from before Match keeps the meaning of its old default, any event,
+  # unless it set its own condition template: that one can't be honoured, so
+  # it gets no match at all, and the availability template makes it
+  # unavailable.
+  match: >-
+    {%- if _chosen_match != 'not set' -%}{{ _chosen_match }}
+    {%- elif _legacy_condition == 'not set' -%}any
+    {%- else -%}none{%- endif -%}
 
 binary_sensor:
-  state: >
-    {{ is_state(calendar_entity, 'on') and _condition_result }}
+  # Everything that can change lives in the state template, so Home Assistant
+  # tracks it: template entity variables are rendered once, at startup.
+  state: >-
+    {%- set title = state_attr(calendar_entity, 'message')
+        | default('', true) | string | lower -%}
+    {%- set details = state_attr(calendar_entity, 'description')
+        | default('', true) | string | lower -%}
+    {%- set slot = slot_number | int(0) -%}
+    {%- set name = expand(integration_entities(
+          config_entry_attr(config_entry, 'title')))
+        | selectattr('attributes.slot_field', 'defined')
+        | selectattr('attributes.slot_field', 'eq', 'name')
+        | selectattr('attributes.code_slot', 'eq', slot)
+        | map(attribute='state') | first | default('') | lower -%}
+    {#- Names match as whole words: punctuation and spacing become single
+        spaces on both sides, so "Al" doesn't match "Alice". -#}
+    {%- set words = ' ' ~ (name | regex_replace('\\W+', ' ') | trim) ~ ' ' -%}
+    {%- set has_name = name not in ('unknown', 'unavailable')
+        and words | trim != '' -%}
+    {%- set title_words = ' ' ~ (title | regex_replace('\\W+', ' ')) ~ ' ' -%}
+    {%- set details_words = ' ' ~ (details | regex_replace('\\W+', ' ')) ~ ' ' -%}
+    {%- if match == 'any' -%}
+      {%- set matched = true -%}
+    {%- elif match == 'name_in_title' -%}
+      {%- set matched = has_name and words in title_words -%}
+    {%- elif match == 'name_in_description' -%}
+      {%- set matched = has_name and words in details_words -%}
+    {%- elif match == 'slot_in_description' -%}
+      {%- set matched = slot > 0
+          and (slot | string) in details | regex_findall('slot\\s*(\\d+)') -%}
+    {%- else -%}
+      {%- set matched = false -%}
+    {%- endif -%}
+    {%- set text = match_text | default('', true) | string | lower -%}
+    {{ is_state(calendar_entity, 'on') and matched
+       and (text == '' or text in title or text in details) }}
   availability: >
-    {{ states(calendar_entity) not in ('unknown', 'unavailable') }}
+    {{ states(calendar_entity) not in ('unknown', 'unavailable')
+       and match in ('any', 'name_in_title', 'name_in_description',
+                     'slot_in_description') }}

@@ -922,6 +922,7 @@ async def async_setup(hass: HomeAssistant, config: Config) -> bool:
             call.data[ATTR_CODE],
             source=call.data[ATTR_SOURCE],
             target=call.data[ATTR_TARGET],
+            context=call.context,
             config_entry_id=call.data.get("config_entry_id"),
             config_entry_title=call.data.get("config_entry_title"),
         )

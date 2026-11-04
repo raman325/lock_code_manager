@@ -2994,7 +2994,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(tmpl?.strings).toBeUndefined();
         });
 
-        it('clicking the event row dispatches hass-more-info for the event entity', () => {
+        it('clicking the event row expands the recent uses instead of leaving the card', () => {
             (card as any)._data = makeSlotCardData({
                 event_entity_id: 'event.lcm_slot_1_pin_used',
                 last_used: '2026-05-01T18:23:00Z',
@@ -3004,14 +3004,26 @@ describe('LockCodeManagerSlotCard integration', () => {
             card.addEventListener('hass-more-info', ((e: Event) =>
                 dispatched.push(e as CustomEvent)) as EventListener);
             const tmpl = (card as any)._renderEventRow();
-            const handlers = collectHandlers(tmpl);
-            for (const h of handlers) {
-                try {
-                    h();
-                } catch {
-                    // ignore; handlers may call into other internals
-                }
-            }
+            const click = collectHandlers(tmpl).find((h) => h.length === 0);
+            expect(click).toBeDefined();
+            click!();
+            expect((card as any)._usesExpanded).toBe(true);
+            expect(dispatched).toHaveLength(0);
+        });
+
+        it('the full history link dispatches hass-more-info for the event entity', () => {
+            (card as any)._data = makeSlotCardData({
+                event_entity_id: 'event.lcm_slot_1_pin_used',
+                last_used: '2026-05-01T18:23:00Z',
+                last_used_lock: 'Front Door'
+            });
+            (card as any)._useRows = [];
+            const dispatched: CustomEvent[] = [];
+            card.addEventListener('hass-more-info', ((e: Event) =>
+                dispatched.push(e as CustomEvent)) as EventListener);
+            const tmpl = (card as any)._renderUses();
+            expect(deepTemplateStrings(tmpl)).toContain('Full history');
+            for (const h of collectHandlers(tmpl)) h();
             expect(dispatched).toHaveLength(1);
             expect(dispatched[0].detail).toEqual({
                 entityId: 'event.lcm_slot_1_pin_used'
@@ -3063,7 +3075,7 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(dispatched).toHaveLength(0);
         });
 
-        it('event row exposes role=button, tabindex=0 and an aria-label for a11y', () => {
+        it('event row exposes role=button, tabindex=0 and aria-expanded, named by its own text', () => {
             (card as any)._data = makeSlotCardData({
                 event_entity_id: 'event.lcm_slot_1_pin_used',
                 last_used: '2026-05-01T18:23:00Z',
@@ -3073,18 +3085,19 @@ describe('LockCodeManagerSlotCard integration', () => {
             const joined = deepTemplateStrings(tmpl);
             expect(joined).toContain('role="button"');
             expect(joined).toContain('tabindex="0"');
-            expect(joined).toContain('aria-label="View activity history"');
+            // No aria-label: the row's own text ("Last used", the lock, the
+            // time) is its accessible name.
+            expect(joined).not.toContain('aria-label=');
+            expect(joined).toContain('aria-expanded=');
         });
 
-        it('Enter and Space on the event row dispatch hass-more-info; other keys do not', () => {
+        it('Enter and Space on the event row toggle the recent uses; other keys do not', () => {
             (card as any)._data = makeSlotCardData({
                 event_entity_id: 'event.lcm_slot_1_pin_used',
                 last_used: '2026-05-01T18:23:00Z',
                 last_used_lock: 'Front Door'
             });
-            const dispatched: CustomEvent[] = [];
-            card.addEventListener('hass-more-info', ((e: Event) =>
-                dispatched.push(e as CustomEvent)) as EventListener);
+            const expanded = (): boolean => (card as any)._usesExpanded;
 
             // Two function values are present on the event-row div: the
             // zero-arity @click handler and the one-arg @keydown handler. We
@@ -3096,13 +3109,13 @@ describe('LockCodeManagerSlotCard integration', () => {
             expect(keydown).toBeDefined();
 
             keydown!({ key: 'Tab', preventDefault: () => {} } as unknown as KeyboardEvent);
-            expect(dispatched).toHaveLength(0);
+            expect(expanded()).toBe(false);
 
             keydown!({ key: 'Enter', preventDefault: () => {} } as unknown as KeyboardEvent);
-            expect(dispatched).toHaveLength(1);
+            expect(expanded()).toBe(true);
 
             keydown!({ key: ' ', preventDefault: () => {} } as unknown as KeyboardEvent);
-            expect(dispatched).toHaveLength(2);
+            expect(expanded()).toBe(false);
         });
 
         it('_renderFromData appends the event row after the sections', () => {
@@ -4279,7 +4292,7 @@ describe('LockCodeManagerSlotCard integration', () => {
                 const tmpl = (card as any)._renderEventRow();
                 const joined = deepStrings(tmpl);
                 expect(joined).toContain('role="button"');
-                expect(joined).toContain('aria-label="View activity history"');
+                expect(joined).toContain('aria-expanded=');
                 expect(joined).toContain('class="event-arrow"');
             });
         });
