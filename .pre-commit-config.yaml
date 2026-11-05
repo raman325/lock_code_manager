@@ -8,7 +8,7 @@ default_language_version:
   python: python3.14
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.17.2
+    rev: v0.17.3
     hooks:
       - id: ruff-check
         files: ^(scripts|tests|custom_components)/.+\.py$
@@ -71,7 +71,7 @@ repos:
         args: ["--fix"]
 
   - repo: https://github.com/PyCQA/flake8
-    rev: cfbbfdeb2391c14a37e101e92a77f54f329e1726  # frozen: 7.4.1
+    rev: 960c1d286190804104f7255b97da034446fdaac3  # frozen: 7.5.0
     hooks:
       - id: flake8
         args: ["--max-line-length=120"]
@@ -79,7 +79,7 @@ repos:
 
   # Ensure all code is as secure as possible and follows best practices
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: 2834ec6639549dd6796205c8f011dedcd587288b  # frozen: v2.4.0
+    rev: ad26ebfa797fcb9b8f83275937c1c1d6e126719c  # frozen: v2.4.1
     hooks:
       - id: mypy
         files: ^(custom_components)/.+\.py$
