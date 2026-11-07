@@ -7,6 +7,7 @@
     },
     "error": {
       "existing_codes": "Lock {error_lock} already has codes in slots this configuration uses: {slots}. Adding the lock would overwrite them. Clear those slots on the lock, then add it again.",
+      "lock_not_found": "These locks no longer exist in Home Assistant: {locks}. Remove them from the list, or choose the locks that replaced them.",
       "excluded_platform": "Entities from the `{integration}` integration are not supported as condition entities. See the [wiki]({docs_url}) for details.",
       "invalid_config": "The users configuration is invalid. For more information, check the logs and the docs.",
       "invalid_pin": "PIN may be at most 255 characters.",
@@ -162,6 +163,7 @@
     },
     "error": {
       "existing_codes": "Lock {error_lock} already has codes in slots this configuration uses: {slots}. Adding the lock would overwrite them. Clear those slots on the lock, then add it again.",
+      "lock_not_found": "These locks no longer exist in Home Assistant: {locks}. Remove them from the list, or choose the locks that replaced them.",
       "occupancy_unknown": "Could not read the existing codes on {locks}. Lock Code Manager will not add a lock it could not check, because one of this configuration's slots may already hold a code there. Wake the lock or check it is reachable, then try again.",
       "pin_conflict_on_lock": "Lock {error_lock} already has a user with the same PIN as one of this configuration's users. Give that user a different PIN, then add the lock again.",
       "slot_out_of_range": "Lock {error_lock} reports only {num_slots} PIN code slots, and this configuration already uses numbers beyond that: {out_of_range_slots}. Lock Code Manager assigns those numbers itself, so the way to free them is to remove some users, or to manage the rest from a separate configuration.",
