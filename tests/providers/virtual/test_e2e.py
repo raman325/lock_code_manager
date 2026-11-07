@@ -575,16 +575,9 @@ class TestLockLeaving:
         assert stored is not None
 
 
-class TestOpenBugs:
-    """Open virtual-lock bugs, each pinned by a strict xfail."""
+class TestLockNaming:
+    """A lock is called by the name Home Assistant shows for it."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "open: a lock with no state yet is named by its entity name alone, "
-            "dropping the device name Home Assistant puts in front of it"
-        ),
-    )
     async def test_a_lock_named_after_its_device_is_called_by_its_full_name(
         self,
         hass: HomeAssistant,
