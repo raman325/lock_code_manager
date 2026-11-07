@@ -101,7 +101,10 @@ from custom_components.lock_code_manager.model.credentials import (
     pin_address,
 )
 from custom_components.lock_code_manager.model.exceptions import DuplicateCodeError
-from custom_components.lock_code_manager.model.queries import get_entry_config
+from custom_components.lock_code_manager.model.queries import (
+    find_config_entry_by_title,
+    get_entry_config,
+)
 from custom_components.lock_code_manager.providers import BaseLock
 from custom_components.lock_code_manager.sync.worker import (
     BACKOFF_AFTER,
@@ -121,7 +124,6 @@ from custom_components.lock_code_manager.websocket import (
     _serialize_slot,
     _slot_code_payload,
     _slot_from,
-    find_config_entry_by_title,
 )
 
 from .common import (
@@ -282,6 +284,19 @@ async def test_get_config_entry_data(
     )
     msg = await ws_client.receive_json()
     assert not msg["success"]
+
+    # Another integration's loaded entry is not one of ours
+    assert mock_lock_config_entry.domain != DOMAIN
+    await ws_client.send_json(
+        {
+            "id": 6,
+            "type": "lock_code_manager/get_config_entry_data",
+            ATTR_CONFIG_ENTRY_ID: mock_lock_config_entry.entry_id,
+        }
+    )
+    msg = await ws_client.receive_json()
+    assert not msg["success"]
+    assert msg["error"]["code"] == "not_found"
 
     # Unload the entry
     await hass.config_entries.async_unload(lock_code_manager_config_entry.entry_id)

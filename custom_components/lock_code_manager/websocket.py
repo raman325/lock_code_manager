@@ -22,7 +22,7 @@ from homeassistant.components.schedule import (
 )
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
@@ -110,15 +110,13 @@ from .model.config import build_slot_unique_id, parse_slot_unique_id
 from .model.credentials import SlotCode
 from .model.queries import (
     entries_configuring,
-    find_config_entry_by_title,
     get_entry_config,
+    get_loaded_config_entry,
     slots_configured_on,
 )
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
-
-ERR_NOT_LOADED = "not_loaded"
 
 # Calendar entity state attributes (not exported by HA, defined in CalendarEntity.state_attributes)
 CALENDAR_ATTR_MESSAGE = "message"
@@ -313,41 +311,13 @@ def async_get_entry(
         msg: dict[str, Any],
     ) -> None:
         """Provide user specific data and store to function."""
-        if config_entry_title := msg.get("config_entry_title"):
-            config_entry = find_config_entry_by_title(hass, config_entry_title)
-        elif config_entry_id := msg.get("config_entry_id"):
-            config_entry = hass.config_entries.async_get_entry(config_entry_id)
-        else:
-            connection.send_error(
-                msg["id"],
-                websocket_api.const.ERR_INVALID_FORMAT,
-                "Neither config_entry_title nor config_entry_id provided",
+        try:
+            config_entry = get_loaded_config_entry(
+                hass, msg.get("config_entry_id"), msg.get("config_entry_title")
             )
-            return
-
-        if not config_entry:
-            if config_entry_title:
-                error_msg = (
-                    f"No lock code manager config entry with title "
-                    f"`{config_entry_title}` found"
-                )
-            else:
-                error_msg = (
-                    f"No lock code manager config entry with ID "
-                    f"`{config_entry_id}` found"
-                )
+        except ServiceValidationError as err:
             connection.send_error(
-                msg["id"],
-                websocket_api.const.ERR_NOT_FOUND,
-                error_msg,
-            )
-            return
-
-        if config_entry.state is not ConfigEntryState.LOADED:
-            connection.send_error(
-                msg["id"],
-                ERR_NOT_LOADED,
-                f"Config entry {config_entry.entry_id} not loaded",
+                msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err)
             )
             return
 
