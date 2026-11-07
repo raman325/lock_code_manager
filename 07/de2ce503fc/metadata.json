@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "07de2ce503fc",
+  "strategy": "manual-commit",
+  "branch": "fix/overlap-error-names-users",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_open_bugs.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/07/de2ce503fc/0/metadata.json",
+      "transcript": "/07/de2ce503fc/0/full.jsonl",
+      "compact_transcript": "/07/de2ce503fc/0/transcript.jsonl",
+      "content_hash": "/07/de2ce503fc/0/content_hash.txt",
+      "prompt": "/07/de2ce503fc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 20647,
+    "cache_read_tokens": 1973082,
+    "output_tokens": 6370,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 150,
+      "cache_creation_tokens": 364416,
+      "cache_read_tokens": 15114460,
+      "output_tokens": 45171,
+      "api_call_count": 75
+    }
+  }
+}
