@@ -402,10 +402,6 @@ async def test_reauth_completes_with_an_overlap_the_entry_already_has(
     assert result.get("reason") == "locks_updated"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="open: reauth accepts the very lock it was opened for being gone",
-)
 async def test_reauth_refuses_the_lock_that_is_gone(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

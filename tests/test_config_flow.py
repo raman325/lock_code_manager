@@ -492,6 +492,28 @@ async def test_options_flow_edits_the_locks(
     assert entry_users(entry) == {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}
 
 
+async def test_options_flow_refuses_a_lock_that_no_longer_exists(
+    hass: HomeAssistant, mock_lock_config_entry
+):
+    """Saving the entry's own list back, missing lock and all, names that lock."""
+    gone = "lock.front_door"
+    entry = _entry_with_users(
+        hass,
+        [LOCK_1_ENTITY_ID, gone],
+        {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}},
+    )
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], user_input={CONF_LOCKS: [LOCK_1_ENTITY_ID, gone]}
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_LOCKS: "lock_not_found"}
+    assert result["description_placeholders"] == {"locks": gone}
+    assert get_entry_config(entry).locks == (LOCK_1_ENTITY_ID, gone)
+
+
 async def test_config_flow_reauth_form_refetch(
     hass: HomeAssistant, mock_lock_config_entry, lock_code_manager_config_entry
 ):

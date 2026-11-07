@@ -616,6 +616,12 @@ async def _async_check_lock_change(
     slots = config.slot_numbers
     added = [lock for lock in locks if lock not in config.locks]
 
+    # A lock with no registry entry is what sends an entry to reauth, and both
+    # forms start from the entry's own list, so saving one unchanged would
+    # only fail setup and open the same reauth again.
+    ent_reg = er.async_get(hass)
+    if gone := [lock for lock in locks if ent_reg.async_get(lock) is None]:
+        return {CONF_LOCKS: "lock_not_found"}, {"locks": ", ".join(gone)}, None
     errors, placeholders = _check_unclaimed_mqtt_locks(hass, locks, config.locks)
     if not errors:
         # Another entry may already manage some of them on an added lock.
