@@ -1,6 +1,6 @@
 -r requirements_lint.txt
 -r requirements_test.txt
-aioesphomeapi==46.23.0
+aioesphomeapi==46.25.1
 aiofiles==25.1.0
 aiousbwatcher==1.1.2
 colorlog==6.12.0
@@ -10,9 +10,9 @@ homeassistant>=2026.10.4
 matter-python-client==1.5.5
 pyserial==3.5
 pyudev==0.24.5
-universal-silabs-flasher==1.2.0
+universal-silabs-flasher==1.3.0
 usb-devices>=0.5.1
 uv
-zha==2.3.1
-zha-quirks==2.3.0
+zha==2.4.2
+zha-quirks==2.4.0
 zwave-js-server-python==0.74.0
