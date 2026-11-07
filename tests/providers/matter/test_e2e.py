@@ -2486,6 +2486,7 @@ class TestAUserIndexReusedAfterASilentDeletion:
         # The new user took the index slot 1's user held.
         assert fake_matter_lock.users[user_index].name.startswith("lcm:3:")
 
+        assert pin in fake_matter_lock.codes.values(), "slot 1's PIN was not restored"
         holder = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
         assert holder is not None
         assert fake_matter_lock.users[holder].name.startswith("lcm:1:")
