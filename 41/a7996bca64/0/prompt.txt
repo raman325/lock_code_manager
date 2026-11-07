@@ -1,0 +1,194 @@
+ok lets go back to 1739 then
+
+---
+
+what is the benefit of this? less likely to refuse an allocation is the main benefit i think?
+
+---
+
+lets park 1739 and implement the clearer refusal messages
+
+---
+
+seems like overkill
+
+---
+
+is there any indirection or overkill in terms of complexity that we should consider adding?
+
+---
+
+yes do A and B as separate PRs
+
+---
+
+So we still have four xfails? Are they worth fixing as separate PRs, or grouped together if they’re small enough
+
+---
+
+Yes
+
+---
+
+<task-notification>
+<task-id>ac2ec4622b0a7d420</task-id>
+<tool-use-id>toolu_017cLs9tVpBRGdmdRmv2mXar</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/ac2ec4622b0a7d420.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement cleanup PR B" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR B: all 10 cleanup items done and opened as #1820. CI has just started.
+
+Items:
+1. Removed the write `source` flag from `BaseLock` and all 8 providers, plus Matter's `source != "sync"` branch. My bulk edit wrongly removed two unrelated `source=source` arguments (the credential-used event in `services.py` and a Matter e2e call); both are restored. The adapter's debug log no longer prints `source=sync`, so `SET_USERCODE_LOG` in the tests changed with it. I deleted the redundant `test_set_credential_duplicate_direct_raises`.
+2. Removed the dead first-read block in `_base.py` and four stand-in/protocol members. Coverage on main shows those lines (811-816, 821) never ran.
+3. `websocket.py` now uses `build_slot_unique_id`, and the in-sync map reuses `_in_sync_entity_id`.
+4. `_slot_from_seam_user` is now one `@final` helper on `BaseLock`.
+5. The two type-check helpers are merged; one test was renamed so the two tests no longer share a name.
+6. `config_flow.py`: `CODE_SLOT_SCHEMA` is built as name plus `USER_SCHEMA`, so the name stays first. Removed the unused `ent_reg`/`dev_reg` and switched the name check to `identity()`.
+7. Removed `entity.py`'s `self._hass`.
+8. Removed the always-true `if diff.has_changes:` guard in `__init__.py`.
+9. Removed zigbee2mqtt's override of `supports_code_slot_events`.
+10. The websocket entry decorator now uses `get_loaded_config_entry`, so another integration's entry ID is refused; a test covers it. The `not_loaded` and `invalid_format` codes merge into `not_found`. The audit's claim that 11 tests read `not_loaded` was false: none do.
+
+Net: 390 lines deleted, 135 added (−227/+76 in the integration, −163/+59 in tests). Pre-commit is clean.
+
+Tests: the full suite with `-n auto` gave 3622 passed and 4 failed. Three are the known pacing flakes. The fourth, `TestOutOfBandDeletion::test_clear_user_flips_in_sync_off_and_sync_recreates_the_pin`, also flakes on main under xdist: it failed 2 of 4 runs on the branch and 1 of 4 on main, and passed 3 of 3 serially.
+
+Coverage: 99.42% on the branch against 99.39% on main (50 lines missed against 53). Main is not at 100%, and `.coveragerc` only requires 80%.
+
+Commits:
+- `5edcbe1a`: write source flag
+- `4d36cfd3`: dead first-read block
+- `27da5462`: websocket unique-ID builder
+- `1b1a80f9`: provider helpers
+- `019a8d91`: config_flow, entity and `__init__` removals
+- `295fa743`: websocket entry lookup
+
+PR https://github.com/raman325/lock_code_manager/pull/1820, head 295fa743dc15d6e08fce092034b786db6732cb22, checks and reviews pending (just opened)</result>
+<usage><subagent_tokens>337812</subagent_tokens><tool_uses>161</tool_uses><duration_ms>3193821</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ac2ec4622b0a7d420</worktreePath><worktreeBranch>worktree-agent-ac2ec4622b0a7d420</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Yea
+
+---
+
+<task-notification>
+<task-id>adc8956a4ff9e932a</task-id>
+<tool-use-id>toolu_01J4z4cuUWNuudbR1Zn4sk6R</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/adc8956a4ff9e932a.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #1647 stranded setup flow" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Both review findings on #1817 are fixed and pushed as a new commit (9244e0e6), and the PR description now describes the corrected behavior.
+
+**HIGH, healthy flow aborted:** a flow is no longer marked as saving when it takes its allocation. It's marked only once nothing is left but building and saving the entry. That happens in two places: `_async_finish_ui_setup`, and `async_step_yaml_allocated` after its refusal branch. So the guided path showing the users form, and both refusal branches, no longer leave a record behind, and a second setup with the same name is refused as "already in progress" again. Your repro is now `test_a_setup_still_being_filled_in_is_not_taken_for_a_failed_save`.
+
+**MEDIUM, tests passing only within one task:** a save now counts as failed only when the request that was saving it has ended (`task.done()`); I dropped the `task is current_task()` clause. A shared helper, `_async_fail_the_save`, runs the failing save in its own task, and the retry and the second setup come from the test task.
+
+**Mutations** (each run against `tests/test_config_flow.py`, file restored afterwards):
+
+| Mutation | Result |
+|---|---|
+| Marking the flow as saving when it takes its allocation | 1 failed |
+| Checking `task is asyncio.current_task()` instead of `task.done()` | 2 failed |
+| Never treating a flow as failed | 2 failed |
+| Treating every marked flow as failed | 2 failed, plus 1 error |
+
+**Tests:** `tests/test_config_flow.py` and `tests/test_open_bugs.py` give 185 passed and 4 xfailed. `prek` passed on both changed files. I didn't re-run the full suite after this commit; the PR description says it passed, but that was the run on the first commit.
+
+**Commit:** 9244e0e6, touching `custom_components/lock_code_manager/config_flow.py` and `tests/test_config_flow.py`.
+
+PR https://github.com/raman325/lock_code_manager/pull/1817, head 9244e0e64feb009869b54a84921e22cd2555a285, checks and reviews: 1 passed, 6 pending, 1 skipped, no reviews yet</result>
+<usage><subagent_tokens>315480</subagent_tokens><tool_uses>13</tool_uses><duration_ms>214503</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-adc8956a4ff9e932a</worktreePath><worktreeBranch>worktree-agent-adc8956a4ff9e932a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9d209c5cfc87bfab</task-id>
+<tool-use-id>toolu_01KmeqYLHaF5LRcK3wjPcMDF</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/a9d209c5cfc87bfab.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix ZHA NOT_FOUND slot bug" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I've narrowed the ZHA fix as the review asked, and pushed it to PR #1819 as a new commit.
+
+**Evidence:** I found nothing showing a lock that answers `NOT_FOUND` for an empty slot within its range.
+- In this repo's issues and history, the only source is the hand-built test from the regression catalog (#1657).
+- In the installed zigpy, ZHA and zha-quirks code, zigpy uses `NOT_FOUND` only for group removal, and no quirk mentions it for PIN codes.
+- GitHub issue and code searches, Zigbee2MQTT included, returned nothing.
+
+The PR body now says so.
+
+**What changed:**
+- **Code (`providers/zha.py`):** `NOT_FOUND` to Get PIN Code now counts as an empty slot only when the lock reports how many PIN users it supports and the slot number is within that. With no reported count, a slot past it, a different status, or a reply about a different command, the read still fails as before.
+- **E2e test:** the pinned test's lock now reports 20 slots. That's realistic: the Zigbee standard defines the attribute, and most locks report it.
+- **Unit tests:** in range reads empty; unknown capacity, a slot past the capacity, another command, and another status all still fail the read.
+- **PR:** title and body updated.
+
+**Mutation results:** each of the six fails at least one test.
+
+| Mutation | Tests failed |
+|---|---|
+| Remove the mapping | 2 |
+| Accept any command | 1 |
+| Accept any status | 1 |
+| Drop the capacity guard | 2 |
+| Accept an unknown capacity | 1 |
+| Drop the range check | 1 |
+
+**Test results:**
+- ZHA tests plus `tests/properties/test_zha_replies.py`: 278 passed.
+- Pre-commit: clean.
+- I didn't re-run the full suite after this second commit. The earlier run, on the first commit, had 3627 passing, and its four failures under `-n auto` all passed when run serially.
+- One line in `zha.py` isn't covered: line 643, the `except LockCodeManagerError: raise` re-raise. It's line 627 on main and this PR doesn't touch it, so the gap already existed.
+
+My cleanup glob deleted `.coveragerc` by mistake; I restored it with `git checkout` before anything was committed, and the worktree is clean.
+
+Commits on `fix/zha-not-found-slot-is-free`: `8b0e941f` (the original fix) and `08cb3677` (the narrowed mapping).
+
+PR https://github.com/raman325/lock_code_manager/pull/1819, head 08cb3677, checks running (3 success, 2 skipped, 7 pending), no reviews yet</result>
+<usage><subagent_tokens>312637</subagent_tokens><tool_uses>26</tool_uses><duration_ms>268973</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-a9d209c5cfc87bfab</worktreePath><worktreeBranch>worktree-agent-a9d209c5cfc87bfab</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>adc8956a4ff9e932a</task-id>
+<tool-use-id>toolu_01Ccn8Ctk8dDgJ2hbRMtsf9k</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/adc8956a4ff9e932a.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix #1647 stranded setup flow" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All three gaps from the re-review now have a test that fails without the code it covers. Tests only, pushed as a new commit; no production code changed.
+
+| Mutation | Result | Test that catches it |
+|---|---|---|
+| Deleting `self._saving()` from `_async_finish_ui_setup` | 1 failed | `test_a_failed_guided_save_lets_the_user_start_over` |
+| Moving `self._saving()` in `async_step_yaml_allocated` above the refusal branch | 1 failed | `test_a_refused_yaml_setup_is_not_taken_for_a_failed_save` |
+| Replacing the `pop` in `async_remove` with `pass` | 3 failed | `test_a_created_entry_leaves_no_saving_record`, `test_retrying_a_setup_whose_save_failed_ends_it` (abort path), and `test_a_failed_save_after_allocation_lets_the_user_start_over` (same-name abort path) |
+
+The mutation script restored `config_flow.py` in a `finally`, and I confirmed the file matched the original afterwards.
+
+- **Guided-path test:** submits three users, then sends the fourth in its own task with `async_add` failing. A setup with the same name then reaches the menu.
+- **YAML-refusal test:** a nearly full lock refuses the submission, then a same-name setup is refused with `already_in_progress` and the first flow is still on `yaml`.
+- **Cleanup:** the record is checked to be gone after the entry is created, after the abort, and after the same-name abort.
+
+`tests/test_config_flow.py` + `tests/test_open_bugs.py`: 188 passed, 4 xfailed. `prek` passes on `tests/test_config_flow.py`, after `ruff format` reformatted it on the first run. The PR body's test list has one new line for these tests.
+
+Commit 167f9d8a changes only `tests/test_config_flow.py`.
+
+PR https://github.com/raman325/lock_code_manager/pull/1817, head 167f9d8a95d72e9e31de2ca9cce39f82d54fbb2c, checks and reviews: 3 pending, 1 skipped, no reviews yet</result>
+<usage><subagent_tokens>327170</subagent_tokens><tool_uses>12</tool_uses><duration_ms>109440</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-adc8956a4ff9e932a</worktreePath><worktreeBranch>worktree-agent-adc8956a4ff9e932a</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+everything has been merged but 1817 (1819 was closed)
