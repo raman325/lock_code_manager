@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "79b69b527fff",
+  "strategy": "manual-commit",
+  "branch": "fix/lock-name-includes-device",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "tests/test_locks.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/79/b69b527fff/0/metadata.json",
+      "transcript": "/79/b69b527fff/0/full.jsonl",
+      "compact_transcript": "/79/b69b527fff/0/transcript.jsonl",
+      "content_hash": "/79/b69b527fff/0/content_hash.txt",
+      "prompt": "/79/b69b527fff/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 7202,
+    "cache_read_tokens": 1762824,
+    "output_tokens": 3418,
+    "api_call_count": 6,
+    "subagent_tokens": {
+      "input_tokens": 28,
+      "cache_creation_tokens": 16413,
+      "cache_read_tokens": 4172161,
+      "output_tokens": 8802,
+      "api_call_count": 14
+    }
+  }
+}
