@@ -1,0 +1,75 @@
+ok lets go back to 1739 then
+
+---
+
+what is the benefit of this? less likely to refuse an allocation is the main benefit i think?
+
+---
+
+lets park 1739 and implement the clearer refusal messages
+
+---
+
+seems like overkill
+
+---
+
+is there any indirection or overkill in terms of complexity that we should consider adding?
+
+---
+
+yes do A and B as separate PRs
+
+---
+
+So we still have four xfails? Are they worth fixing as separate PRs, or grouped together if they’re small enough
+
+---
+
+Yes
+
+---
+
+<task-notification>
+<task-id>ac2ec4622b0a7d420</task-id>
+<tool-use-id>toolu_017cLs9tVpBRGdmdRmv2mXar</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-raman-projects-lock-code-manager/26530a07-6442-4941-bb8e-d81f519d8d09/tasks/ac2ec4622b0a7d420.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement cleanup PR B" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR B: all 10 cleanup items done and opened as #1820. CI has just started.
+
+Items:
+1. Removed the write `source` flag from `BaseLock` and all 8 providers, plus Matter's `source != "sync"` branch. My bulk edit wrongly removed two unrelated `source=source` arguments (the credential-used event in `services.py` and a Matter e2e call); both are restored. The adapter's debug log no longer prints `source=sync`, so `SET_USERCODE_LOG` in the tests changed with it. I deleted the redundant `test_set_credential_duplicate_direct_raises`.
+2. Removed the dead first-read block in `_base.py` and four stand-in/protocol members. Coverage on main shows those lines (811-816, 821) never ran.
+3. `websocket.py` now uses `build_slot_unique_id`, and the in-sync map reuses `_in_sync_entity_id`.
+4. `_slot_from_seam_user` is now one `@final` helper on `BaseLock`.
+5. The two type-check helpers are merged; one test was renamed so the two tests no longer share a name.
+6. `config_flow.py`: `CODE_SLOT_SCHEMA` is built as name plus `USER_SCHEMA`, so the name stays first. Removed the unused `ent_reg`/`dev_reg` and switched the name check to `identity()`.
+7. Removed `entity.py`'s `self._hass`.
+8. Removed the always-true `if diff.has_changes:` guard in `__init__.py`.
+9. Removed zigbee2mqtt's override of `supports_code_slot_events`.
+10. The websocket entry decorator now uses `get_loaded_config_entry`, so another integration's entry ID is refused; a test covers it. The `not_loaded` and `invalid_format` codes merge into `not_found`. The audit's claim that 11 tests read `not_loaded` was false: none do.
+
+Net: 390 lines deleted, 135 added (−227/+76 in the integration, −163/+59 in tests). Pre-commit is clean.
+
+Tests: the full suite with `-n auto` gave 3622 passed and 4 failed. Three are the known pacing flakes. The fourth, `TestOutOfBandDeletion::test_clear_user_flips_in_sync_off_and_sync_recreates_the_pin`, also flakes on main under xdist: it failed 2 of 4 runs on the branch and 1 of 4 on main, and passed 3 of 3 serially.
+
+Coverage: 99.42% on the branch against 99.39% on main (50 lines missed against 53). Main is not at 100%, and `.coveragerc` only requires 80%.
+
+Commits:
+- `5edcbe1a`: write source flag
+- `4d36cfd3`: dead first-read block
+- `27da5462`: websocket unique-ID builder
+- `1b1a80f9`: provider helpers
+- `019a8d91`: config_flow, entity and `__init__` removals
+- `295fa743`: websocket entry lookup
+
+PR https://github.com/raman325/lock_code_manager/pull/1820, head 295fa743dc15d6e08fce092034b786db6732cb22, checks and reviews pending (just opened)</result>
+<usage><subagent_tokens>337812</subagent_tokens><tool_uses>161</tool_uses><duration_ms>3193821</duration_ms></usage>
+<worktree><worktreePath>/Users/raman/projects/lock_code_manager/.claude/worktrees/agent-ac2ec4622b0a7d420</worktreePath><worktreeBranch>worktree-agent-ac2ec4622b0a7d420</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+Yea
