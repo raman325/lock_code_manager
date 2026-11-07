@@ -1,0 +1,30 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "abbd05304e96",
+  "strategy": "manual-commit",
+  "branch": "fix/reauth-refuses-the-gone-lock",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "custom_components/lock_code_manager/strings.json",
+    "custom_components/lock_code_manager/translations/en.json",
+    "tests/test_config_flow.py",
+    "tests/test_open_bugs.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/ab/bd05304e96/0/metadata.json",
+      "transcript": "/ab/bd05304e96/0/full.jsonl",
+      "compact_transcript": "/ab/bd05304e96/0/transcript.jsonl",
+      "content_hash": "/ab/bd05304e96/0/content_hash.txt",
+      "prompt": "/ab/bd05304e96/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0
+  }
+}
