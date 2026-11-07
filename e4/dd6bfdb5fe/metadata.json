@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "e4dd6bfdb5fe",
+  "strategy": "manual-commit",
+  "branch": "refactor/audit-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/websocket.py",
+    "tests/test_websocket.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e4/dd6bfdb5fe/0/metadata.json",
+      "transcript": "/e4/dd6bfdb5fe/0/full.jsonl",
+      "compact_transcript": "/e4/dd6bfdb5fe/0/transcript.jsonl",
+      "content_hash": "/e4/dd6bfdb5fe/0/content_hash.txt",
+      "prompt": "/e4/dd6bfdb5fe/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 2,
+      "cache_creation_tokens": 522,
+      "cache_read_tokens": 316564,
+      "output_tokens": 350,
+      "api_call_count": 1
+    }
+  }
+}
