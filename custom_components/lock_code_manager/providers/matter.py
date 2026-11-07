@@ -12,7 +12,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import Any, Literal, NamedTuple, override
+from typing import Any, NamedTuple, override
 
 from chip.clusters import Objects as clusters
 from matter_server.client.exceptions import MatterClientException
@@ -1627,7 +1627,6 @@ class MatterLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Write a Personal Identification Number credential to the lock.
@@ -1637,8 +1636,8 @@ class MatterLock(BaseLock):
         absent this is a CREATE (Matter auto-allocates the next free
         credential index). ``pin`` is the resolved PIN string the seam
         already validated as non-None. Handles the duplicate-slot restart
-        case for sync sources by clearing the existing credential and
-        retrying with a fresh allocation.
+        case by clearing the existing credential and retrying with a fresh
+        allocation.
 
         The base orchestration skips coordinator refresh for push providers.
         Matter does not emit LockUserChange for LCM-initiated writes, so an
@@ -1671,14 +1670,9 @@ class MatterLock(BaseLock):
                     lock_entity_id=self.lock.entity_id,
                     reason=str(err),
                 ) from err
-            if source != "sync":
-                raise DuplicateCodeError(
-                    code_slot=slot,
-                    lock_entity_id=self.lock.entity_id,
-                ) from err
-            # Sync duplicate: only meaningful when WE own the credential.
-            # If we don't, the duplicate is external -- surface to the
-            # caller; clearing it would step on another controller's code.
+            # A duplicate is only ours to clear when we own the credential.
+            # If we don't, it is external -- surface it to the caller;
+            # clearing it would step on another controller's code.
             if existing_credential_index is None:
                 raise DuplicateCodeError(
                     code_slot=slot,

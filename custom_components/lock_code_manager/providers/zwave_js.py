@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
 import time
-from typing import Any, Literal, override
+from typing import Any, override
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
@@ -783,7 +783,6 @@ class ZWaveJSLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Write the PIN credential under user_id; map device rejections.

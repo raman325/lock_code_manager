@@ -304,7 +304,6 @@ class TestSetCredential:
             _pin_cred(1, "9999"),
             "9999",
             name=None,
-            source="direct",
         )
 
         assert result is WriteResult.CONFIRMED
@@ -348,7 +347,6 @@ class TestSetCredential:
             _pin_cred(1, "9999"),
             "9999",
             name=None,
-            source="direct",
         )
 
         assert result is WriteResult.CONFIRMED
@@ -386,7 +384,6 @@ class TestSetCredential:
             _pin_cred(1, "9999"),
             "9999",
             name="New Guest",
-            source="direct",
         )
 
         assert result is WriteResult.CONFIRMED
@@ -416,7 +413,6 @@ class TestSetCredential:
                 _pin_cred(1, "1234"),
                 "1234",
                 name=None,
-                source="direct",
             )
 
 
@@ -618,14 +614,12 @@ class TestSequencing:
                 _pin_cred(1, "1111"),
                 "1111",
                 name=None,
-                source="direct",
             ),
             akuvox_lock.async_set_credential(
                 2,
                 _pin_cred(2, "2222"),
                 "2222",
                 name=None,
-                source="direct",
             ),
         )
 

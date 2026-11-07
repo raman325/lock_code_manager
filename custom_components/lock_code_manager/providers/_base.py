@@ -13,7 +13,7 @@ import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal, NoReturn, Protocol, final, override
+from typing import Any, ClassVar, NoReturn, Protocol, final, override
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant, callback
@@ -1244,7 +1244,6 @@ class BaseLock:
         code_slot: int,
         usercode: str,
         name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
     ) -> WriteResult:
         """
         Set a usercode on a code slot via the User->Credential primitives.
@@ -1260,14 +1259,13 @@ class BaseLock:
         pin = self._require_readable_pin(credential)
         if not self.supports_native_users:
             return await self.async_set_credential(
-                code_slot, credential, pin, name=name, source=source
+                code_slot, credential, pin, name=name
             )
         return await self._set_credential(
             user_from_slot(code_slot, state, name),
             credential,
             pin,
             name=name,
-            source=source,
         )
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -1677,7 +1675,6 @@ class BaseLock:
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Run the create-on-first user lifecycle around a credential write.
@@ -1721,7 +1718,7 @@ class BaseLock:
             rollback_user_id = None
         try:
             return await self.async_set_credential(
-                credential_user_id, credential, pin, name=name, source=source
+                credential_user_id, credential, pin, name=name
             )
         except Exception:
             # Not on cancellation: the rollback is one more exchange with a
@@ -1839,7 +1836,6 @@ class BaseLock:
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set or update one credential, returning the write outcome.

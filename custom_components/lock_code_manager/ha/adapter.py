@@ -371,19 +371,17 @@ class ProviderPort:
         self._writing = slot
         if pin is None:
             _LOGGER.debug(
-                "Clearing usercode on %s slot %s (source=%s)",
+                "Clearing usercode on %s slot %s",
                 provider.lock.entity_id,
                 slot,
-                "sync",
             )
         else:
             # Masked: the ``deobfuscate_log`` action decodes it from here.
             _LOGGER.debug(
-                "Setting usercode on %s slot %s (pin=%s, source=%s)",
+                "Setting usercode on %s slot %s (pin=%s)",
                 provider.lock.entity_id,
                 slot,
                 provider.mask_pin(pin, slot),
-                "sync",
             )
         try:
             if pin is None and slot in self.releasing:
@@ -408,9 +406,7 @@ class ProviderPort:
                     raise LockError(
                         ErrorKind.VALUE_REFUSED, sent=False, message=str(duplicate)
                     ) from duplicate
-                await provider.async_set_usercode(
-                    slot, pin, self.name_for(slot), source="sync"
-                )
+                await provider.async_set_usercode(slot, pin, self.name_for(slot))
         except LockCodeManagerProviderError as err:
             if (error := lock_error(err, clearing=pin is None)) is None:
                 raise

@@ -262,21 +262,18 @@ async def test_concurrent_set_credential_serialized_under_sequence_lock(
             _pin_cred(1, "1111"),
             "1111",
             name=None,
-            source="direct",
         ),
         schlage_lock.async_set_credential(
             2,
             _pin_cred(2, "2222"),
             "2222",
             name=None,
-            source="direct",
         ),
         schlage_lock.async_set_credential(
             3,
             _pin_cred(3, "3333"),
             "3333",
             name=None,
-            source="direct",
         ),
     )
 
@@ -309,7 +306,6 @@ async def test_set_credential_replaces_existing(
         _pin_cred(1, "5678"),
         "5678",
         name="New Name",
-        source="direct",
     )
 
     assert result is WriteResult.CONFIRMED
@@ -354,7 +350,6 @@ async def test_set_credential_preserves_existing_name(
         _pin_cred(1, "9999"),
         "9999",
         name=None,
-        source="direct",
     )
 
     assert result is WriteResult.CONFIRMED
@@ -402,7 +397,6 @@ async def test_set_credential_migrates_legacy_format_tag_on_write(
         _pin_cred(1, "9999"),
         "9999",
         name=None,
-        source="direct",
     )
 
     assert result is WriteResult.CONFIRMED
@@ -456,7 +450,6 @@ async def test_set_credential_already_exists_treated_as_success(
         _pin_cred(1, "1234"),
         "1234",
         name="Guest",
-        source="direct",
     )
 
     assert result is WriteResult.CONFIRMED
@@ -480,7 +473,6 @@ async def test_set_credential_pin_another_code_holds_is_rejected(
             _pin_cred(1, "1234"),
             "1234",
             name="Guest",
-            source="direct",
         )
     assert caught.value.code_slot == 1
 
@@ -518,7 +510,6 @@ async def test_set_credential_core_validation_error_is_not_a_refusal(
             _pin_cred(1, "1234"),
             "1234",
             name="Guest",
-            source="direct",
         )
 
 
@@ -540,7 +531,6 @@ async def test_set_credential_non_exists_error_still_raises(
             _pin_cred(1, "1234"),
             "1234",
             name=None,
-            source="direct",
         )
 
 

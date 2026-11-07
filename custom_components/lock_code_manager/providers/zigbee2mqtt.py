@@ -5,7 +5,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from functools import partial
 import json
-from typing import Any, ClassVar, Literal, NoReturn, override
+from typing import Any, ClassVar, NoReturn, override
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -615,7 +615,6 @@ class Zigbee2MQTTLock(BaseMqttLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a code slot.

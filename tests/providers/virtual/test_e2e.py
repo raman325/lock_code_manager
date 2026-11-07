@@ -101,7 +101,6 @@ class TestSetAndGetUsercodes:
             credential_from_slot(1, SlotCredential.known("1111")),
             "1111",
             name="test_user",
-            source="direct",
         )
 
         codes = await e2e_virtual_lock.async_get_usercodes()
@@ -118,7 +117,6 @@ class TestSetAndGetUsercodes:
             credential_from_slot(1, SlotCredential.known("1111")),
             "1111",
             name="test_user",
-            source="direct",
         )
         await e2e_virtual_lock.async_delete_credential(
             CredentialRef(user_id=1, type=CredentialType.PIN, slot=1)
@@ -161,14 +159,12 @@ class TestSetAndGetUsercodes:
             credential_from_slot(1, SlotCredential.known("1111")),
             "1111",
             name="user1",
-            source="direct",
         )
         await e2e_virtual_lock.async_set_credential(
             2,
             credential_from_slot(2, SlotCredential.known("2222")),
             "2222",
             name="user2",
-            source="direct",
         )
 
         # Unload without removing permanently saves data to the store
@@ -195,7 +191,6 @@ class TestSetAndGetUsercodes:
             credential_from_slot(1, SlotCredential.known("1111")),
             "1111",
             name="user1",
-            source="direct",
         )
 
         # Hard refresh reloads from the store (which has not been saved to)
@@ -220,7 +215,6 @@ class TestSetAndGetUsercodes:
             credential_from_slot(1, SlotCredential.known("5555")),
             "5555",
             name="slot_user",
-            source="direct",
         )
         await e2e_virtual_lock.async_delete_credential(
             CredentialRef(user_id=2, type=CredentialType.PIN, slot=2)
