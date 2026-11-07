@@ -1,0 +1,29 @@
+ok lets go back to 1739 then
+
+---
+
+what is the benefit of this? less likely to refuse an allocation is the main benefit i think?
+
+---
+
+lets park 1739 and implement the clearer refusal messages
+
+---
+
+seems like overkill
+
+---
+
+is there any indirection or overkill in terms of complexity that we should consider adding?
+
+---
+
+yes do A and B as separate PRs
+
+---
+
+So we still have four xfails? Are they worth fixing as separate PRs, or grouped together if they’re small enough
+
+---
+
+Yes
