@@ -1485,7 +1485,6 @@ class MockLCMLock(BaseLock):
         code_slot: int,
         usercode: str,
         name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
     ) -> WriteResult:
         """
         Set a usercode on a code slot.

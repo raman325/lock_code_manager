@@ -30,7 +30,6 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         _make_credential(1, "1234"),
         "1234",
         name="test",
-        source="direct",
     )
     assert changed is WriteResult.CONFIRMED
     assert lock._data["1"] == {"code": "1234", "name": "test"}
@@ -41,7 +40,6 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         _make_credential(1, "1234"),
         "1234",
         name="test",
-        source="direct",
     )
     assert changed is WriteResult.NO_CHANGE
 
@@ -51,7 +49,6 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         _make_credential(1, "5678"),
         "5678",
         name="test",
-        source="direct",
     )
     assert changed is WriteResult.CONFIRMED
     assert lock._data["1"] == {"code": "5678", "name": "test"}
@@ -62,7 +59,6 @@ async def test_set_credential_returns_changed_status(virtual_lock: VirtualLock):
         _make_credential(1, "5678"),
         "5678",
         name="new_name",
-        source="direct",
     )
     assert changed is WriteResult.CONFIRMED
     assert lock._data["1"] == {"code": "5678", "name": "new_name"}
@@ -85,7 +81,6 @@ async def test_delete_credential_returns_changed_status(virtual_lock: VirtualLoc
         credential_from_slot(1, SlotCredential.known("1234")),
         "1234",
         name="test",
-        source="direct",
     )
     assert "1" in lock._data
 
@@ -118,7 +113,6 @@ async def test_async_unload_remove_permanently_removes_store(
         credential_from_slot(1, SlotCredential.known("1234")),
         "1234",
         name="test",
-        source="direct",
     )
 
     def _fresh_store() -> Store:
@@ -168,7 +162,6 @@ async def test_get_users_returns_empty_for_cleared_slots(
         credential_from_slot(1, SlotCredential.known("1234")),
         "1234",
         name="slot1",
-        source="direct",
     )
 
     # async_get_users: slot 1 should have a known credential, slot 2 should be empty
@@ -203,7 +196,6 @@ async def test_get_users_includes_unmanaged_occupied_slots(
         credential_from_slot(1, SlotCredential.known("1234")),
         "1234",
         name="slot1",
-        source="direct",
     )
     lock._data["99"] = {"code": "9999", "name": "unmanaged"}
 
@@ -252,7 +244,6 @@ async def test_get_users_returns_user_objects(virtual_lock_with_slots: VirtualLo
         credential_from_slot(1, SlotCredential.known("7777")),
         "7777",
         name=None,
-        source="direct",
     )
 
     users = await lock.async_get_users()

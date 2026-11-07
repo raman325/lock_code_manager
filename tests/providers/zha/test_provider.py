@@ -278,7 +278,6 @@ async def _write(zha_lock: ZHALock, command: str) -> WriteResult | bool:
             credential_from_slot(3, SlotCredential.known("5678")),
             "5678",
             name="Test User",
-            source="direct",
         )
     return await zha_lock.async_delete_credential(
         CredentialRef(user_id=3, type=CredentialType.PIN, slot=3)
@@ -1089,9 +1088,7 @@ async def test_set_credential_generic_exception(
 
     credential = credential_from_slot(1, SlotCredential.known("1234"))
     with pytest.raises(LockDisconnected, match="Failed to set PIN"):
-        await zha_lock.async_set_credential(
-            1, credential, "1234", name=None, source="direct"
-        )
+        await zha_lock.async_set_credential(1, credential, "1234", name=None)
 
 
 async def test_delete_credential_generic_exception(

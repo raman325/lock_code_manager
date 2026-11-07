@@ -81,17 +81,6 @@ _LOGGER = logging.getLogger(__name__)
 # to serialize into.
 STRIPPED_PIN = vol.All(cv.string, vol.Strip)
 
-CODE_SLOT_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Optional(CONF_PIN): STRIPPED_PIN,
-        vol.Required(CONF_ENABLED, default=True): cv.boolean,
-        vol.Optional(CONF_CONDITION): sel.EntitySelector(
-            sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
-        ),
-    }
-)
-
 
 def _slot_enabled_without_pin(slot: dict[str, Any]) -> bool:
     """Return True if a slot is enabled but has no PIN set."""
@@ -117,6 +106,11 @@ USER_SCHEMA = vol.Schema(
             sel.EntitySelectorConfig(domain=CONDITION_ENTITY_DOMAINS)
         ),
     }
+)
+
+# One user's form: the name first, then the fields every user has.
+CODE_SLOT_SCHEMA = vol.Schema({vol.Required(CONF_NAME): cv.string}).extend(
+    USER_SCHEMA.schema
 )
 
 USERS_SCHEMA = vol.All(vol.Schema({cv.string: USER_SCHEMA}), enabled_requires_pin)
@@ -498,7 +492,7 @@ def _validate_user_form(
         # unstripped stored names lets "Raman " and "Raman" both through in
         # one order but not the other.
         name = normalize_name(user_input[CONF_NAME])
-        if any(other.casefold() == name.casefold() for other in taken):
+        if any(identity(other) == identity(name) for other in taken):
             errors[CONF_NAME] = "name_not_unique"
 
     if entity_id := user_input.get(CONF_CONDITION):
@@ -665,8 +659,6 @@ class LockCodeManagerFlowHandler(
         self.title: str = ""
         # Reauth: the locks submitted, held while the user reads ``cannot_report``.
         self._locks: list[str] = []
-        self.ent_reg: er.EntityRegistry = None
-        self.dev_reg: dr.DeviceRegistry = None
         self._users_to_configure = 0
         # The numbers allocation must avoid, settled when the user said how
         # many users they wanted.
@@ -677,11 +669,6 @@ class LockCodeManagerFlowHandler(
         self, user_input: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Handle a flow initialized by the user."""
-        if not self.ent_reg:
-            self.ent_reg = er.async_get(self.hass)
-        if not self.dev_reg:
-            self.dev_reg = dr.async_get(self.hass)
-
         errors: dict[str, str] = {}
         description_placeholders: dict[str, Any] = {}
         if user_input is not None:
