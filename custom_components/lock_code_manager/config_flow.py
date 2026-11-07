@@ -176,30 +176,36 @@ def _check_unclaimed_mqtt_locks(
 
 
 def _check_common_slots(
-    hass: HomeAssistant,
-    locks: Iterable[str],
-    slots_list: Iterable[int | str],
+    hass: HomeAssistant, locks: Iterable[str], config: EntryConfig
 ) -> tuple[dict, dict]:
-    """Check if slots are already configured."""
+    """
+    Refuse a lock another entry already manages with some of these slots.
+
+    Named by the users on both sides, never by slot number: the numbers are
+    chosen for the users and never shown, while removing users from either
+    entry is what frees them.
+    """
     try:
-        lock, common_slots, entry_title = next(
-            (lock, common_slots, entry.title)
+        lock, other, common = next(
+            (lock, other, common)
             for lock in locks
-            for entry, config in entries_configuring(hass, lock)
-            if (
-                common_slots := sorted(
-                    config.slot_numbers & {int(s) for s in slots_list}
-                )
-            )
+            for other in entries_configuring(hass, lock)
+            if (common := sorted(other[1].slot_numbers & config.slot_numbers))
         )
     except StopIteration:
         return {}, {}
-    else:
-        return {"base": "slots_already_configured"}, {
-            "common_slots": ", ".join(str(slot) for slot in common_slots),
-            "error_lock": lock,
-            "entry_title": entry_title,
-        }
+    entry, other_config = other
+    return {"base": "slots_already_configured"}, {
+        "error_lock": lock,
+        "entry_title": entry.title,
+        "other_users": _names_at(other_config, common),
+        "users": _names_at(config, common),
+    }
+
+
+def _names_at(config: EntryConfig, slots: Iterable[int]) -> str:
+    """Name the users holding ``slots``, in slot order."""
+    return ", ".join(name for slot in slots if (name := config.name_for(slot)))
 
 
 def _check_pins_on_added_locks(
@@ -619,7 +625,7 @@ async def _async_check_lock_change(
     errors, placeholders = _check_unclaimed_mqtt_locks(hass, locks, config.locks)
     if not errors:
         # Another entry may already manage some of them on an added lock.
-        errors, placeholders = _check_common_slots(hass, added, slots)
+        errors, placeholders = _check_common_slots(hass, added, config)
     if not errors:
         # Or have a user with one of this entry's PINs on it.
         errors, placeholders = _check_pins_on_added_locks(

@@ -3846,7 +3846,8 @@ async def test_a_failed_entry_checks_a_lock_it_adds_against_the_users_it_saved_s
 
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "slots_already_configured"}
-    assert result["description_placeholders"]["common_slots"] == "3"
+    assert result["description_placeholders"]["other_users"] == "user3"
+    assert result["description_placeholders"]["users"] == "Visitor"
 
 
 async def test_a_loaded_entry_answers_from_its_cached_config(

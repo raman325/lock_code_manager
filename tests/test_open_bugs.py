@@ -433,10 +433,6 @@ async def test_reauth_refuses_the_lock_that_is_gone(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="open: an overlap error lists slot numbers, which the user never sees",
-)
 async def test_an_overlap_error_names_the_users_in_the_way(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:

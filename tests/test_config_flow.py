@@ -2639,12 +2639,13 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["type"] == "form"
         assert result["step_id"] == "init"
         assert result["errors"] == {"base": "slots_already_configured"}
-        # Only the numbers both entries hold: the other entry's third user does
-        # not collide with anyone here.
+        # Only the users whose places collide: the other entry's third user
+        # does not collide with anyone here.
         assert result["description_placeholders"] == {
             "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
-            "common_slots": "1, 2",
+            "other_users": "Alice, Bob",
+            "users": "User 1, User 2",
         }
         _assert_options_error_renders(result)
         assert list(get_entry_config(entry).locks) == [LOCK_1_ENTITY_ID]
@@ -2683,7 +2684,8 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["description_placeholders"] == {
             "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
-            "common_slots": "1",
+            "other_users": "Alice",
+            "users": "User 1",
         }
 
     async def test_options_flow_accepts_a_shared_lock_when_the_numbers_differ(
@@ -2809,7 +2811,8 @@ class TestOptionsFlowOverlapWithLoadedEntries:
         assert result["description_placeholders"] == {
             "error_lock": LOCK_2_ENTITY_ID,
             "entry_title": "other",
-            "common_slots": "1",
+            "other_users": "Someone",
+            "users": "User 1",
         }
         assert list(get_entry_config(entry).locks) == [LOCK_1_ENTITY_ID]
 
