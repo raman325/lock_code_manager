@@ -1147,10 +1147,6 @@ class TestOpenBugs:
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="open: a slot the lock says does not exist is counted as occupied",
-    )
     async def test_a_slot_the_lock_does_not_know_is_free_for_a_new_user(
         self,
         freezer: FrozenDateTimeFactory,
