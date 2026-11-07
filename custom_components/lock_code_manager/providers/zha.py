@@ -66,14 +66,14 @@ def _is_reply(result: Any, cluster: DoorLock, reply: foundation.ZCLCommandDef) -
     return decoded_with is not None and isinstance(result, decoded_with.schema)
 
 
-def _holds_no_user(result: Any) -> bool:
+def _is_not_found(result: Any) -> bool:
     """
-    Return whether ``result`` is the lock saying it has no user at the index read.
+    Return whether ``result`` is a Default Response of NOT_FOUND to Get PIN Code.
 
-    Some locks answer Get PIN Code for an index with nothing stored there
-    with a Default Response of NOT_FOUND -- "the requested table entry could
-    not be found" -- rather than a Get PIN Code Response saying Available.
-    Either way nothing is held there, so the index is free.
+    NOT_FOUND is "the requested table entry could not be found". For an index
+    inside the range the lock reports, that is nothing stored there; past it,
+    or on a lock that reports no range, it may as well be "no such index",
+    which is not a slot a user can be given.
     """
     return (
         isinstance(result, _DEFAULT_RESPONSE)
@@ -585,8 +585,8 @@ class ZHALock(BaseLock):
         the work and must be honoured.
 
         ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
-        status that says so, besides a lock answering that it holds no user
-        there at all (``_holds_no_user``). ``known`` means the lock is accepting this code,
+        status that says so, besides NOT_FOUND for an index inside the range
+        the lock reports (``_is_not_found``). ``known`` means the lock is accepting this code,
         which only ``ENABLED`` says. Every other status is ``unreadable``:
         something is there and its value cannot be trusted -- except Not
         Supported, a lock saying it cannot tell, which is silent
@@ -646,7 +646,12 @@ class ZHALock(BaseLock):
                     f"Lock {self.lock.entity_id}: failed to read slot {slot_num}: {err}"
                 ) from err
 
-            if parsed is None and _holds_no_user(result):
+            if (
+                parsed is None
+                and _is_not_found(result)
+                and (capacity := await self.async_get_max_slot()) is not None
+                and slot_num <= capacity
+            ):
                 slot_states[slot_num] = SlotCredential.empty()
                 continue
             if parsed is None:

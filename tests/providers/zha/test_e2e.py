@@ -1147,6 +1147,10 @@ class TestOpenBugs:
         assert door_lock.codes[1] == CONFIGURED_PINS[1]
         assert _in_sync_state(hass, lcm_config_entry, 1) != STATE_ON
 
+    @pytest.mark.parametrize(
+        "door_lock_attributes",
+        [{DoorLock.AttributeDefs.num_of_pin_users_supported.id: 20}],
+    )
     async def test_a_slot_the_lock_does_not_know_is_free_for_a_new_user(
         self,
         freezer: FrozenDateTimeFactory,
@@ -1154,7 +1158,7 @@ class TestOpenBugs:
         lcm_config_entry: MockConfigEntry,
         door_lock: DoorLockStandIn,
     ) -> None:
-        """Slot 3, answered NOT_FOUND, takes the user added next."""
+        """Slot 3, answered NOT_FOUND on a 20-slot lock, takes the user added next."""
         await async_tick_until(
             hass,
             freezer,

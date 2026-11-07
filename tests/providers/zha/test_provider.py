@@ -1274,14 +1274,17 @@ async def test_an_unparseable_response_fails_the_read_not_reads_empty(
         await zha_lock.async_get_usercodes(range(1, 3))
 
 
-async def test_a_lock_with_no_user_at_an_index_reads_it_empty(
+async def test_not_found_inside_the_reported_range_reads_empty(
     hass: HomeAssistant,
     zha_lock: ZHALock,
     simple_lcm_config_entry: MockConfigEntry,
 ) -> None:
-    """A Default Response of NOT_FOUND to the read is the lock holding nothing there."""
+    """NOT_FOUND to the read, at an index the lock says it has, is nothing held there."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
+    cluster.read_attributes = AsyncMock(
+        return_value=({DoorLock.AttributeDefs.num_of_pin_users_supported.id: 2}, {})
+    )
     cluster.get_pin_code = AsyncMock(
         return_value=default_response(
             DoorLock.ServerCommandDefs.get_pin_code.id, Status.NOT_FOUND
@@ -1291,6 +1294,41 @@ async def test_a_lock_with_no_user_at_an_index_reads_it_empty(
     codes = await zha_lock.async_get_usercodes(range(1, 3))
     assert codes[1] is SlotCredential.empty()
     assert codes[2] is SlotCredential.empty()
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        pytest.param({}, id="capacity_unknown"),
+        pytest.param(
+            {DoorLock.AttributeDefs.num_of_pin_users_supported.id: 1},
+            id="beyond_capacity",
+        ),
+    ],
+)
+async def test_not_found_outside_a_known_range_fails_the_read(
+    hass: HomeAssistant,
+    zha_lock: ZHALock,
+    simple_lcm_config_entry: MockConfigEntry,
+    reported: dict[int, int],
+) -> None:
+    """
+    NOT_FOUND where the lock has not said the index exists is not a free slot.
+
+    It may mean no such index, and handing that out would only fail at the
+    write.
+    """
+    cluster = zha_lock._get_door_lock_cluster()
+    assert cluster is not None
+    cluster.read_attributes = AsyncMock(return_value=(reported, {}))
+    cluster.get_pin_code = AsyncMock(
+        return_value=default_response(
+            DoorLock.ServerCommandDefs.get_pin_code.id, Status.NOT_FOUND
+        ).payload
+    )
+
+    with pytest.raises(LockOperationFailed):
+        await zha_lock.async_get_usercodes(range(1, 3))
 
 
 @pytest.mark.parametrize(
@@ -1318,6 +1356,9 @@ async def test_only_not_found_to_the_read_says_no_user(
     """Any other Default Response is not an answer about the index, and fails the read."""
     cluster = zha_lock._get_door_lock_cluster()
     assert cluster is not None
+    cluster.read_attributes = AsyncMock(
+        return_value=({DoorLock.AttributeDefs.num_of_pin_users_supported.id: 2}, {})
+    )
     cluster.get_pin_code = AsyncMock(
         return_value=default_response(command_id, status).payload
     )
