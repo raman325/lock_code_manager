@@ -2114,5 +2114,4 @@ async def _async_apply_entry_update_locked(
 
     # Notify Lovelace dashboards to re-render when structure changes
     # (slots or locks added/removed), so strategy-generated cards update
-    if diff.has_changes:
-        _async_notify_lovelace_dashboards(hass)
+    _async_notify_lovelace_dashboards(hass)

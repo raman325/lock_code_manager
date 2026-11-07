@@ -118,7 +118,7 @@ from .common import (
 # The logger every Lock Code Manager module logs under.
 DOMAIN_LOGGER = f"custom_components.{DOMAIN}"
 # The line a lock logs for each set, its PIN masked.
-SET_USERCODE_LOG = "Setting usercode on %s slot %s (pin=%s, source=%s)"
+SET_USERCODE_LOG = "Setting usercode on %s slot %s (pin=%s)"
 
 
 async def test_async_set_usercode_domain_function_rejects_empty_usercode(

@@ -22,7 +22,7 @@ from homeassistant.components.schedule import (
 )
 from homeassistant.components.switch import DOMAIN as SWITCH_DOMAIN
 from homeassistant.components.text import DOMAIN as TEXT_DOMAIN
-from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     ATTR_FRIENDLY_NAME,
@@ -106,19 +106,17 @@ from .ha.services import (
     async_set_slot_condition,
     async_set_usercode,
 )
-from .model.config import parse_slot_unique_id
+from .model.config import build_slot_unique_id, parse_slot_unique_id
 from .model.credentials import SlotCode
 from .model.queries import (
     entries_configuring,
-    find_config_entry_by_title,
     get_entry_config,
+    get_loaded_config_entry,
     slots_configured_on,
 )
 from .providers import BaseLock
 
 _LOGGER = logging.getLogger(__name__)
-
-ERR_NOT_LOADED = "not_loaded"
 
 # Calendar entity state attributes (not exported by HA, defined in CalendarEntity.state_attributes)
 CALENDAR_ATTR_MESSAGE = "message"
@@ -144,11 +142,6 @@ def _slot_code_payload(
     if reveal or code is None:
         return {code_key: code}
     return {code_key: None, length_key: len(code)}
-
-
-def _slot_unique_id(entry_id: str, slot_num: int, key: str) -> str:
-    """Build the unique ID for a per-slot LCM entity."""
-    return f"{entry_id}|{slot_num}|{key}"
 
 
 def _setup_dynamic_state_tracking(
@@ -318,41 +311,13 @@ def async_get_entry(
         msg: dict[str, Any],
     ) -> None:
         """Provide user specific data and store to function."""
-        if config_entry_title := msg.get("config_entry_title"):
-            config_entry = find_config_entry_by_title(hass, config_entry_title)
-        elif config_entry_id := msg.get("config_entry_id"):
-            config_entry = hass.config_entries.async_get_entry(config_entry_id)
-        else:
-            connection.send_error(
-                msg["id"],
-                websocket_api.const.ERR_INVALID_FORMAT,
-                "Neither config_entry_title nor config_entry_id provided",
+        try:
+            config_entry = get_loaded_config_entry(
+                hass, msg.get("config_entry_id"), msg.get("config_entry_title")
             )
-            return
-
-        if not config_entry:
-            if config_entry_title:
-                error_msg = (
-                    f"No lock code manager config entry with title "
-                    f"`{config_entry_title}` found"
-                )
-            else:
-                error_msg = (
-                    f"No lock code manager config entry with ID "
-                    f"`{config_entry_id}` found"
-                )
+        except ServiceValidationError as err:
             connection.send_error(
-                msg["id"],
-                websocket_api.const.ERR_NOT_FOUND,
-                error_msg,
-            )
-            return
-
-        if config_entry.state is not ConfigEntryState.LOADED:
-            connection.send_error(
-                msg["id"],
-                ERR_NOT_LOADED,
-                f"Config entry {config_entry.entry_id} not loaded",
+                msg["id"], websocket_api.const.ERR_NOT_FOUND, str(err)
             )
             return
 
@@ -552,7 +517,7 @@ def _build_slot_entities(
 
     def _id(domain: str, key: str) -> str | None:
         return ent_reg.async_get_entity_id(
-            domain, DOMAIN, _slot_unique_id(entry_id, slot_num, key)
+            domain, DOMAIN, build_slot_unique_id(entry_id, slot_num, key)
         )
 
     return SlotEntities(
@@ -603,7 +568,7 @@ def _in_sync_entity_id(
     ent_reg: er.EntityRegistry, entry_id: str, slot_num: int, lock_entity_id: str
 ) -> str | None:
     """Resolve the in_sync binary sensor entity id for a (slot, lock) pair."""
-    unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
+    unique_id = build_slot_unique_id(entry_id, slot_num, ATTR_IN_SYNC, lock_entity_id)
     return ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
 
 
@@ -772,18 +737,15 @@ def _get_slot_in_sync_entity_ids(
     Returns dict mapping lock_entity_id to in_sync_entity_id.
     """
     ent_reg = er.async_get(hass)
-    entry_id = config_entry.entry_id
-    lock_entity_ids = get_entry_config(config_entry).locks
-
-    in_sync_map: dict[str, str] = {}
-    for lock_entity_id in lock_entity_ids:
-        unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
-        if entity_id := ent_reg.async_get_entity_id(
-            BINARY_SENSOR_DOMAIN, DOMAIN, unique_id
-        ):
-            in_sync_map[lock_entity_id] = entity_id
-
-    return in_sync_map
+    return {
+        lock_entity_id: entity_id
+        for lock_entity_id in get_entry_config(config_entry).locks
+        if (
+            entity_id := _in_sync_entity_id(
+                ent_reg, config_entry.entry_id, slot_num, lock_entity_id
+            )
+        )
+    }
 
 
 def _get_condition_entity_data(

@@ -674,9 +674,7 @@ async def test_async_set_usercode_calls_primitives(
     zwave_js_lock._min_operation_delay = 0.0
     mock_access_control.get_user_cached.return_value = None
 
-    result = await zwave_js_lock.async_set_usercode(
-        1, "5678", name="alice", source="sync"
-    )
+    result = await zwave_js_lock.async_set_usercode(1, "5678", name="alice")
 
     assert result is WriteResult.CONFIRMED
     mock_lock_helpers["async_set_user"].assert_called_once()
@@ -1289,7 +1287,7 @@ async def test_set_credential_confirmed_pushes_the_value_like_every_push_provide
     )
 
     result = await zwave_js_lock.async_set_credential(
-        user_id=1, credential=credential, pin="5678", name="alice", source="sync"
+        user_id=1, credential=credential, pin="5678", name="alice"
     )
 
     assert result is WriteResult.CONFIRMED
@@ -1348,7 +1346,6 @@ async def test_async_set_credential_maps_permanent_codes_to_unsupported(
             credential=credential,
             pin="2222",
             name=None,
-            source="sync",
         )
 
 
@@ -1377,7 +1374,6 @@ async def test_async_set_credential_unknown_code_stays_retryable(
             credential=credential,
             pin="2222",
             name=None,
-            source="sync",
         )
 
 
@@ -1705,7 +1701,6 @@ async def test_set_credential_unknown_error_is_optimistic(
         credential=_pin_credential(2, "5678"),
         pin="5678",
         name=None,
-        source="sync",
     )
 
     assert result is WriteResult.OPTIMISTIC
@@ -1727,7 +1722,6 @@ async def test_set_credential_rejection_raises_code_rejected(
             credential=_pin_credential(4, "2222"),
             pin="2222",
             name=None,
-            source="sync",
         )
 
     assert exc_info.value.code_slot == 4
@@ -1750,7 +1744,6 @@ async def test_set_credential_duplicate_raises_duplicate_code(
             credential=_pin_credential(3, "1111"),
             pin="1111",
             name=None,
-            source="sync",
         )
 
     assert exc_info.value.code_slot == 3

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
 import time
-from typing import Any, Literal, override
+from typing import Any, override
 
 from zwave_js_server.client import Client
 from zwave_js_server.const import CommandClass, NodeStatus
@@ -586,20 +586,6 @@ class ZWaveJSLock(BaseLock):
             user_id=result["user_id"], created=existing_user_id is None
         )
 
-    def _slot_from_seam_user(self, user: User) -> int:
-        """
-        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
-
-        The base seam always passes a tagged name; this helper centralizes
-        the fallback so the rest of the provider can treat the resolved
-        slot as a single value.
-        """
-        if user.name:
-            slot, _ = parse_tag(user.name)
-            if slot is not None:
-                return slot
-        return user.user_id
-
     async def _find_user_index_for_slot(
         self, slot: int, *, adopt_untagged: bool = True
     ) -> int | None:
@@ -783,7 +769,6 @@ class ZWaveJSLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Write the PIN credential under user_id; map device rejections.

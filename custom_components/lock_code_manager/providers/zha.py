@@ -13,7 +13,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal, NamedTuple, override
+from typing import Any, ClassVar, NamedTuple, override
 
 from zigpy.zcl import foundation
 from zigpy.zcl.clusters.closures import DoorLock
@@ -473,7 +473,6 @@ class ZHALock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a slot.

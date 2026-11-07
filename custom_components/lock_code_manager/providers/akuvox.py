@@ -15,7 +15,7 @@ services (``list_users``, ``add_user``, ``modify_user``, ``delete_user``).
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Literal, override
+from typing import Any, override
 
 from ..model.credentials import (
     Credential,
@@ -235,7 +235,6 @@ class AkuvoxLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a slot.

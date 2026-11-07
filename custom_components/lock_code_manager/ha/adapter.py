@@ -371,19 +371,17 @@ class ProviderPort:
         self._writing = slot
         if pin is None:
             _LOGGER.debug(
-                "Clearing usercode on %s slot %s (source=%s)",
+                "Clearing usercode on %s slot %s",
                 provider.lock.entity_id,
                 slot,
-                "sync",
             )
         else:
             # Masked: the ``deobfuscate_log`` action decodes it from here.
             _LOGGER.debug(
-                "Setting usercode on %s slot %s (pin=%s, source=%s)",
+                "Setting usercode on %s slot %s (pin=%s)",
                 provider.lock.entity_id,
                 slot,
                 provider.mask_pin(pin, slot),
-                "sync",
             )
         try:
             if pin is None and slot in self.releasing:
@@ -408,9 +406,7 @@ class ProviderPort:
                     raise LockError(
                         ErrorKind.VALUE_REFUSED, sent=False, message=str(duplicate)
                     ) from duplicate
-                await provider.async_set_usercode(
-                    slot, pin, self.name_for(slot), source="sync"
-                )
+                await provider.async_set_usercode(slot, pin, self.name_for(slot))
         except LockCodeManagerProviderError as err:
             if (error := lock_error(err, clearing=pin is None)) is None:
                 raise
@@ -619,9 +615,6 @@ class ProviderPort:
 class _Coordinator:
     """What a provider asks of the old coordinator, answered for the core."""
 
-    last_update_success = True
-    last_exception: Exception | None = None
-
     def __init__(self, port: ProviderPort) -> None:
         """Answer for ``port``."""
         self._port = port
@@ -651,9 +644,6 @@ class _Coordinator:
             worker.wake()  # backing off: probe now instead of waiting it out
             return
         self._port.poll()
-
-    async def async_refresh(self) -> None:
-        """Do nothing: the worker's own first read comes first."""
 
     async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """
@@ -685,9 +675,6 @@ class _Coordinator:
             if raised:
                 raise raised[0] from None
             raise LockDisconnected(str(err) or "the lock did not answer") from err
-
-    def async_set_update_error(self, err: Exception) -> None:
-        """Do nothing: the worker counts its own failures."""
 
     def note_push_capability(self) -> None:
         """

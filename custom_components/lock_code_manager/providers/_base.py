@@ -13,7 +13,7 @@ import contextlib
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 import logging
-from typing import Any, ClassVar, Literal, NoReturn, Protocol, final, override
+from typing import Any, ClassVar, NoReturn, Protocol, final, override
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant, callback
@@ -62,7 +62,13 @@ from ..model.queries import (
     get_entry_config,
     slots_configured_on,
 )
-from ._util import foreign_slots, make_tagged_name, parse_full_tag, parse_short_tag
+from ._util import (
+    foreign_slots,
+    make_tagged_name,
+    parse_full_tag,
+    parse_short_tag,
+    parse_tag,
+)
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -118,9 +124,6 @@ class ProviderCoordinator(Protocol):
     requests become its reads.
     """
 
-    last_update_success: bool
-    last_exception: Exception | None
-
     def push_update(self, updates: dict[int, SlotCredential]) -> None:
         """Hand pushed slots on."""
 
@@ -137,14 +140,8 @@ class ProviderCoordinator(Protocol):
     async def async_request_refresh(self) -> None:
         """Read the lock again."""
 
-    async def async_refresh(self) -> None:
-        """Take the first read."""
-
     async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """Run ``call`` against the lock in its turn; return its result."""
-
-    def async_set_update_error(self, err: Exception) -> None:
-        """Note that the first read failed."""
 
     def note_push_capability(self) -> None:
         """Note that the provider has learned it can push."""
@@ -788,42 +785,8 @@ class BaseLock:
                 f"Refresh coordinator for {lock_entity_id}",
             )
         else:
+            # The worker takes the first read once setup returns.
             self.coordinator = coordinator
-            # Bounded, unlike the write path. Setup runs while Home
-            # Assistant holds this entry's lock, so a read that never
-            # returns parks it in `setup_in_progress` and takes reload and
-            # remove down with it -- the same trap `async_stop`'s bounded
-            # wait exists for, at the other end of the lifecycle.
-            #
-            # Cancelling a READ is safe: it mutates nothing, so there is no
-            # half-written sequence to leave behind. That is what makes a
-            # deadline right here and wrong around a write.
-            #
-            # Sized to a walk of every managed slot because that is what
-            # the first read is, and a second, smaller number would give up
-            # on a slow-but-working lock.
-            refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
-            try:
-                async with asyncio.timeout(refresh_budget):
-                    # Records a failure rather than raising it; reported
-                    # by the check below.
-                    await self.coordinator.async_refresh()
-            except TimeoutError:
-                # The coordinator already recorded the cancellation this
-                # timeout raised through it -- but it recorded a bare
-                # CancelledError, which formats as the empty string and
-                # would leave the report below saying nothing at all.
-                self.coordinator.async_set_update_error(
-                    TimeoutError(f"no answer within {refresh_budget:.0f}s")
-                )
-
-            if not self.coordinator.last_update_success:
-                LOGGER.info(
-                    "Failed to fetch initial data for lock %s: %s. "
-                    "Entities will be created but unavailable until lock is ready.",
-                    lock_entity_id,
-                    self.coordinator.last_exception,
-                )
 
             if self.supports_push:
                 if (
@@ -1244,7 +1207,6 @@ class BaseLock:
         code_slot: int,
         usercode: str,
         name: str | None = None,
-        source: Literal["sync", "direct"] = "direct",
     ) -> WriteResult:
         """
         Set a usercode on a code slot via the User->Credential primitives.
@@ -1260,14 +1222,13 @@ class BaseLock:
         pin = self._require_readable_pin(credential)
         if not self.supports_native_users:
             return await self.async_set_credential(
-                code_slot, credential, pin, name=name, source=source
+                code_slot, credential, pin, name=name
             )
         return await self._set_credential(
             user_from_slot(code_slot, state, name),
             credential,
             pin,
             name=name,
-            source=source,
         )
 
     async def async_clear_usercode(self, code_slot: int) -> bool:
@@ -1466,6 +1427,21 @@ class BaseLock:
         """
         return _keeps_user_records(await self._get_cached_capabilities())
 
+    @final
+    def _slot_from_seam_user(self, user: User) -> int:
+        """
+        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
+
+        The base seam always passes a tagged name; this helper centralizes
+        the fallback so a provider can treat the resolved slot as a single
+        value.
+        """
+        if user.name:
+            slot, _ = parse_tag(user.name)
+            if slot is not None:
+                return slot
+        return user.user_id
+
     async def _build_tagged_user_name(
         self, slot: int, display: str | None
     ) -> str | None:
@@ -1571,14 +1547,16 @@ class BaseLock:
             return None
         return slot
 
-    async def _assert_credential_type_supported(self, credential: Credential) -> None:
+    async def _assert_credential_type_supported(
+        self, credential: Credential | CredentialRef
+    ) -> None:
         """
         Raise ``CodeRejectedError`` if the lock doesn't advertise the type.
 
-        Capability-driven defense for ``async_set_credential``. Picks up
-        new types (e.g. PASSWORD) automatically once a lock starts
-        advertising them in ``credential_types`` -- no provider-side
-        change needed.
+        Capability-driven defense for both the write and the delete path.
+        Picks up new types (e.g. PASSWORD) automatically once a lock starts
+        advertising them in ``credential_types`` -- no provider-side change
+        needed.
         """
         caps = await self._get_cached_capabilities()
         if credential.type not in caps.credential_types:
@@ -1628,20 +1606,6 @@ class BaseLock:
             f"stale or incomplete interview makes it under-report its capacity."
         )
 
-    async def _assert_credential_ref_supported(self, ref: CredentialRef) -> None:
-        """
-        Raise ``CodeRejectedError`` if the lock doesn't advertise the type.
-
-        Delete-path sibling of ``_assert_credential_type_supported``.
-        """
-        caps = await self._get_cached_capabilities()
-        if ref.type not in caps.credential_types:
-            raise CodeRejectedError(
-                code_slot=ref.slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"unsupported credential type: {ref.type}",
-            )
-
     def _require_readable_pin(self, credential: Credential) -> str:
         """
         Return the credential's readable PIN, or raise ``CodeRejectedError``.
@@ -1677,7 +1641,6 @@ class BaseLock:
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Run the create-on-first user lifecycle around a credential write.
@@ -1721,7 +1684,7 @@ class BaseLock:
             rollback_user_id = None
         try:
             return await self.async_set_credential(
-                credential_user_id, credential, pin, name=name, source=source
+                credential_user_id, credential, pin, name=name
             )
         except Exception:
             # Not on cancellation: the rollback is one more exchange with a
@@ -1755,7 +1718,7 @@ class BaseLock:
         helper is now a thin guard around ``async_delete_credential``.
         Returns True if changed.
         """
-        await self._assert_credential_ref_supported(ref)
+        await self._assert_credential_type_supported(ref)
         return await self.async_delete_credential(ref)
 
     async def async_release_managed_slot(
@@ -1839,7 +1802,6 @@ class BaseLock:
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set or update one credential, returning the write outcome.

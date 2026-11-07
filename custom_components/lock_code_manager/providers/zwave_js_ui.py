@@ -5,7 +5,7 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass, field
 import json
 import re
-from typing import Any, Literal, override
+from typing import Any, override
 from uuid import uuid4
 
 from zwave_js_server.const import CommandClass, SupervisionStatus
@@ -1349,7 +1349,6 @@ class ZWaveJSUILock(BaseMqttLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a code slot.

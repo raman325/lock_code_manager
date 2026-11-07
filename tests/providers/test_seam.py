@@ -2,7 +2,6 @@
 
 from collections.abc import Collection
 from dataclasses import replace
-from typing import Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -106,7 +105,6 @@ class _NativeStubLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         self.calls.append(("set_credential", user_id, credential.slot))
         self.last_set_credential = {
@@ -114,7 +112,6 @@ class _NativeStubLock(BaseLock):
             "slot": credential.slot,
             "pin": pin,
             "name": name,
-            "source": source,
         }
         self._users[user_id].credentials = [credential]
         return WriteResult.CONFIRMED
@@ -167,7 +164,6 @@ class _DegenerateStubLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         self.calls.append(("set_credential", user_id, credential.slot))
         self._slots[credential.slot] = credential.state
@@ -200,7 +196,6 @@ async def test_primitive_defaults_raise(hass: HomeAssistant) -> None:
             credential_from_slot(1, SlotCredential.known("1")),
             "1",
             name=None,
-            source="direct",
         )
     with pytest.raises(ProviderNotImplementedError):
         await lock.async_delete_credential(CredentialRef(1, CredentialType.PIN, 1))
@@ -647,14 +642,14 @@ async def test_assert_credential_type_supported_rejects_unadvertised(
     assert "unsupported credential type" in str(exc_info.value)
 
 
-async def test_assert_credential_ref_supported_rejects_unadvertised(
+async def test_assert_credential_type_supported_rejects_unadvertised_ref(
     hass: HomeAssistant,
 ) -> None:
     """A ref of a type the lock doesn't advertise → CodeRejectedError."""
     lock = _make_lock(hass, _NativeStubLock, "seam_assert_ref_reject")
     ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=7)
     with pytest.raises(CodeRejectedError) as exc_info:
-        await lock._assert_credential_ref_supported(ref)
+        await lock._assert_credential_type_supported(ref)
     assert exc_info.value.code_slot == 7
     assert "unsupported credential type" in str(exc_info.value)
 
@@ -669,9 +664,7 @@ async def test_set_credential_rejects_unsupported_credential_type(
     )
     user = User(user_id=2, credentials=[rfid_credential])
     with pytest.raises(CodeRejectedError):
-        await lock._set_credential(
-            user, rfid_credential, "AABB", name=None, source="direct"
-        )
+        await lock._set_credential(user, rfid_credential, "AABB", name=None)
     # No primitive was reached because the assertion fired first.
     assert lock.calls == []
 
@@ -937,16 +930,15 @@ async def test_internal_roundtrip_set_get_clear(hass: HomeAssistant) -> None:
     }
 
 
-async def test_set_usercode_threads_name_and_source(hass: HomeAssistant) -> None:
-    """name and source flow through the orchestration into _set_credential."""
+async def test_set_usercode_threads_name(hass: HomeAssistant) -> None:
+    """name flows through the orchestration into _set_credential."""
     lock = _make_lock(hass, _NativeStubLock, "seam_thread_kwargs")
-    await lock.async_set_usercode(2, "2468", name=None, source="sync")
+    await lock.async_set_usercode(2, "2468", name=None)
     assert lock.last_set_credential == {
         "user_id": 2,
         "slot": 2,
         "pin": "2468",
         "name": None,
-        "source": "sync",
     }
 
 
@@ -960,7 +952,6 @@ class _CredentialWriteFailsLock(_NativeStubLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         self.calls.append(("set_credential", user_id, credential.slot))
         raise CodeRejectedError(
