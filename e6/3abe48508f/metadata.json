@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "e63abe48508f",
+  "strategy": "manual-commit",
+  "branch": "refactor/audit-cleanup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "tests/providers/test_seam.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e6/3abe48508f/0/metadata.json",
+      "transcript": "/e6/3abe48508f/0/full.jsonl",
+      "compact_transcript": "/e6/3abe48508f/0/transcript.jsonl",
+      "content_hash": "/e6/3abe48508f/0/content_hash.txt",
+      "prompt": "/e6/3abe48508f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 8,
+    "cache_creation_tokens": 12159,
+    "cache_read_tokens": 721879,
+    "output_tokens": 1864,
+    "api_call_count": 3,
+    "subagent_tokens": {
+      "input_tokens": 148,
+      "cache_creation_tokens": 323955,
+      "cache_read_tokens": 18313743,
+      "output_tokens": 33999,
+      "api_call_count": 72
+    }
+  }
+}
