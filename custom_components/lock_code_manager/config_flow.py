@@ -185,7 +185,6 @@ def _check_common_slots(
     hass: HomeAssistant,
     locks: Iterable[str],
     slots_list: Iterable[int | str],
-    config_entry: ConfigEntry | None = None,
 ) -> tuple[dict, dict]:
     """Check if slots are already configured."""
     try:
@@ -198,7 +197,6 @@ def _check_common_slots(
                     config.slot_numbers & {int(s) for s in slots_list}
                 )
             )
-            and not (config_entry and config_entry == entry)
         )
     except StopIteration:
         return {}, {}
@@ -608,6 +606,51 @@ class _AllocatesInProgress:
         return submission, task.result()
 
 
+async def _async_check_lock_change(
+    hass: HomeAssistant, config_entry: ConfigEntry, locks: list[str]
+) -> tuple[dict[str, str], dict[str, Any], dict[str, str] | None]:
+    """
+    Check a new lock list for an existing entry, as reauth and options both submit.
+
+    Returns the errors and their placeholders, and, when nothing refused, the
+    ``cannot_report`` warning for added locks that cannot report their codes.
+    Only added locks are checked against other entries: an overlap the entry
+    already carries on a lock it holds must not refuse every later edit of
+    its locks.
+    """
+    config = get_entry_config(config_entry)
+    slots = config.slot_numbers
+    added = [lock for lock in locks if lock not in config.locks]
+
+    errors, placeholders = _check_unclaimed_mqtt_locks(hass, locks, config.locks)
+    if not errors:
+        # Another entry may already manage some of them on an added lock.
+        errors, placeholders = _check_common_slots(hass, added, slots)
+    if not errors:
+        # Or have a user with one of this entry's PINs on it.
+        errors, placeholders = _check_pins_on_added_locks(
+            hass, config.users.values(), added
+        )
+    if not errors and slots:
+        # The numbers the users hold are what every lock has to be able to
+        # hold, a swapped-in one included. Without this a lock too small for
+        # them is accepted and refused at write time, slot by slot, as a
+        # connectivity warning.
+        try:
+            await async_check_slot_capacity(hass, config_entry, locks, slots)
+        except SlotAllocationError as err:
+            errors, placeholders = {"base": err.translation_key}, err.placeholders
+    if errors or not (added and slots):
+        return errors, placeholders, None
+    # Or someone may have set codes in them at the keypad.
+    errors, placeholders = await _async_check_existing_codes(
+        hass, config_entry, added, slots
+    )
+    if errors:
+        return errors, placeholders, None
+    return {}, {}, _cannot_report(hass, added, slots)
+
+
 class LockCodeManagerFlowHandler(
     _AllocatesInProgress, config_entries.ConfigFlow, domain=DOMAIN
 ):
@@ -902,56 +945,20 @@ class LockCodeManagerFlowHandler(
             # selector from the entry's current config either way.
             user_input = {CONF_LOCKS: list(get_entry_config(config_entry).locks)}
         else:
-            entry_config = get_entry_config(config_entry)
-            existing_slots = entry_config.slot_numbers
-            additional_errors, additional_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass, user_input[CONF_LOCKS], entry_config.locks
+            (
+                additional_errors,
+                additional_placeholders,
+                warning,
+            ) = await _async_check_lock_change(
+                self.hass, config_entry, user_input[CONF_LOCKS]
             )
-            if not additional_errors:
-                additional_errors, additional_placeholders = _check_common_slots(
-                    self.hass,
-                    user_input[CONF_LOCKS],
-                    existing_slots,
-                    config_entry,
+            if warning:
+                self._locks = user_input[CONF_LOCKS]
+                return self.async_show_form(
+                    step_id="cannot_report",
+                    description_placeholders=warning,
+                    last_step=True,
                 )
-            added = [
-                lock_entity_id
-                for lock_entity_id in user_input[CONF_LOCKS]
-                if lock_entity_id not in entry_config.locks
-            ]
-            if not additional_errors:
-                additional_errors, additional_placeholders = _check_pins_on_added_locks(
-                    self.hass, entry_config.users.values(), added
-                )
-            if not additional_errors:
-                # Reauth is where a lock gets swapped, so it is also where an
-                # already-valid slot set can become too large for the new lock.
-                try:
-                    await async_check_slot_capacity(
-                        self.hass, config_entry, user_input[CONF_LOCKS], existing_slots
-                    )
-                except SlotAllocationError as err:
-                    additional_errors = {"base": err.translation_key}
-                    additional_placeholders = err.placeholders
-            # A lock swapped in gets the entry's numbers as the options flow
-            # adds one: checked for keypad codes in them, and said of when it
-            # cannot report any.
-            if not additional_errors and added and existing_slots:
-                (
-                    additional_errors,
-                    additional_placeholders,
-                ) = await _async_check_existing_codes(
-                    self.hass, config_entry, added, existing_slots
-                )
-                if not additional_errors and (
-                    warning := _cannot_report(self.hass, added, existing_slots)
-                ):
-                    self._locks = user_input[CONF_LOCKS]
-                    return self.async_show_form(
-                        step_id="cannot_report",
-                        description_placeholders=warning,
-                        last_step=True,
-                    )
             errors.update(additional_errors)
             description_placeholders.update(additional_placeholders)
             if not errors:
@@ -1025,58 +1032,22 @@ class LockCodeManagerOptionsFlow(config_entries.OptionsFlow):
         config = get_entry_config(self.config_entry)
 
         if user_input:
-            errors, description_placeholders = _check_unclaimed_mqtt_locks(
-                self.hass, user_input[CONF_LOCKS], config.locks
+            (
+                errors,
+                description_placeholders,
+                warning,
+            ) = await _async_check_lock_change(
+                self.hass, self.config_entry, user_input[CONF_LOCKS]
             )
-            # A lock added here arrives with numbers issued without looking
-            # at it. Only added locks: an overlap the entry already carries on
-            # a lock it holds must not refuse every later edit of its locks.
-            added = [
-                lock_entity_id
-                for lock_entity_id in user_input[CONF_LOCKS]
-                if lock_entity_id not in config.locks
-            ]
-            if not errors:
-                # Another entry may already manage some of them on it.
-                errors, description_placeholders = _check_common_slots(
-                    self.hass, added, config.slot_numbers
+            if warning:
+                # Home Assistant shows no description on an options flow's
+                # result: a step of its own instead.
+                self._locks = user_input[CONF_LOCKS]
+                return self.async_show_form(
+                    step_id="cannot_report",
+                    description_placeholders=warning,
+                    last_step=True,
                 )
-            if not errors:
-                # Or have a user with one of this entry's PINs on it.
-                errors, description_placeholders = _check_pins_on_added_locks(
-                    self.hass, config.users.values(), added
-                )
-            if not errors and config.slot_numbers:
-                # The users are not on this form, but the numbers they hold
-                # are what a new lock has to be able to hold. Without this a
-                # lock too small for them is accepted here and refused at
-                # write time, slot by slot, as a connectivity warning.
-                try:
-                    await async_check_slot_capacity(
-                        self.hass,
-                        self.config_entry,
-                        user_input[CONF_LOCKS],
-                        config.slot_numbers,
-                    )
-                except SlotAllocationError as err:
-                    errors = {"base": err.translation_key}
-                    description_placeholders = err.placeholders
-            if not errors and added and config.slot_numbers:
-                # Or someone may have set codes in them at the keypad.
-                errors, description_placeholders = await _async_check_existing_codes(
-                    self.hass, self.config_entry, added, config.slot_numbers
-                )
-                if not errors and (
-                    warning := _cannot_report(self.hass, added, config.slot_numbers)
-                ):
-                    # Home Assistant shows no description on an options
-                    # flow's result: a step of its own instead.
-                    self._locks = user_input[CONF_LOCKS]
-                    return self.async_show_form(
-                        step_id="cannot_report",
-                        description_placeholders=warning,
-                        last_step=True,
-                    )
             if not errors:
                 return await self._async_save(user_input[CONF_LOCKS])
 
