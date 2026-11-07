@@ -20,7 +20,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_CONDITION, CONF_ENABLED, CONF_NAME, CONF_PIN
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.data_entry_flow import UnknownFlow
+from homeassistant.data_entry_flow import AbortFlow, UnknownFlow
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -28,6 +28,7 @@ from homeassistant.helpers import (
     selector as sel,
 )
 from homeassistant.util import slugify
+from homeassistant.util.hass_dict import HassKey
 
 from . import async_release_locks
 from .const import (
@@ -71,6 +72,26 @@ from .model.slot_assignment import CONF_SLOT_ASSIGNMENT, SlotAssignment
 from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
 _LOGGER = logging.getLogger(__name__)
+
+# The request each setup flow handed its finished allocation to, by flow id,
+# so a later request can tell a flow still being saved from one whose save
+# failed and left it behind.
+_HANDED_OVER: HassKey[dict[str, asyncio.Task[Any]]] = HassKey(
+    f"{DOMAIN}_allocation_handed_over"
+)
+
+
+def _save_failed(hass: HomeAssistant, flow_id: str) -> bool:
+    """
+    Return whether ``flow_id`` handed its allocation over and the save is over.
+
+    A flow is removed once its entry is created, so one still in progress
+    whose handing-over request has ended -- or is the very request asking --
+    failed to save. Another request still running is saving it now.
+    """
+    task = hass.data.get(_HANDED_OVER, {}).get(flow_id)
+    return task is not None and (task.done() or task is asyncio.current_task())
+
 
 # Stripped where it enters rather than where it is read: every consumer
 # compares a submitted code stripped, so a PIN stored with padding is one
@@ -536,6 +557,7 @@ class _AllocatesInProgress:
 
     # Provided by the FlowHandler this is mixed into.
     hass: HomeAssistant
+    flow_id: str
     async_show_progress: Callable[..., Any]
     async_show_progress_done: Callable[..., Any]
     async_update_progress: Callable[[float], None]
@@ -599,13 +621,25 @@ class _AllocatesInProgress:
         """
         task, submission = self._allocation_task, self._allocation_submission
         if task is None or submission is None:
+            if _save_failed(self.hass, self.flow_id):
+                # The request that took it raised after taking it, building
+                # or saving the entry. Nothing is left to take, so the flow
+                # ends here and the user starts setup again.
+                raise AbortFlow("unknown")
             raise UnknownFlow(
                 "Slot numbers for this step were already allocated by another "
                 "request for the same flow"
             )
         self._allocation_task = None
         self._allocation_submission = None
+        if (handing_over := asyncio.current_task()) is not None:
+            self.hass.data.setdefault(_HANDED_OVER, {})[self.flow_id] = handing_over
         return submission, task.result()
+
+    @callback
+    def async_remove(self) -> None:
+        """Forget the handed-over allocation along with the flow."""
+        self.hass.data.get(_HANDED_OVER, {}).pop(self.flow_id, None)
 
 
 class LockCodeManagerFlowHandler(
@@ -650,7 +684,17 @@ class LockCodeManagerFlowHandler(
             )
             if not errors:
                 self.title = user_input.pop(CONF_NAME)
-                await self.async_set_unique_id(slugify(self.title))
+                unique_id = slugify(self.title)
+                # A setup of the same name whose save failed holds the unique
+                # ID until Home Assistant restarts. It can never finish, so it
+                # gives way rather than refusing this one as already in
+                # progress.
+                for flow in self._async_in_progress(include_uninitialized=True):
+                    if flow["context"].get("unique_id") == unique_id and _save_failed(
+                        self.hass, flow["flow_id"]
+                    ):
+                        self.hass.config_entries.flow.async_abort(flow["flow_id"])
+                await self.async_set_unique_id(unique_id)
                 self._abort_if_unique_id_configured()
                 self.data = user_input
                 return await self.async_step_choose_path()

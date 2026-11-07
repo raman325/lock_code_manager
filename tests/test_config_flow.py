@@ -3778,10 +3778,6 @@ async def test_adding_several_users_refuses_when_the_lock_cannot_be_read(
     assert len(entry.subentries) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#1647: a failed save after slot allocation strands the setup flow",
-)
 async def test_a_failed_save_after_allocation_lets_the_user_start_over(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
@@ -3811,6 +3807,32 @@ async def test_a_failed_save_after_allocation_lets_the_user_start_over(
 
     assert result.get("reason") != "already_in_progress"
     assert result["type"] == "menu"
+
+
+async def test_retrying_a_setup_whose_save_failed_ends_it(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A retry of the flow left behind by a failed save ends it, rather than a 404."""
+    flow_id = await _start_yaml_config_flow(hass)
+
+    with (
+        _holding(),
+        patch.object(
+            ConfigEntries, "async_add", side_effect=HomeAssistantError("disk full")
+        ),
+        pytest.raises(HomeAssistantError),
+    ):
+        await async_configure_flow(
+            hass,
+            flow_id,
+            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        )
+
+    result = await hass.config_entries.flow.async_configure(flow_id)
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "unknown"
+    assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)
 
 
 class TestFlowsOnAFailedEntry:
