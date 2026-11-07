@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "1716b4bfabb6",
+  "strategy": "manual-commit",
+  "branch": "refactor/audit-cleanup",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "custom_components/lock_code_manager/ha/adapter.py",
+    "custom_components/lock_code_manager/providers/_base.py",
+    "custom_components/lock_code_manager/providers/akuvox.py",
+    "custom_components/lock_code_manager/providers/matter.py",
+    "custom_components/lock_code_manager/providers/schlage.py",
+    "custom_components/lock_code_manager/providers/virtual.py",
+    "custom_components/lock_code_manager/providers/zha.py",
+    "custom_components/lock_code_manager/providers/zigbee2mqtt.py",
+    "custom_components/lock_code_manager/providers/zwave_js.py",
+    "custom_components/lock_code_manager/providers/zwave_js_ui.py",
+    "tests/common.py",
+    "tests/properties/test_pin_masking.py",
+    "tests/providers/akuvox/test_e2e.py",
+    "tests/providers/akuvox/test_provider.py",
+    "tests/providers/matter/test_provider.py",
+    "tests/providers/schlage/test_e2e.py",
+    "tests/providers/schlage/test_provider.py",
+    "tests/providers/test_seam.py",
+    "tests/providers/virtual/test_e2e.py",
+    "tests/providers/virtual/test_provider.py",
+    "tests/providers/zha/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_provider.py",
+    "tests/providers/zigbee2mqtt/test_topic_resolution.py",
+    "tests/providers/zwave_js/test_provider.py",
+    "tests/providers/zwave_js_ui/test_provider.py",
+    "tests/test_services.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/17/16b4bfabb6/0/metadata.json",
+      "transcript": "/17/16b4bfabb6/0/full.jsonl",
+      "compact_transcript": "/17/16b4bfabb6/0/transcript.jsonl",
+      "content_hash": "/17/16b4bfabb6/0/content_hash.txt",
+      "prompt": "/17/16b4bfabb6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 1952,
+    "cache_read_tokens": 437606,
+    "output_tokens": 2478,
+    "api_call_count": 2
+  }
+}
