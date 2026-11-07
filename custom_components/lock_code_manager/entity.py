@@ -82,7 +82,6 @@ class BaseLockCodeManagerEntity(Entity):
         key: str,
     ) -> None:
         """Initialize base entity."""
-        self._hass = hass
         self.config_entry = config_entry
         self.entry_id = self.base_unique_id = config_entry.entry_id
         # The entry's locks, taken when the entity is added (see
