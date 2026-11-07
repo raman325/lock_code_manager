@@ -1095,16 +1095,26 @@ class TestTransientWriteFailure:
         assert _worker(hass, lcm_config_entry).reachable
 
 
-class TestOpenBugs:
-    """Open ZHA bugs, each pinned by a strict xfail."""
+class TestRejectionReason:
+    """A refused set says why, in the Door Lock cluster's own words."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="open: the set response's statuses 2 and 3 are named as ZCL statuses",
-    )
+    @pytest.fixture
+    def door_lock(
+        self, door_lock: DoorLockStandIn, request: pytest.FixtureRequest
+    ) -> DoorLockStandIn:
+        """Refuse slot 1's set before the entry's first sync writes it."""
+        door_lock.answers["set_pin_code"] = _for_slot_1(
+            lock_frame(
+                door_lock.cluster,
+                "set_pin_code_response",
+                status=request.node.callspec.params["status"],
+            )
+        )
+        return door_lock
+
     @pytest.mark.parametrize(
         ("status", "meaning"),
-        [(2, "memory full"), (3, "duplicate")],
+        [(2, "memory full"), (3, "duplicate code")],
         ids=["memory_full", "duplicate"],
     )
     async def test_a_rejection_names_what_the_lock_said(
@@ -1115,16 +1125,25 @@ class TestOpenBugs:
         status: int,
         meaning: str,
     ) -> None:
-        """The disabled-slot repair says why the Door Lock cluster refused the code."""
-        door_lock.answers["set_pin_code"] = _for_slot_1(
-            lock_frame(door_lock.cluster, "set_pin_code_response", status=status)
-        )
+        """
+        The disabled-slot repair says why the Door Lock cluster refused the code.
 
+        The response's status is the cluster's own code, which zigpy types
+        as a foundation status: 2 read as MAC_PAN_ACCESS_DENIED and 3 as
+        undefined, sending the user after a network fault that wasn't there.
+        """
         await _run_ticks(hass)
 
         issue = _slot_1_disabled_repair(hass, lcm_config_entry)
         assert issue is not None
-        assert meaning in (await _rendered_repair(hass, issue)).lower()
+        text = (await _rendered_repair(hass, issue)).lower()
+        assert meaning in text
+        assert "mac_pan" not in text
+        assert "undefined" not in text
+
+
+class TestOpenBugs:
+    """Open ZHA bugs, each pinned by a strict xfail."""
 
     async def test_an_unconfirmed_clear_is_not_in_sync(
         self,
