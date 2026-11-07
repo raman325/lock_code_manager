@@ -86,7 +86,6 @@ def _set_credential(lock: ZWaveJSUILock, slot: int = 1) -> Awaitable[WriteResult
         credential_from_slot(slot, SlotCredential.known("1234")),
         "1234",
         name=None,
-        source="direct",
     )
 
 

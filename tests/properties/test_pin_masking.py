@@ -80,7 +80,7 @@ def test_empty_pin_is_not_masked_into_a_token(slot: int, instance_id: str) -> No
 def test_round_trip_recovers_the_pin(pin: str, slot: int, instance_id: str) -> None:
     """A masked PIN embedded in log text is recovered exactly by the table."""
     token = mask_pin(pin, slot, instance_id)
-    text = f"Setting usercode on lock.front slot {slot} (pin={token}, source=sync)"
+    text = f"Setting usercode on lock.front slot {slot} (pin={token})"
 
     deobfuscated, summary = deobfuscate_pins(text, {token: pin})
 

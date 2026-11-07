@@ -3,7 +3,7 @@
 from collections.abc import Collection
 from dataclasses import dataclass, field
 import logging
-from typing import Literal, TypedDict, override
+from typing import TypedDict, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.storage import Store
@@ -131,7 +131,6 @@ class VirtualLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a code slot.

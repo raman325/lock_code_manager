@@ -5,7 +5,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from functools import partial
 import json
-from typing import Any, ClassVar, Literal, NoReturn, override
+from typing import Any, ClassVar, NoReturn, override
 
 from homeassistant.components.mqtt import (
     async_publish,
@@ -221,12 +221,6 @@ class Zigbee2MQTTLock(BaseMqttLock):
     @override
     def supports_push(self) -> bool:
         """Return whether this lock supports push-based updates."""
-        return True
-
-    @property
-    @override
-    def supports_code_slot_events(self) -> bool:
-        """Return whether this lock supports code slot events."""
         return True
 
     @property
@@ -615,7 +609,6 @@ class Zigbee2MQTTLock(BaseMqttLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a code slot.

@@ -20,7 +20,7 @@ service returns masked PINs (``****``), so occupied slots report
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Literal, override
+from typing import override
 
 from homeassistant.const import STATE_UNAVAILABLE
 
@@ -215,7 +215,6 @@ class SchlageLock(BaseLock):
         pin: str,
         *,
         name: str | None,
-        source: Literal["sync", "direct"],
     ) -> WriteResult:
         """
         Set a Personal Identification Number credential on a slot.

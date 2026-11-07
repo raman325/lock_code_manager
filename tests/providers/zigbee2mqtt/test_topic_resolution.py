@@ -143,9 +143,7 @@ async def test_unresolvable_topic_never_publishes(
 
     credential = credential_from_slot(1, SlotCredential.known("1234"))
     with pytest.raises(LockDisconnected):
-        await lock.async_set_credential(
-            1, credential, "1234", name=None, source="direct"
-        )
+        await lock.async_set_credential(1, credential, "1234", name=None)
     with pytest.raises(LockDisconnected):
         await lock.async_get_users()
 
