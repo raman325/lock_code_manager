@@ -62,7 +62,13 @@ from ..model.queries import (
     get_entry_config,
     slots_configured_on,
 )
-from ._util import foreign_slots, make_tagged_name, parse_full_tag, parse_short_tag
+from ._util import (
+    foreign_slots,
+    make_tagged_name,
+    parse_full_tag,
+    parse_short_tag,
+    parse_tag,
+)
 from .const import LOGGER
 
 _LOGGER = logging.getLogger(__name__)
@@ -1421,6 +1427,21 @@ class BaseLock:
         """
         return _keeps_user_records(await self._get_cached_capabilities())
 
+    @final
+    def _slot_from_seam_user(self, user: User) -> int:
+        """
+        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
+
+        The base seam always passes a tagged name; this helper centralizes
+        the fallback so a provider can treat the resolved slot as a single
+        value.
+        """
+        if user.name:
+            slot, _ = parse_tag(user.name)
+            if slot is not None:
+                return slot
+        return user.user_id
+
     async def _build_tagged_user_name(
         self, slot: int, display: str | None
     ) -> str | None:
@@ -1526,14 +1547,16 @@ class BaseLock:
             return None
         return slot
 
-    async def _assert_credential_type_supported(self, credential: Credential) -> None:
+    async def _assert_credential_type_supported(
+        self, credential: Credential | CredentialRef
+    ) -> None:
         """
         Raise ``CodeRejectedError`` if the lock doesn't advertise the type.
 
-        Capability-driven defense for ``async_set_credential``. Picks up
-        new types (e.g. PASSWORD) automatically once a lock starts
-        advertising them in ``credential_types`` -- no provider-side
-        change needed.
+        Capability-driven defense for both the write and the delete path.
+        Picks up new types (e.g. PASSWORD) automatically once a lock starts
+        advertising them in ``credential_types`` -- no provider-side change
+        needed.
         """
         caps = await self._get_cached_capabilities()
         if credential.type not in caps.credential_types:
@@ -1582,20 +1605,6 @@ class BaseLock:
             f"lock really does have more slots than that, re-interview it -- a "
             f"stale or incomplete interview makes it under-report its capacity."
         )
-
-    async def _assert_credential_ref_supported(self, ref: CredentialRef) -> None:
-        """
-        Raise ``CodeRejectedError`` if the lock doesn't advertise the type.
-
-        Delete-path sibling of ``_assert_credential_type_supported``.
-        """
-        caps = await self._get_cached_capabilities()
-        if ref.type not in caps.credential_types:
-            raise CodeRejectedError(
-                code_slot=ref.slot,
-                lock_entity_id=self.lock.entity_id,
-                reason=f"unsupported credential type: {ref.type}",
-            )
 
     def _require_readable_pin(self, credential: Credential) -> str:
         """
@@ -1709,7 +1718,7 @@ class BaseLock:
         helper is now a thin guard around ``async_delete_credential``.
         Returns True if changed.
         """
-        await self._assert_credential_ref_supported(ref)
+        await self._assert_credential_type_supported(ref)
         return await self.async_delete_credential(ref)
 
     async def async_release_managed_slot(

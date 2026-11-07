@@ -1092,20 +1092,6 @@ class MatterLock(BaseLock):
         assert last_matter_error is not None
         raise last_matter_error
 
-    def _slot_from_seam_user(self, user: User) -> int:
-        """
-        Return the LCM slot encoded in ``user.name`` or fall back to ``user_id``.
-
-        The base seam always passes a tagged name; this helper centralizes
-        the fallback so the rest of the provider can treat the resolved
-        slot as a single value.
-        """
-        if user.name:
-            slot, _ = parse_tag(user.name)
-            if slot is not None:
-                return slot
-        return user.user_id
-
     async def _find_user_index_for_slot(self, slot: int) -> tuple[int, bool] | None:
         """
         Return the ``user_index`` of the user LCM owns for ``slot``, if any.

@@ -225,12 +225,6 @@ class Zigbee2MQTTLock(BaseMqttLock):
 
     @property
     @override
-    def supports_code_slot_events(self) -> bool:
-        """Return whether this lock supports code slot events."""
-        return True
-
-    @property
-    @override
     def reported_credential_types(self) -> frozenset[CredentialType]:
         """Return every kind an operation event's source can name."""
         return _Z2M_REPORTED_CREDENTIAL_TYPES

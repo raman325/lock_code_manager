@@ -642,14 +642,14 @@ async def test_assert_credential_type_supported_rejects_unadvertised(
     assert "unsupported credential type" in str(exc_info.value)
 
 
-async def test_assert_credential_ref_supported_rejects_unadvertised(
+async def test_assert_credential_type_supported_rejects_unadvertised_ref(
     hass: HomeAssistant,
 ) -> None:
     """A ref of a type the lock doesn't advertise → CodeRejectedError."""
     lock = _make_lock(hass, _NativeStubLock, "seam_assert_ref_reject")
     ref = CredentialRef(user_id=1, type=CredentialType.RFID, slot=7)
     with pytest.raises(CodeRejectedError) as exc_info:
-        await lock._assert_credential_ref_supported(ref)
+        await lock._assert_credential_type_supported(ref)
     assert exc_info.value.code_slot == 7
     assert "unsupported credential type" in str(exc_info.value)
 
