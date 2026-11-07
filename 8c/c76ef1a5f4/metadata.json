@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "8cc76ef1a5f4",
+  "strategy": "manual-commit",
+  "branch": "fix/reauth-overlap-and-name-matching",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_open_bugs.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8c/c76ef1a5f4/0/metadata.json",
+      "transcript": "/8c/c76ef1a5f4/0/full.jsonl",
+      "compact_transcript": "/8c/c76ef1a5f4/0/transcript.jsonl",
+      "content_hash": "/8c/c76ef1a5f4/0/content_hash.txt",
+      "prompt": "/8c/c76ef1a5f4/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 126,
+    "cache_creation_tokens": 85439,
+    "cache_read_tokens": 9266274,
+    "output_tokens": 34084,
+    "api_call_count": 54,
+    "subagent_tokens": {
+      "input_tokens": 256,
+      "cache_creation_tokens": 452157,
+      "cache_read_tokens": 14868987,
+      "output_tokens": 54298,
+      "api_call_count": 128
+    }
+  }
+}
