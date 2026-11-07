@@ -615,9 +615,6 @@ class ProviderPort:
 class _Coordinator:
     """What a provider asks of the old coordinator, answered for the core."""
 
-    last_update_success = True
-    last_exception: Exception | None = None
-
     def __init__(self, port: ProviderPort) -> None:
         """Answer for ``port``."""
         self._port = port
@@ -647,9 +644,6 @@ class _Coordinator:
             worker.wake()  # backing off: probe now instead of waiting it out
             return
         self._port.poll()
-
-    async def async_refresh(self) -> None:
-        """Do nothing: the worker's own first read comes first."""
 
     async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """
@@ -681,9 +675,6 @@ class _Coordinator:
             if raised:
                 raise raised[0] from None
             raise LockDisconnected(str(err) or "the lock did not answer") from err
-
-    def async_set_update_error(self, err: Exception) -> None:
-        """Do nothing: the worker counts its own failures."""
 
     def note_push_capability(self) -> None:
         """

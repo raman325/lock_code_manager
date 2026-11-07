@@ -118,9 +118,6 @@ class ProviderCoordinator(Protocol):
     requests become its reads.
     """
 
-    last_update_success: bool
-    last_exception: Exception | None
-
     def push_update(self, updates: dict[int, SlotCredential]) -> None:
         """Hand pushed slots on."""
 
@@ -137,14 +134,8 @@ class ProviderCoordinator(Protocol):
     async def async_request_refresh(self) -> None:
         """Read the lock again."""
 
-    async def async_refresh(self) -> None:
-        """Take the first read."""
-
     async def async_in_turn[T](self, call: Callable[[], Awaitable[T]]) -> T:
         """Run ``call`` against the lock in its turn; return its result."""
-
-    def async_set_update_error(self, err: Exception) -> None:
-        """Note that the first read failed."""
 
     def note_push_capability(self) -> None:
         """Note that the provider has learned it can push."""
@@ -788,42 +779,8 @@ class BaseLock:
                 f"Refresh coordinator for {lock_entity_id}",
             )
         else:
+            # The worker takes the first read once setup returns.
             self.coordinator = coordinator
-            # Bounded, unlike the write path. Setup runs while Home
-            # Assistant holds this entry's lock, so a read that never
-            # returns parks it in `setup_in_progress` and takes reload and
-            # remove down with it -- the same trap `async_stop`'s bounded
-            # wait exists for, at the other end of the lifecycle.
-            #
-            # Cancelling a READ is safe: it mutates nothing, so there is no
-            # half-written sequence to leave behind. That is what makes a
-            # deadline right here and wrong around a write.
-            #
-            # Sized to a walk of every managed slot because that is what
-            # the first read is, and a second, smaller number would give up
-            # on a slow-but-working lock.
-            refresh_budget = self._operation_budget(max(len(self.managed_slots), 1))
-            try:
-                async with asyncio.timeout(refresh_budget):
-                    # Records a failure rather than raising it; reported
-                    # by the check below.
-                    await self.coordinator.async_refresh()
-            except TimeoutError:
-                # The coordinator already recorded the cancellation this
-                # timeout raised through it -- but it recorded a bare
-                # CancelledError, which formats as the empty string and
-                # would leave the report below saying nothing at all.
-                self.coordinator.async_set_update_error(
-                    TimeoutError(f"no answer within {refresh_budget:.0f}s")
-                )
-
-            if not self.coordinator.last_update_success:
-                LOGGER.info(
-                    "Failed to fetch initial data for lock %s: %s. "
-                    "Entities will be created but unavailable until lock is ready.",
-                    lock_entity_id,
-                    self.coordinator.last_exception,
-                )
 
             if self.supports_push:
                 if (
