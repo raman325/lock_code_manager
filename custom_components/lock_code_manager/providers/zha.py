@@ -113,6 +113,19 @@ _TRANSIENT_DEFAULT_STATUSES = frozenset(
 )
 
 
+# The Set PIN Code Response's status is the Door Lock cluster's own code
+# (DoorLockSetPinOrIdStatus), not a foundation status, though zigpy types it
+# as one: it reads 2 as MAC_PAN_ACCESS_DENIED and 3 as undefined. Keyed by
+# the request the response answers.
+_RESPONSE_STATUSES: dict[str, dict[int, str]] = {
+    DoorLock.ServerCommandDefs.set_pin_code.name: {
+        1: "general failure",
+        2: "memory full",
+        3: "duplicate code",
+    },
+}
+
+
 def _raise_for_status(
     answer: Any,
     request: foundation.ZCLCommandDef,
@@ -135,10 +148,19 @@ def _raise_for_status(
             f"Lock {lock_entity_id}: {request.name} on slot {code_slot} failed: "
             f"status {_status_text(status)}"
         )
+    meaning = (
+        _RESPONSE_STATUSES.get(request.name, {}).get(status)
+        if isinstance(status, int) and not isinstance(answer, _DEFAULT_RESPONSE)
+        else None
+    )
     raise CodeRejectedError(
         code_slot=code_slot,
         lock_entity_id=lock_entity_id,
-        reason=f"{request.name} rejected: status {_status_text(status)}",
+        reason=(
+            f"{request.name} rejected: {meaning} ({int(status)})"
+            if meaning
+            else f"{request.name} rejected: status {_status_text(status)}"
+        ),
     )
 
 
