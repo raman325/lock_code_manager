@@ -66,6 +66,22 @@ def _is_reply(result: Any, cluster: DoorLock, reply: foundation.ZCLCommandDef) -
     return decoded_with is not None and isinstance(result, decoded_with.schema)
 
 
+def _holds_no_user(result: Any) -> bool:
+    """
+    Return whether ``result`` is the lock saying it has no user at the index read.
+
+    Some locks answer Get PIN Code for an index with nothing stored there
+    with a Default Response of NOT_FOUND -- "the requested table entry could
+    not be found" -- rather than a Get PIN Code Response saying Available.
+    Either way nothing is held there, so the index is free.
+    """
+    return (
+        isinstance(result, _DEFAULT_RESPONSE)
+        and result.command_id == DoorLock.ServerCommandDefs.get_pin_code.id
+        and result.status == foundation.Status.NOT_FOUND
+    )
+
+
 def _write_answer(
     result: Any,
     cluster: DoorLock,
@@ -569,7 +585,8 @@ class ZHALock(BaseLock):
         the work and must be honoured.
 
         ``empty`` means confirmed cleared, and ``AVAILABLE`` is the only
-        status that says so. ``known`` means the lock is accepting this code,
+        status that says so, besides a lock answering that it holds no user
+        there at all (``_holds_no_user``). ``known`` means the lock is accepting this code,
         which only ``ENABLED`` says. Every other status is ``unreadable``:
         something is there and its value cannot be trusted -- except Not
         Supported, a lock saying it cannot tell, which is silent
@@ -629,6 +646,9 @@ class ZHALock(BaseLock):
                     f"Lock {self.lock.entity_id}: failed to read slot {slot_num}: {err}"
                 ) from err
 
+            if parsed is None and _holds_no_user(result):
+                slot_states[slot_num] = SlotCredential.empty()
+                continue
             if parsed is None:
                 raise LockOperationFailed(
                     f"Lock {self.lock.entity_id}: get_pin_code reply is not slot "
