@@ -106,7 +106,7 @@ from .ha.services import (
     async_set_slot_condition,
     async_set_usercode,
 )
-from .model.config import parse_slot_unique_id
+from .model.config import build_slot_unique_id, parse_slot_unique_id
 from .model.credentials import SlotCode
 from .model.queries import (
     entries_configuring,
@@ -144,11 +144,6 @@ def _slot_code_payload(
     if reveal or code is None:
         return {code_key: code}
     return {code_key: None, length_key: len(code)}
-
-
-def _slot_unique_id(entry_id: str, slot_num: int, key: str) -> str:
-    """Build the unique ID for a per-slot LCM entity."""
-    return f"{entry_id}|{slot_num}|{key}"
 
 
 def _setup_dynamic_state_tracking(
@@ -552,7 +547,7 @@ def _build_slot_entities(
 
     def _id(domain: str, key: str) -> str | None:
         return ent_reg.async_get_entity_id(
-            domain, DOMAIN, _slot_unique_id(entry_id, slot_num, key)
+            domain, DOMAIN, build_slot_unique_id(entry_id, slot_num, key)
         )
 
     return SlotEntities(
@@ -603,7 +598,7 @@ def _in_sync_entity_id(
     ent_reg: er.EntityRegistry, entry_id: str, slot_num: int, lock_entity_id: str
 ) -> str | None:
     """Resolve the in_sync binary sensor entity id for a (slot, lock) pair."""
-    unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
+    unique_id = build_slot_unique_id(entry_id, slot_num, ATTR_IN_SYNC, lock_entity_id)
     return ent_reg.async_get_entity_id(BINARY_SENSOR_DOMAIN, DOMAIN, unique_id)
 
 
@@ -772,18 +767,15 @@ def _get_slot_in_sync_entity_ids(
     Returns dict mapping lock_entity_id to in_sync_entity_id.
     """
     ent_reg = er.async_get(hass)
-    entry_id = config_entry.entry_id
-    lock_entity_ids = get_entry_config(config_entry).locks
-
-    in_sync_map: dict[str, str] = {}
-    for lock_entity_id in lock_entity_ids:
-        unique_id = f"{entry_id}|{slot_num}|{ATTR_IN_SYNC}|{lock_entity_id}"
-        if entity_id := ent_reg.async_get_entity_id(
-            BINARY_SENSOR_DOMAIN, DOMAIN, unique_id
-        ):
-            in_sync_map[lock_entity_id] = entity_id
-
-    return in_sync_map
+    return {
+        lock_entity_id: entity_id
+        for lock_entity_id in get_entry_config(config_entry).locks
+        if (
+            entity_id := _in_sync_entity_id(
+                ent_reg, config_entry.entry_id, slot_num, lock_entity_id
+            )
+        )
+    }
 
 
 def _get_condition_entity_data(
