@@ -28,6 +28,10 @@ updates:
       # that pin cannot resolve, however long the pull request stays open, so
       # the only move is to let phacc bring pytest forward on its own schedule.
       - dependency-name: pytest
+      # zha pins zigpy exactly, and HA pins zha in its manifest, so the zigpy
+      # we test against is whatever that zha requires. Bumping our floor on its
+      # own outruns zha and cannot resolve.
+      - dependency-name: zigpy
     groups:
       # HA pins these exactly (directly or via integration manifests), so they
       # must move in lockstep with the homeassistant version under test.
@@ -49,7 +53,6 @@ updates:
           - "zeroconf"
           - "zha"
           - "zha-quirks"
-          - "zigpy"
           - "zwave-js-server-python"
   - package-ecosystem: npm
     directory: "/" # Location of package manifests
