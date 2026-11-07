@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "6e8df0b81c03",
+  "strategy": "manual-commit",
+  "branch": "fix/zha-not-found-slot-is-free",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/providers/zha.py",
+    "tests/providers/zha/test_e2e.py",
+    "tests/providers/zha/test_provider.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/6e/8df0b81c03/0/metadata.json",
+      "transcript": "/6e/8df0b81c03/0/full.jsonl",
+      "compact_transcript": "/6e/8df0b81c03/0/transcript.jsonl",
+      "content_hash": "/6e/8df0b81c03/0/content_hash.txt",
+      "prompt": "/6e/8df0b81c03/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 12,
+    "cache_creation_tokens": 5189,
+    "cache_read_tokens": 1498089,
+    "output_tokens": 3215,
+    "api_call_count": 5,
+    "subagent_tokens": {
+      "input_tokens": 8,
+      "cache_creation_tokens": 5768,
+      "cache_read_tokens": 1208214,
+      "output_tokens": 4268,
+      "api_call_count": 4
+    }
+  }
+}
