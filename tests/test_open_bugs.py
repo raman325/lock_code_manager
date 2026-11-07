@@ -385,13 +385,6 @@ async def _async_reauth(
     return await async_configure_flow(hass, flow["flow_id"], {CONF_LOCKS: locks})
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "open: reauth checks every lock it is given for overlaps, so an "
-        "overlap the entry already carries blocks every reauth"
-    ),
-)
 async def test_reauth_completes_with_an_overlap_the_entry_already_has(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
