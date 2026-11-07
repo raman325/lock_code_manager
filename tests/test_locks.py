@@ -51,6 +51,38 @@ async def test_lock_display_name_falls_back_to_the_device(
     assert lock_display_name(hass, "lock.front_door") == "Front Door"
 
 
+async def test_lock_display_name_puts_the_device_before_a_legacy_entity_name(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """
+    A lock without ``has_entity_name`` gets its device name in front, as on screen.
+
+    Home Assistant names such an entity "<device> <name>" unless the name
+    already starts with the device's, so a lock that has not reported yet
+    must be called that too, not by its bare model name.
+    """
+    entry = MockConfigEntry(domain="demo")
+    entry.add_to_hass(hass)
+    device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("demo", "front_door")},
+        name="Front Door",
+    )
+    entity_registry.async_get_or_create(
+        "lock",
+        "demo",
+        "be469",
+        device_id=device.id,
+        original_name="Schlage BE469",
+        has_entity_name=False,
+        suggested_object_id="schlage_be469",
+    )
+
+    assert lock_display_name(hass, "lock.schlage_be469") == "Front Door Schlage BE469"
+
+
 async def test_lock_display_name_prefers_a_renamed_device(
     hass: HomeAssistant,
     device_registry: dr.DeviceRegistry,
