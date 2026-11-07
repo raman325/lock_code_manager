@@ -49,7 +49,6 @@ updates:
           - "zeroconf"
           - "zha"
           - "zha-quirks"
-          - "zigpy"
           - "zwave-js-server-python"
   - package-ecosystem: npm
     directory: "/" # Location of package manifests

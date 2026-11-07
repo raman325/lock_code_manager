@@ -162,9 +162,16 @@ def _area_on_lock_device(
 
 
 def _area_on_lock_entity(hass: HomeAssistant, _: MockConfigEntry) -> dict[str, Any]:
-    """Put the area on the lock entity itself."""
+    """
+    Put the area on the lock entity itself.
+
+    Home Assistant takes an area of an entity's own only alongside a name of
+    its own, so the entity is named here the way a user would have to.
+    """
     area = ar.async_get(hass).async_get_or_create("front_door")
-    er.async_get(hass).async_update_entity(LOCK_1_ENTITY_ID, area_id=area.id)
+    er.async_get(hass).async_update_entity(
+        LOCK_1_ENTITY_ID, name="Front door lock", area_id=area.id
+    )
     return {ATTR_AREA_ID: area.id}
 
 
