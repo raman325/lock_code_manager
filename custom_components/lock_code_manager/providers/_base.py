@@ -822,8 +822,8 @@ class BaseLock:
     async def _run_provider_setup_bounded(self, config_entry: ConfigEntry) -> None:
         """Validate capabilities and run provider setup, under a deadline."""
         if self.supports_native_users:
-            # Bounded like the initial read, and for the same reason: setup
-            # runs while Home Assistant holds the entry's lock, and this probe
+            # Bounded: setup runs while Home Assistant holds the entry's
+            # lock, and this probe
             # goes through neither the lock's worker nor any budget of the
             # provider's own -- `MatterLock.async_get_capabilities` awaits
             # `get_lock_info` bare. A probe is a read, so cancelling it is
