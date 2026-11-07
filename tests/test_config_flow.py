@@ -3778,12 +3778,13 @@ async def test_adding_several_users_refuses_when_the_lock_cannot_be_read(
     assert len(entry.subentries) == 1
 
 
-async def test_a_failed_save_after_allocation_lets_the_user_start_over(
-    hass: HomeAssistant, mock_lock_config_entry
-) -> None:
-    """A save that fails once allocation is done leaves setup usable, not stuck in progress."""
-    flow_id = await _start_yaml_config_flow(hass)
+async def _async_fail_the_save(hass: HomeAssistant, flow_id: str) -> None:
+    """
+    Submit users to the YAML step and have adding the entry fail.
 
+    In a task of its own, as every request is: whether a save is over is
+    whether the request making it has ended.
+    """
     with (
         _holding(),
         patch.object(
@@ -3791,11 +3792,21 @@ async def test_a_failed_save_after_allocation_lets_the_user_start_over(
         ),
         pytest.raises(HomeAssistantError),
     ):
-        await async_configure_flow(
-            hass,
-            flow_id,
-            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+        await hass.async_create_task(
+            async_configure_flow(
+                hass,
+                flow_id,
+                {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
+            )
         )
+
+
+async def test_a_failed_save_after_allocation_lets_the_user_start_over(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """A save that fails once allocation is done leaves setup usable, not stuck in progress."""
+    flow_id = await _start_yaml_config_flow(hass)
+    await _async_fail_the_save(hass, flow_id)
 
     # The user starts setup again with the same name.
     result = await hass.config_entries.flow.async_init(
@@ -3814,25 +3825,38 @@ async def test_retrying_a_setup_whose_save_failed_ends_it(
 ) -> None:
     """A retry of the flow left behind by a failed save ends it, rather than a 404."""
     flow_id = await _start_yaml_config_flow(hass)
-
-    with (
-        _holding(),
-        patch.object(
-            ConfigEntries, "async_add", side_effect=HomeAssistantError("disk full")
-        ),
-        pytest.raises(HomeAssistantError),
-    ):
-        await async_configure_flow(
-            hass,
-            flow_id,
-            {CONF_USERS: {"User 1": {CONF_ENABLED: True, CONF_PIN: "1234"}}},
-        )
+    await _async_fail_the_save(hass, flow_id)
 
     result = await hass.config_entries.flow.async_configure(flow_id)
 
     assert result["type"] == "abort"
     assert result["reason"] == "unknown"
     assert not hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+
+
+async def test_a_setup_still_being_filled_in_is_not_taken_for_a_failed_save(
+    hass: HomeAssistant, mock_lock_config_entry
+) -> None:
+    """
+    A second setup of the same name is refused, and the first one goes on.
+
+    The guided path takes its allocation and then asks for the users, so the
+    request that took it ends with the flow still in use.
+    """
+    with _holding():
+        flow_id = await hass.async_create_task(_start_ui_config_flow(hass))
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+    result = await async_configure_flow(
+        hass, result["flow_id"], {CONF_NAME: "test", CONF_LOCKS: [LOCK_1_ENTITY_ID]}
+    )
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_in_progress"
+    result = hass.config_entries.flow.async_get(flow_id)
+    assert result["step_id"] == "code_slot"
 
 
 class TestFlowsOnAFailedEntry:

@@ -73,24 +73,22 @@ from .providers import CONFIG_FLOW_PLATFORMS, resolve_provider_class_for_entity
 
 _LOGGER = logging.getLogger(__name__)
 
-# The request each setup flow handed its finished allocation to, by flow id,
-# so a later request can tell a flow still being saved from one whose save
-# failed and left it behind.
-_HANDED_OVER: HassKey[dict[str, asyncio.Task[Any]]] = HassKey(
-    f"{DOMAIN}_allocation_handed_over"
-)
+# The request that set out to create each setup flow's entry, by flow id, so
+# a later request can tell a flow still being saved from one whose save failed
+# and left it behind.
+_SAVING: HassKey[dict[str, asyncio.Task[Any]]] = HassKey(f"{DOMAIN}_flows_saving")
 
 
 def _save_failed(hass: HomeAssistant, flow_id: str) -> bool:
     """
-    Return whether ``flow_id`` handed its allocation over and the save is over.
+    Return whether ``flow_id`` set out to create its entry and the save is over.
 
     A flow is removed once its entry is created, so one still in progress
-    whose handing-over request has ended -- or is the very request asking --
-    failed to save. Another request still running is saving it now.
+    whose saving request has ended failed to save. A request still running
+    is saving it now.
     """
-    task = hass.data.get(_HANDED_OVER, {}).get(flow_id)
-    return task is not None and (task.done() or task is asyncio.current_task())
+    task = hass.data.get(_SAVING, {}).get(flow_id)
+    return task is not None and task.done()
 
 
 # Stripped where it enters rather than where it is read: every consumer
@@ -622,9 +620,9 @@ class _AllocatesInProgress:
         task, submission = self._allocation_task, self._allocation_submission
         if task is None or submission is None:
             if _save_failed(self.hass, self.flow_id):
-                # The request that took it raised after taking it, building
-                # or saving the entry. Nothing is left to take, so the flow
-                # ends here and the user starts setup again.
+                # The request that took it raised while building or saving
+                # the entry. Nothing is left to take, so the flow ends here
+                # and the user starts setup again.
                 raise AbortFlow("unknown")
             raise UnknownFlow(
                 "Slot numbers for this step were already allocated by another "
@@ -632,14 +630,22 @@ class _AllocatesInProgress:
             )
         self._allocation_task = None
         self._allocation_submission = None
-        if (handing_over := asyncio.current_task()) is not None:
-            self.hass.data.setdefault(_HANDED_OVER, {})[self.flow_id] = handing_over
         return submission, task.result()
+
+    def _saving(self) -> None:
+        """
+        Record this request as the one creating the entry.
+
+        Only once nothing is left but building and saving it: a request that
+        goes on to show another form ends with the flow still in use.
+        """
+        if (request := asyncio.current_task()) is not None:
+            self.hass.data.setdefault(_SAVING, {})[self.flow_id] = request
 
     @callback
     def async_remove(self) -> None:
-        """Forget the handed-over allocation along with the flow."""
-        self.hass.data.get(_HANDED_OVER, {}).pop(self.flow_id, None)
+        """Forget the saving request along with the flow."""
+        self.hass.data.get(_SAVING, {}).pop(self.flow_id, None)
 
 
 class LockCodeManagerFlowHandler(
@@ -825,6 +831,7 @@ class LockCodeManagerFlowHandler(
         # Both refusals -- unreadable locks and a count that will not fit --
         # were settled in async_step_ui, against the same occupancy and the
         # same count. Nothing collected since can change either answer.
+        self._saving()
         assignment = SlotAssignment.empty().reconcile(
             self.data[CONF_USERS], start=1, unavailable=self._unavailable
         )
@@ -905,6 +912,7 @@ class LockCodeManagerFlowHandler(
                 description_placeholders=placeholders,
                 last_step=True,
             )
+        self._saving()
         users = submission[CONF_USERS]
         self.data[CONF_USERS] = users
         assignment = SlotAssignment.empty().reconcile(
