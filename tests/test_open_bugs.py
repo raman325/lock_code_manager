@@ -420,7 +420,7 @@ async def test_reauth_refuses_the_lock_that_is_gone(
     result = await _async_reauth(hass, entry, gone, [LOCK_1_ENTITY_ID, gone])
 
     assert result["type"] == "form"
-    assert result["errors"]
+    assert result["errors"] == {CONF_LOCKS: "lock_not_found"}
     # The description already names it; the error has to as well.
     assert any(
         gone in str(value)
