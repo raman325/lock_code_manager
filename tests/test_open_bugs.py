@@ -433,10 +433,6 @@ async def test_reauth_refuses_the_lock_that_is_gone(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="open: an overlap error lists slot numbers, which the user never sees",
-)
 async def test_an_overlap_error_names_the_users_in_the_way(
     hass: HomeAssistant, mock_lock_config_entry
 ) -> None:
@@ -451,13 +447,14 @@ async def test_an_overlap_error_names_the_users_in_the_way(
     template = translations[
         f"component.{DOMAIN}.config.error.{result['errors']['base']}"
     ]
-    rendered = re.sub(
-        r"\{(\w+)\}",
-        lambda match: str(result["description_placeholders"].get(match[1], "")),
-        template,
-    )
+    placeholders = result["description_placeholders"]
+    # Every placeholder the message uses is supplied, so none renders blank.
+    assert set(re.findall(r"\{(\w+)\}", template)) <= placeholders.keys()
+    rendered = re.sub(r"\{(\w+)\}", lambda match: str(placeholders[match[1]]), template)
 
+    # Both sides of the collision, since removing users from either clears it.
     assert "Grandma" in rendered
+    assert "test1" in rendered
 
 
 async def test_adding_a_lock_keeps_the_codes_already_on_it(
