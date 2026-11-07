@@ -2448,18 +2448,10 @@ class TestAShortNameLCMWrote:
             assert _released_warnings(caplog, 3) == []
 
 
-class TestOpenBugs:
-    """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
+class TestAUserIndexReusedAfterASilentDeletion:
+    """A user removed where no event reaches Home Assistant is found when its index is reused."""
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason=(
-            "open: a user index freed at the lock without an event and reused "
-            "by a new user's create leaves the old slot showing its stale code"
-        ),
-    )
-    async def test_an_index_reused_after_a_silent_deletion_is_not_the_old_slot_s(
+    async def test_the_old_slot_gets_its_pin_back(
         self,
         hass: HomeAssistant,
         freezer: FrozenDateTimeFactory,
@@ -2467,27 +2459,43 @@ class TestOpenBugs:
         fake_matter_lock_entry: MockConfigEntry,
         fake_matter_lock_entity: er.RegistryEntry,
     ) -> None:
-        """Slot 1, whose user was removed out of band, goes out of sync when its index is reused."""
+        """
+        Slot 1's user, deleted by another controller, is written back once a new user takes its index.
+
+        Nothing announces the deletion, so slot 1 still reads in sync. The
+        lock then gives the next user created the index slot 1's user held,
+        which proves that user gone: slot 1's PIN must go back on the lock,
+        under a user tagged for slot 1.
+        """
+        pin = FAKE_MATTER_SLOTS[1][CONF_PIN]
         await _async_settle(
             hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
         )
-        index = _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[1][CONF_PIN])
-        fake_matter_lock.forget(fake_matter_lock.owner(index))
+        user_index = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert user_index is not None
+        fake_matter_lock.forget(user_index)
+        assert pin not in fake_matter_lock.codes.values()
 
         result = await async_add_users(
             hass,
             fake_matter_lock_entry,
             {"slot3": {CONF_ENABLED: True, CONF_PIN: "333333"}},
         )
-        if result.get("reason") != "users_added":
-            pytest.fail(f"the user was not added: {result}")
+        assert result.get("reason") == "users_added"
         await async_advance_sync_ticks(hass, freezer, 5)
-        if fake_matter_lock.owner(index) is None:
-            pytest.fail("the new user's PIN did not reuse the freed index")
+        # The new user took the index slot 1's user held.
+        assert fake_matter_lock.users[user_index].name.startswith("lcm:3:")
 
-        assert _states(hass, fake_matter_lock_entry, fake_matter_lock_entity, 1)[0] != (
+        holder = fake_matter_lock.owner(_index_of(fake_matter_lock, pin))
+        assert holder is not None
+        assert fake_matter_lock.users[holder].name.startswith("lcm:1:")
+        assert _states(hass, fake_matter_lock_entry, fake_matter_lock_entity, 1)[0] == (
             STATE_ON
         )
+
+
+class TestOpenBugs:
+    """Open Matter bugs, each pinned by a strict xfail on its own assertion."""
 
     async def test_nothing_reaches_the_lock_after_the_entry_unloads(
         self,

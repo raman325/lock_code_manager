@@ -994,8 +994,13 @@ class MatterLock(BaseLock):
                 ", ".join(f"{name!r}: {err}" for name, err in prior_failures),
                 name_used,
             )
-        self._forget_user_index(result["user_index"])
+        displaced = self._forget_user_index(result["user_index"])
         self._slot_by_user_index[result["user_index"]] = slot
+        if displaced is not None and displaced != slot:
+            # The lock handed a new user the index another slot's user held,
+            # so that user is gone: removed where no event reaches this
+            # controller. Its slot is empty, and the worker should know.
+            self._confirm_slot(displaced, SlotCredential.empty())
         return SetUserResult(user_id=result["user_index"], created=True)
 
     @staticmethod
