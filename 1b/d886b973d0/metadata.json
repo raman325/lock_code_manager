@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "1bd886b973d0",
+  "strategy": "manual-commit",
+  "branch": "fix/1647-failed-save-strands-setup",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "custom_components/lock_code_manager/config_flow.py",
+    "tests/test_config_flow.py"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1b/d886b973d0/0/metadata.json",
+      "transcript": "/1b/d886b973d0/0/full.jsonl",
+      "compact_transcript": "/1b/d886b973d0/0/transcript.jsonl",
+      "content_hash": "/1b/d886b973d0/0/content_hash.txt",
+      "prompt": "/1b/d886b973d0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 0,
+    "cache_creation_tokens": 0,
+    "cache_read_tokens": 0,
+    "output_tokens": 0,
+    "api_call_count": 0,
+    "subagent_tokens": {
+      "input_tokens": 22,
+      "cache_creation_tokens": 10296,
+      "cache_read_tokens": 3061218,
+      "output_tokens": 4886,
+      "api_call_count": 11
+    }
+  }
+}
