@@ -52,7 +52,7 @@
     "eslint-plugin-unused-imports": "^4.4.1",
     "jsdom": "^31.0.0",
     "markdownlint-cli": "^0.50.0",
-    "prettier": "^3.9.10",
+    "prettier": "^3.10.1",
     "prettier-plugin-package": "^2.0.0",
     "rollup": "^4.68.2",
     "ts-node": "^10.9.2",
