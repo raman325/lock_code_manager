@@ -687,6 +687,40 @@ class TestKeypadAndSwitch:
             (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
         ] == [("slot2", "pin")]
 
+    async def test_a_keypad_use_with_no_credentials_is_placed_by_its_user(
+        self,
+        hass: HomeAssistant,
+        freezer: FrozenDateTimeFactory,
+        fake_matter_lock: FakeMatterLock,
+        fake_matter_lock_entry: MockConfigEntry,
+        fake_matter_lock_entity: er.RegistryEntry,
+    ) -> None:
+        """
+        A keypad use whose ``credentials`` is null is recorded from its userIndex.
+
+        The Aqara U400 (firmware 3.1.1.4) sends the keypad source and the
+        user's index with ``credentials`` null, and the use was dropped. One
+        GetUser for the user it names places it, as for any keypad use.
+        """
+        await _async_settle(
+            hass, freezer, fake_matter_lock_entry, fake_matter_lock_entity
+        )
+        index = _index_of(fake_matter_lock, FAKE_MATTER_SLOTS[2][CONF_PIN])
+        user_index = fake_matter_lock.owner(index)
+        sent = len(fake_matter_lock.commands)
+        used = async_capture_events(hass, BUS_EVENT_CREDENTIAL_USED)
+
+        fake_matter_lock.keypad_unlock(index, reported_as=None)
+        await async_advance_sync_ticks(hass, freezer)
+
+        assert [
+            (event.data["name"], event.data[ATTR_CREDENTIAL_TYPE]) for event in used
+        ] == [("slot2", "pin")]
+        assert [
+            (exchange.command, exchange.payload.get("userIndex"))
+            for exchange in fake_matter_lock.commands[sent:]
+        ] == [("GetUser", user_index)]
+
     async def test_the_admin_code_at_the_keypad_is_no_user_s_use(
         self,
         hass: HomeAssistant,

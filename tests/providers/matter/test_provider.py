@@ -1390,6 +1390,74 @@ class TestLockOperationEvent:
         )
 
     @pytest.mark.parametrize(
+        "credentials",
+        [
+            pytest.param(None, id="null"),
+            pytest.param([], id="empty"),
+            pytest.param(..., id="absent"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        ("source", "user_index", "expected"),
+        [
+            # The Aqara U400 (firmware 3.1.1.4) names the user alone.
+            pytest.param(3, 4, CredentialType.PIN, id="keypad"),
+            pytest.param(8, 4, CredentialType.RFID, id="rfid"),
+            # Nothing to place the use by without a userIndex.
+            pytest.param(3, None, None, id="keypad_naming_no_user"),
+            # The biometric reader takes a finger or a face; nothing says which.
+            pytest.param(9, 4, None, id="biometric"),
+            # Sources that name no kind stay unreported.
+            pytest.param(7, 4, None, id="remote"),
+            pytest.param(0, 4, None, id="unspecified"),
+            pytest.param(None, 4, None, id="no_source"),
+            pytest.param(10, 4, None, id="aliro"),
+            pytest.param(1, 4, None, id="manual"),
+            pytest.param(4, 4, None, id="auto"),
+        ],
+    )
+    async def test_a_use_with_no_credentials_is_placed_by_its_source(
+        self,
+        hass: HomeAssistant,
+        matter_lock: MatterLock,
+        credentials: list[Any] | None,
+        source: int | None,
+        user_index: int | None,
+        expected: CredentialType | None,
+    ) -> None:
+        """
+        With no credentials listed, the reader names the kind and userIndex the user.
+
+        Only a keypad or a card reader use is reported, and only for a user
+        the event names; no user is read for anything else.
+        """
+        fired: list[dict[str, Any]] = []
+        matter_lock.async_fire_code_slot_event = lambda **kw: fired.append(kw)
+        data: dict[str, Any] = {"lockOperationType": 1, "userIndex": user_index}
+        if source is not None:
+            data["operationSource"] = source
+        if credentials is not ...:
+            data["credentials"] = credentials
+
+        with self._patch_users(
+            matter_lock,
+            [{"user_index": 4, "user_name": "lcm:4:Gue", "credentials": []}],
+        ):
+            client, _node = matter_lock._require_client_and_node()
+            matter_lock._on_node_event(None, _make_node_event(data=data))
+            await hass.async_block_till_done()
+            sent = client.send_device_command.await_args_list
+
+        assert fired == (
+            []
+            if expected is None
+            else [{"code_slot": 4, "to_locked": False, "credential_type": expected}]
+        )
+        assert [call.kwargs["command"].userIndex for call in sent] == (
+            [] if expected is None else [4]
+        )
+
+    @pytest.mark.parametrize(
         "credential",
         [
             pytest.param({"credentialType": 2}, id="missing"),

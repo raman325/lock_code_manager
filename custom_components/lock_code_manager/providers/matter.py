@@ -2042,17 +2042,30 @@ class MatterLock(BaseLock):
         hold, or one that reads empty (``_lock_operation_slot``). The lookup
         is async so the callback schedules a task rather than blocking the
         event loop.
+
+        An event with no ``credentials`` at all is placed by its source
+        alone: the keypad takes a PIN and the Radio Frequency Identification
+        reader a card, and the ``userIndex`` names the user. The Aqara U400
+        (firmware 3.1.1.4) leaves ``credentials`` null on a keypad use that
+        names its user, though the specification has it null only when no
+        credential was involved (appclusters 5.2.11.3.6). Any other source
+        with no credentials stays unreported, as does an event that lists
+        credentials of no reportable kind.
         """
         data: dict[str, Any] = getattr(node_event, "data", None) or {}
         source = data.get("operationSource")
+        credentials = data.get("credentials")
         used = [
             (kind, cred)
-            for cred in data.get("credentials") or []
+            for cred in credentials or []
             if isinstance(cred, dict)
             and (kind := _kind_used(source, cred.get("credentialType"))) is not None
         ]
         if not used:
-            return
+            if credentials or (kind := _kind_used(source, None)) is None:
+                return
+            # No credential to type or index: only the userIndex can place it.
+            used = [(kind, {})]
         # The credential the lock itself typed as a PIN when there is one (a
         # PIN-and-fingerprint user, say): its index is the only one the
         # fallback below can place. Otherwise the first.
