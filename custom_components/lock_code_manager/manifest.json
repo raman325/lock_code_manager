@@ -14,7 +14,8 @@
     "template",
     "virtual",
     "zha",
-    "zwave_js"
+    "zwave_js",
+    "yalexs_ble"
   ],
   "categories": [
     "security_safety.locks_access"
