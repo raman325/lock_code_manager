@@ -5,6 +5,8 @@ Each check stands for a release that went out wrong once; the regression
 each guards is named in its docstring.
 """
 
+from collections import defaultdict
+from importlib import metadata
 import inspect
 import json
 from pathlib import Path
@@ -14,6 +16,8 @@ import subprocess
 import sys
 
 from awesomeversion import AwesomeVersion
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 import pytest
 import yaml
 
@@ -25,6 +29,8 @@ from .conftest import DEPRECATED_USE_FORMATS
 ROOT = Path(__file__).resolve().parent.parent
 INTEGRATION = ROOT / "custom_components" / "lock_code_manager"
 MANIFEST = INTEGRATION / "manifest.json"
+DEV_REQUIREMENTS = ROOT / "requirements_dev.txt"
+DEPENDABOT = ROOT / ".github" / "dependabot.yaml"
 
 
 def test_hard_dependencies_are_core_integrations() -> None:
@@ -186,3 +192,60 @@ print("\\n".join(reports))
     )
 
     assert result.stdout.strip() == ""
+
+
+def _exact_pin(line: str) -> tuple[str, str] | None:
+    """Return the canonical name and version of a ``name==version`` requirement."""
+    requirement = Requirement(line)
+    version = next(
+        (spec.version for spec in requirement.specifier if spec.operator == "=="),
+        None,
+    )
+    return None if version is None else (canonicalize_name(requirement.name), version)
+
+
+def test_dev_requirements_match_the_home_assistant_under_test() -> None:
+    """
+    Every library Home Assistant pins is pinned here at Home Assistant's version.
+
+    These lines mirror Home Assistant's integration manifests and its own
+    requirements, because the ``homeassistant`` package does not install
+    integration libraries. Dependabot moved them to their newest releases
+    instead (PR #1857: ``aioesphomeapi`` past what Home Assistant's
+    ``zeroconf`` pin allows), so they are excluded from Dependabot and move
+    with ``pytest-homeassistant``, by hand. This names any left behind, and
+    any Dependabot is not told to leave alone.
+    """
+    core = Path(homeassistant.components.__file__).parent
+    sources = [
+        (manifest.parent.name, line)
+        for manifest in core.glob("*/manifest.json")
+        for line in json.loads(manifest.read_text()).get("requirements", [])
+    ] + [("homeassistant", line) for line in metadata.requires("homeassistant") or []]
+    pinned_by_home_assistant: defaultdict[str, set[tuple[str, str]]] = defaultdict(set)
+    for source, line in sources:
+        if (pin := _exact_pin(line)) is not None:
+            pinned_by_home_assistant[pin[0]].add((pin[1], source))
+
+    ours = [
+        pin
+        for line in DEV_REQUIREMENTS.read_text().splitlines()
+        if line.strip() and not line.startswith(("-", "#"))
+        if (pin := _exact_pin(line)) is not None
+    ]
+    assert [
+        f"{name}=={version}, Home Assistant pins {sorted(pinned_by_home_assistant[name])}"
+        for name, version in ours
+        if name in pinned_by_home_assistant
+        and version not in {pinned for pinned, _ in pinned_by_home_assistant[name]}
+    ] == []
+
+    ignored_by_dependabot = {
+        canonicalize_name(entry["dependency-name"])
+        for update in yaml.safe_load(DEPENDABOT.read_text())["updates"]
+        if update["package-ecosystem"] == "pip"
+        for entry in update.get("ignore", [])
+    }
+    assert {
+        name for name, _ in ours if name in pinned_by_home_assistant
+    } - ignored_by_dependabot == set()
