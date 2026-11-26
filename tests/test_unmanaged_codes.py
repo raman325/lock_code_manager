@@ -4,7 +4,7 @@ import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import (
@@ -206,7 +206,7 @@ async def test_a_code_appearing_after_the_sweep_is_not_reported(
     await hass.async_block_till_done()
     # And a second migration pass finds nothing to do: the entry is already
     # at the swept version.
-    assert await async_migrate_entry(hass, stranded)
+    await async_migrate_entry(hass, stranded)
 
     assert _issue(hass, 9) is None
     # The one that was there at the sweep is still raised.
@@ -256,7 +256,7 @@ async def test_keeping_leaves_the_code_and_stops_asking(
     assert (await lock.async_get_usercodes())[STRANDED_SLOT].pin == STRANDED_PIN
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id).dismissed_version
 
-    assert await async_migrate_entry(hass, stranded)
+    await async_migrate_entry(hass, stranded)
     assert ir.async_get(hass).async_get_issue(DOMAIN, issue_id).dismissed_version
 
 

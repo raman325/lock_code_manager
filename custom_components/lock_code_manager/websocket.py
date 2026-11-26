@@ -113,6 +113,7 @@ from .model.queries import (
     get_entry_config,
     get_loaded_config_entry,
     slots_configured_on,
+    subentry_id_for_slot,
 )
 from .providers import BaseLock
 
@@ -1088,7 +1089,10 @@ async def subscribe_code_slot(
         # which a card cannot tell apart from "entities not created yet"
         # during setup. So it would keep rendering the departed person, tinted
         # active, named "Unnamed".
-        if not get_entry_config(config_entry).has_slot(slot_num):
+        # Read from the entry's subentries, not the cached config: Home
+        # Assistant removes a deleted subentry's entities before the update
+        # listener refreshes that cache, and those removals land here.
+        if subentry_id_for_slot(config_entry, slot_num) is None:
             connection.send_event(
                 msg["id"], {ATTR_SLOT_NUM: slot_num, ATTR_REMOVED: True}
             )

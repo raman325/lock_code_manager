@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 from hypothesis import settings as hypothesis_settings
 from probatio import to_field_list
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_fire_time_changed,
     mock_config_flow,
@@ -44,8 +44,6 @@ from .common import (
     lock_workers_busy,
     release_all_faults,
 )
-
-pytest_plugins = ["pytest_homeassistant_custom_component"]
 
 # Hypothesis profiles: "dev" keeps the full-suite run within its
 # seconds budget; CI opts into deeper exploration via HYPOTHESIS_PROFILE=ci.
@@ -101,6 +99,18 @@ def counted_executor_work() -> Generator[None]:
 def auto_enable_custom_integrations(enable_custom_integrations):
     """Enable custom integrations."""
     yield
+
+
+@pytest.fixture
+def hass_config_dir(hass_tmp_config_dir: str) -> str:
+    """
+    Give each test its own temporary config directory.
+
+    pytest-homeassistant otherwise shares ``tests/testing_config``, and Home
+    Assistant writes its default blueprints there, into the repository and
+    across parallel workers.
+    """
+    return hass_tmp_config_dir
 
 
 @pytest.fixture(autouse=True)
@@ -180,8 +190,8 @@ def assert_flow_results_serialize() -> Generator[None]:
 # the integration.
 DEPRECATED_USE_FORMATS = frozenset(
     {
-        "The deprecated %s %s was %s from %s.%s Use %s instead, please %s",
-        "The deprecated %s %s was %s from %s.%s Use %s instead",
+        "The deprecated %s %s was %s from %s.%s%s%s %s",
+        "The deprecated %s %s was %s from %s.%s%s",
     }
 )
 

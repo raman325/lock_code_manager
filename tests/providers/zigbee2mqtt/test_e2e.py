@@ -10,7 +10,7 @@ from unittest.mock import DEFAULT, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_capture_events,
     async_fire_mqtt_message,

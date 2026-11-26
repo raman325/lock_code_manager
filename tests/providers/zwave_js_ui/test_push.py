@@ -6,7 +6,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
+from pytest_homeassistant.common import async_fire_mqtt_message
 from zwave_js_server.const.command_class.notification import (
     AccessControlNotificationEvent as Event,
 )

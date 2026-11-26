@@ -12,7 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_mock_service,
     mock_restore_cache_with_extra_data,

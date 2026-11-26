@@ -11,7 +11,7 @@ from typing import Any
 from unittest.mock import DEFAULT, AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import async_fire_mqtt_message
+from pytest_homeassistant.common import async_fire_mqtt_message
 
 from homeassistant.components.mqtt import debug_info as mqtt_debug_info
 from homeassistant.components.mqtt.models import ReceiveMessage

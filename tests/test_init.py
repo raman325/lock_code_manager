@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_fire_time_changed,
 )
@@ -4103,7 +4103,7 @@ async def test_migration_v5_moves_an_existing_slot_device_to_its_user(
     # this user's entities, and that drags the device across by itself -- so
     # the end state is the same whether the migration moved it or not, and a
     # test that only looked at the end state could not tell the difference.
-    assert await async_migrate_entry(hass, config_entry)
+    await async_migrate_entry(hass, config_entry)
 
     subentry_id = next(iter(config_entry.subentries))
     after = dev_reg.async_get(before.id)

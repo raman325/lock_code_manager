@@ -337,7 +337,8 @@ If you test with stale JavaScript, the Lovelace strategy will fail with:
 
 ## Testing Notes
 
-- Uses `pytest-homeassistant-custom-component` for HA test utilities
+- Uses Home Assistant's `pytest-homeassistant` for HA test utilities (import from
+  `pytest_homeassistant.common`; pin it to the same version as `homeassistant`)
 - `tests/conftest.py`: Shared fixtures (`mock_lock_config_entry`, `lock_code_manager_config_entry`)
 - `tests/common.py`: `MockLCMLock` (in-memory provider), mock entities, test constants
   - Fault knobs on `MockLCMLock` (`ignore`, `refuse`, `fail`, `hang`, `drop_reply`, `slow`),

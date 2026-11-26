@@ -9,7 +9,7 @@ from typing import Any
 from unittest.mock import DEFAULT, MagicMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_fire_mqtt_message,
 )
