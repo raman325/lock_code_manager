@@ -1,0 +1,33 @@
+Review 1855
+
+---
+
+Post a review on the PR
+
+---
+
+Check the latest on 1855 then review the other PF opened by another user
+
+---
+
+post both
+
+---
+
+owine resonded/reacted in 1842
+
+---
+
+you ran the tests locally right?
+
+---
+
+clean up the open dependabot PRs, they probably need manual intervention
+
+---
+
+the latest home assistant doesn't require the pytest home assistant custom components test hting anymore I don't think? with the change of HACS to marketplace
+
+---
+
+sounds good yes
