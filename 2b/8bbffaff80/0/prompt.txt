@@ -1,0 +1,53 @@
+Review 1855
+
+---
+
+Post a review on the PR
+
+---
+
+Check the latest on 1855 then review the other PF opened by another user
+
+---
+
+post both
+
+---
+
+owine resonded/reacted in 1842
+
+---
+
+you ran the tests locally right?
+
+---
+
+clean up the open dependabot PRs, they probably need manual intervention
+
+---
+
+the latest home assistant doesn't require the pytest home assistant custom components test hting anymore I don't think? with the change of HACS to marketplace
+
+---
+
+sounds good yes
+
+---
+
+all good, prep the wiki pages for when we merge and release 1855
+
+---
+
+why is https://github.com/raman325/lock_code_manager/pull/1857 failing
+
+---
+
+yes. then remove the feature comparison between keymaster and LCM, both in live and in staged. We're not trying to make a big deal outo f the fact that we're a better integration
+
+---
+
+why do we act like our strategies are diferent than keymasters? thought I largely built them the same way? or maybe I only built the dashboard strategy and not the other ones?
+
+---
+
+yes make the edit
