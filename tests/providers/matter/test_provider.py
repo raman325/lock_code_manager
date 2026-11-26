@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import timedelta
 import logging
-from types import SimpleNamespace
+from types import EllipsisType, SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
@@ -1414,13 +1414,15 @@ class TestLockOperationEvent:
             pytest.param(10, 4, None, id="aliro"),
             pytest.param(1, 4, None, id="manual"),
             pytest.param(4, 4, None, id="auto"),
+            # The U400's one-touch lock button reports Button, not Keypad.
+            pytest.param(5, 4, None, id="button"),
         ],
     )
     async def test_a_use_with_no_credentials_is_placed_by_its_source(
         self,
         hass: HomeAssistant,
         matter_lock: MatterLock,
-        credentials: list[Any] | None,
+        credentials: list[Any] | EllipsisType | None,
         source: int | None,
         user_index: int | None,
         expected: CredentialType | None,
