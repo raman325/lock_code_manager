@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.12.0",
+  "checkpoint_id": "45c99dcef421",
+  "strategy": "manual-commit",
+  "branch": "fix-1827",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "custom_components/lock_code_manager/www/generated/lock-code-manager.js"
+  ],
+  "sessions": [
+    {
+      "metadata": "/45/c99dcef421/0/metadata.json",
+      "transcript": "/45/c99dcef421/0/full.jsonl",
+      "compact_transcript": "/45/c99dcef421/0/transcript.jsonl",
+      "content_hash": "/45/c99dcef421/0/content_hash.txt",
+      "prompt": "/45/c99dcef421/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 84,
+    "cache_creation_tokens": 322568,
+    "cache_read_tokens": 4677485,
+    "output_tokens": 21504,
+    "api_call_count": 38,
+    "subagent_tokens": {
+      "input_tokens": 58,
+      "cache_creation_tokens": 216256,
+      "cache_read_tokens": 2449445,
+      "output_tokens": 14574,
+      "api_call_count": 29
+    }
+  }
+}
