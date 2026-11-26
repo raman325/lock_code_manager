@@ -49,6 +49,7 @@ Features:
 | [Z-Wave JS UI][wiki-zwave-js-ui] (MQTT) | Varies | ✅ | ✅ | For locks bridged through zwave-js-ui's MQTT gateway; the Z-Wave row is recommended |
 | [Matter][wiki-matter] | ❌ | ✅ | ✅ | PINs are write-only per the spec |
 | [Schlage WiFi][wiki-schlage] | ❌ | ❌ | ❌ | Cloud-based, PINs masked |
+| Yale Access Bluetooth² | ❌ | ❌ | ✅ | Local BLE; PINs write-only through the credential actions |
 | [Akuvox][wiki-akuvox]¹ | ✅ | ❌ | ❌ | Local API, polling-based |
 | [Virtual][wiki-virtual]¹ | ✅ | ❌ | ✅ | Try Lock Code Manager without a real lock |
 | [ESPHome][wiki-external-keypads] | ❌ | ❌ | ✅ | Keypads and readers, not locks: codes are checked, nothing is written to the device |
@@ -62,6 +63,9 @@ recent uses and which lock each was on.
 
 ¹ Custom integration required ([Local Akuvox][local-akuvox],
 [hass-virtual][hass-virtual])
+
+² Needs the keypad credential actions of Yale Access Bluetooth
+([home-assistant/core#185596][core-185596]), not yet in a Home Assistant release
 
 Each integration's wiki page covers its setup and limitations. Adding support
 for a new lock integration is straightforward — see the
@@ -138,6 +142,7 @@ wrong, to learn more about it, or anything in between — find me on the
 [wiki-zigbee2mqtt]: https://github.com/raman325/lock_code_manager/wiki/Zigbee2MQTT-integration
 [wiki-zwave-js-ui]: https://github.com/raman325/lock_code_manager/wiki/Z-Wave-JS-UI-(MQTT)
 [wiki-matter]: https://github.com/raman325/lock_code_manager/wiki/Matter-integration
+[core-185596]: https://github.com/home-assistant/core/pull/185596
 [wiki-schlage]: https://github.com/raman325/lock_code_manager/wiki/Schlage-integration
 [wiki-akuvox]: https://github.com/raman325/lock_code_manager/wiki/Akuvox-integration
 [wiki-virtual]: https://github.com/raman325/lock_code_manager/wiki/Virtual-integration
