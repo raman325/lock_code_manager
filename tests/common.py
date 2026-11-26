@@ -26,7 +26,7 @@ import weakref
 import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     MockModule,
     MockPlatform,
@@ -1772,20 +1772,19 @@ async def async_setup_mock_lock_entry(hass: HomeAssistant) -> MockConfigEntry:
 
     async def async_setup_entry_init(
         hass: HomeAssistant, config_entry: ConfigEntry
-    ) -> bool:
+    ) -> None:
         """Set up test config entry."""
         await hass.config_entries.async_forward_entry_setups(
             config_entry, [Platform.CALENDAR, Platform.LOCK]
         )
-        return True
 
     async def async_unload_entry_init(
         hass: HomeAssistant, config_entry: ConfigEntry
-    ) -> bool:
+    ) -> None:
         """Unload test config entry."""
-        for platform in (Platform.CALENDAR, Platform.LOCK):
-            await hass.config_entries.async_forward_entry_unload(config_entry, platform)
-        return True
+        await hass.config_entries.async_unload_platforms_or_raise(
+            config_entry, [Platform.CALENDAR, Platform.LOCK]
+        )
 
     mock_platform(hass, f"{LOCK_DEVICE_DOMAIN}.config_flow")
     mock_integration(

@@ -12,7 +12,7 @@ import logging
 
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.const import STATE_ON
 from homeassistant.core import HomeAssistant

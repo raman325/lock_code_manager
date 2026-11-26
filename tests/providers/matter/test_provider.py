@@ -13,7 +13,7 @@ from matter_server.client.exceptions import MatterClientException
 from matter_server.common.errors import UnknownError
 from matter_server.common.models import EventType, MatterNodeEvent
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.components.matter.helpers import get_node_from_device_entry
 from homeassistant.config_entries import ConfigEntryState

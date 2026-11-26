@@ -4,7 +4,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigEntryDisabler
 from homeassistant.const import CONF_ENABLED, CONF_NAME, CONF_PIN

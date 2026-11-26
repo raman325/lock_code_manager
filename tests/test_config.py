@@ -4,7 +4,7 @@ from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.const import CONF_NAME, CONF_PIN

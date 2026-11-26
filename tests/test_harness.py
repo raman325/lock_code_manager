@@ -17,7 +17,7 @@ from unittest.mock import PropertyMock, patch
 import freezegun.api
 from freezegun.api import FrozenDateTimeFactory
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.components.text import (
     ATTR_VALUE,

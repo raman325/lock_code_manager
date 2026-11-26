@@ -33,6 +33,7 @@ from homeassistant.const import (
     EVENT_LOVELACE_UPDATED,
 )
 from homeassistant.core import (
+    DOMAIN as HOMEASSISTANT_DOMAIN,
     CoreState,
     Event,
     HomeAssistant,
@@ -237,7 +238,7 @@ _MOVED_KEYS = frozenset({CONF_USERS, CONF_SLOTS, CONF_SLOT_ASSIGNMENT})
 
 async def async_migrate_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
-) -> bool:
+) -> None:
     """Migrate old entry data to new format."""
     # The unmanaged-code sweep runs against the finished entry, at the bottom,
     # not from the step that introduced it: it asks every entry what it
@@ -496,8 +497,6 @@ async def async_migrate_entry(
         # versions left behind are offered up once, measured against the
         # configuration users will actually have.
         await async_sweep_unmanaged_codes(hass, config_entry)
-
-    return True
 
 
 @callback
@@ -1000,7 +999,7 @@ def _setup_entry_after_start(
 
 async def async_setup_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
-) -> bool:
+) -> None:
     """Set up a config entry."""
     ent_reg = er.async_get(hass)
     try:
@@ -1052,8 +1051,6 @@ async def async_setup_entry(
                 unsub()
 
         config_entry.async_on_unload(_safe_unsub)
-
-    return True
 
 
 async def async_unload_lock(
@@ -1148,7 +1145,7 @@ async def _async_release_locks(
 
 async def async_unload_entry(
     hass: HomeAssistant, config_entry: LockCodeManagerConfigEntry
-) -> bool:
+) -> None:
     """Unload an entry, stopping its slots before tearing down platforms."""
     hass_data = hass.data[DATA]
     runtime_data = config_entry.runtime_data
@@ -1198,7 +1195,13 @@ async def async_unload_entry(
     if not other_loaded_entries:
         await _async_cleanup_strategy_resource(hass, hass_data)
 
-    return unload_ok
+    # Raised last rather than through async_unload_platforms_or_raise, so a
+    # failed platform unload still releases the strategy resource above.
+    if not unload_ok:
+        raise ConfigEntryError(
+            translation_domain=HOMEASSISTANT_DOMAIN,
+            translation_key="unload_platforms_failed",
+        )
 
 
 async def async_remove_entry(

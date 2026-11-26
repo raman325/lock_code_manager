@@ -15,7 +15,7 @@ against itself.
 import asyncio
 
 from hypothesis import given, strategies as st
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     MockConfigEntry,
     async_test_home_assistant,
 )

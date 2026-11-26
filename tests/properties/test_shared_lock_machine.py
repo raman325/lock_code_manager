@@ -69,7 +69,7 @@ from hypothesis.stateful import (
     rule,
 )
 import pytest
-from pytest_homeassistant_custom_component.common import (
+from pytest_homeassistant.common import (
     INSTANCES,
     MockConfigEntry,
     async_test_home_assistant,

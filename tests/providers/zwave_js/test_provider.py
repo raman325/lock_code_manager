@@ -3,7 +3,7 @@
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 from zwave_js_server.const import NodeStatus
 from zwave_js_server.const.command_class.access_control import (
     UserCredentialType,

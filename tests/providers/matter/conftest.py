@@ -10,7 +10,7 @@ from matter_server.client.models.node import MatterNode
 from matter_server.common.const import SCHEMA_VERSION
 from matter_server.common.models import ServerInfoMessage
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from homeassistant.components.matter.const import CREDENTIAL_TYPE_REVERSE_MAP
 from homeassistant.const import (
