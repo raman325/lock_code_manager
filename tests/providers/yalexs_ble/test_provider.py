@@ -9,6 +9,7 @@ from homeassistant.components.lock import LockState
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from custom_components.lock_code_manager.model.credentials import (
     Credential,
@@ -121,6 +122,8 @@ async def test_provider_constants(yalexs_ble_lock: YaleXSBLELock) -> None:
     assert yalexs_ble_lock.domain == YALEXS_BLE_DOMAIN
     assert yalexs_ble_lock.supports_code_slot_events is True
     assert yalexs_ble_lock.usercode_scan_interval.total_seconds() == 15 * 60
+    # One Bluetooth exchange per slot, so the deadline scales with the walk.
+    assert yalexs_ble_lock.per_exchange_budget == 300.0
 
 
 async def test_capabilities_are_pin_only(yalexs_ble_lock: YaleXSBLELock) -> None:
@@ -223,6 +226,9 @@ async def test_set_credential_without_a_name(
     """No name is sent when the user has none."""
     set_handler = AsyncMock(return_value=None)
     register_mock_service(hass, YALEXS_BLE_DOMAIN, "set_lock_credential", set_handler)
+    register_mock_service(
+        hass, YALEXS_BLE_DOMAIN, "clear_lock_credential", AsyncMock(return_value=None)
+    )
 
     await yalexs_ble_lock.async_set_credential(
         3, _pin_cred(3, "1234"), "1234", name=None
@@ -236,7 +242,7 @@ async def test_set_credential_refusal_is_the_slots(
 ) -> None:
     """The integration's validation error (e.g. PIN in another slot) is a refusal."""
     refusal = ServiceValidationError(
-        translation_domain=YALEXS_BLE_DOMAIN, translation_key="pin_in_use"
+        translation_domain=YALEXS_BLE_DOMAIN, translation_key="pin_already_in_use"
     )
     register_mock_service(
         hass, YALEXS_BLE_DOMAIN, "set_lock_credential", AsyncMock(side_effect=refusal)
@@ -249,21 +255,84 @@ async def test_set_credential_refusal_is_the_slots(
     assert caught.value.code_slot == 3
 
 
-async def test_set_credential_other_error_is_a_failed_operation(
+def _communication_error() -> HomeAssistantError:
+    """What core raises when the lock cannot be reached (OSError, BleakError, timeout)."""
+    return HomeAssistantError(
+        translation_domain=YALEXS_BLE_DOMAIN, translation_key="communication_error"
+    )
+
+
+async def test_set_credential_communication_error_is_a_failed_operation(
     hass: HomeAssistant, yalexs_ble_lock: YaleXSBLELock
 ) -> None:
-    """A lock error that is not a refusal fails the operation."""
+    """Core's communication_error is no refusal: the operation failed."""
     register_mock_service(
         hass,
         YALEXS_BLE_DOMAIN,
         "set_lock_credential",
-        AsyncMock(side_effect=HomeAssistantError("lock did not answer")),
+        AsyncMock(side_effect=_communication_error()),
     )
 
-    with pytest.raises(LockOperationFailed, match="lock did not answer"):
+    with pytest.raises(LockOperationFailed):
         await yalexs_ble_lock.async_set_credential(
-            3, _pin_cred(3, "1234"), "1234", name=None
+            3, _pin_cred(3, "1234"), "1234", name="Guest"
         )
+
+
+async def test_get_users_communication_error_is_a_failed_operation(
+    hass: HomeAssistant,
+    yalexs_ble_lock: YaleXSBLELock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A slot the lock could not be asked about fails the read."""
+    register_mock_service(
+        hass,
+        YALEXS_BLE_DOMAIN,
+        "get_lock_credential_status",
+        AsyncMock(side_effect=_communication_error()),
+    )
+
+    with pytest.raises(LockOperationFailed):
+        await yalexs_ble_lock.async_get_users()
+
+
+async def test_set_credential_without_a_name_clears_the_old_name_first(
+    hass: HomeAssistant, yalexs_ble_lock: YaleXSBLELock
+) -> None:
+    """A nameless set clears the slot first, so the old holder's name is dropped."""
+    order: list[str] = []
+    clear_handler = AsyncMock(side_effect=lambda call: order.append("clear"))
+    set_handler = AsyncMock(side_effect=lambda call: order.append("set"))
+    register_mock_service(
+        hass, YALEXS_BLE_DOMAIN, "clear_lock_credential", clear_handler
+    )
+    register_mock_service(hass, YALEXS_BLE_DOMAIN, "set_lock_credential", set_handler)
+
+    await yalexs_ble_lock.async_set_credential(
+        3, _pin_cred(3, "1234"), "1234", name=None
+    )
+
+    assert order == ["clear", "set"]
+    assert clear_handler.await_args.args[0].data["credential_index"] == 3
+
+
+async def test_set_credential_with_a_name_does_not_clear_first(
+    hass: HomeAssistant, yalexs_ble_lock: YaleXSBLELock
+) -> None:
+    """A named set needs no clear: the name replaces the old one."""
+    clear_handler = AsyncMock(return_value=None)
+    register_mock_service(
+        hass, YALEXS_BLE_DOMAIN, "clear_lock_credential", clear_handler
+    )
+    register_mock_service(
+        hass, YALEXS_BLE_DOMAIN, "set_lock_credential", AsyncMock(return_value=None)
+    )
+
+    await yalexs_ble_lock.async_set_credential(
+        3, _pin_cred(3, "1234"), "1234", name="Guest"
+    )
+
+    clear_handler.assert_not_awaited()
 
 
 async def test_delete_credential_already_empty(
@@ -369,3 +438,68 @@ async def test_setup_is_idempotent_and_unload_stops_listening(
         hass.bus.async_fire(EVENT_LOCK_ACTIVITY, _KEYPAD_UNLOCK)
         await hass.async_block_till_done()
         assert fire.call_count == 1
+
+
+async def test_hard_refresh_reads_managed_slots_and_the_asked_ones(
+    hass: HomeAssistant,
+    yalexs_ble_lock: YaleXSBLELock,
+    simple_lcm_config_entry: MockConfigEntry,
+) -> None:
+    """A hard refresh for an unmanaged slot reads it as well as the managed ones."""
+    status = _status_handler({7})
+    register_mock_service(hass, YALEXS_BLE_DOMAIN, "get_lock_credential_status", status)
+
+    codes = await yalexs_ble_lock.async_hard_refresh_codes([7])
+
+    assert codes[7] == SlotCredential.unreadable()
+    asked = sorted(
+        call.args[0].data["credential_index"] for call in status.await_args_list
+    )
+    assert asked == [1, 2, 7]
+
+
+async def test_activity_for_the_main_entity_reaches_the_secure_mode_entity(
+    hass: HomeAssistant, yalexs_ble_config_entry: MockConfigEntry
+) -> None:
+    """
+    The event carries the main lock entity; a provider on the secure-mode entity still hears it.
+
+    Both entities belong to the lock's device, which is what is matched.
+    """
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=yalexs_ble_config_entry.entry_id,
+        connections={(dr.CONNECTION_BLUETOOTH, "AA:BB:CC:DD:EE:01")},
+    )
+    entity_reg = er.async_get(hass)
+    entity_reg.async_get_or_create(
+        "lock",
+        YALEXS_BLE_DOMAIN,
+        "main",
+        config_entry=yalexs_ble_config_entry,
+        device_id=device.id,
+        suggested_object_id="front_door",
+    )
+    secure = entity_reg.async_get_or_create(
+        "lock",
+        YALEXS_BLE_DOMAIN,
+        "secure",
+        config_entry=yalexs_ble_config_entry,
+        device_id=device.id,
+        suggested_object_id="front_door_secure_mode",
+    )
+    lock = YaleXSBLELock(
+        hass, dr.async_get(hass), entity_reg, yalexs_ble_config_entry, secure
+    )
+    await lock.async_setup(yalexs_ble_config_entry)
+    with patch.object(lock, "async_fire_code_slot_event") as fire:
+        hass.bus.async_fire(
+            EVENT_LOCK_ACTIVITY,
+            {**_KEYPAD_UNLOCK, "entity_id": "lock.front_door", "device_id": device.id},
+        )
+        hass.bus.async_fire(
+            EVENT_LOCK_ACTIVITY,
+            {**_KEYPAD_UNLOCK, "entity_id": "lock.other", "device_id": "another"},
+        )
+        await hass.async_block_till_done()
+    fire.assert_called_once_with(3, to_locked=False, credential_type=CredentialType.PIN)
+    await lock.async_unload(False)

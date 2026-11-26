@@ -87,6 +87,8 @@ The package (`custom_components/lock_code_manager/`) is split into layers.
 - `zwave_js.py`: Z-Wave JS lock implementation
 - `matter.py`: Matter lock implementation
 - `schlage.py`: Schlage WiFi lock implementation
+- `yalexs_ble.py`: Yale Access Bluetooth lock implementation (keypad credential actions of
+  home-assistant/core#185596; write-only PINs, code events from `yalexs_ble_lock_activity`)
 - `akuvox.py`: Akuvox intercom/lock implementation
 - `zha.py`: Zigbee Home Automation lock implementation
 - `zigbee2mqtt.py`: Zigbee2MQTT lock implementation (via MQTT)

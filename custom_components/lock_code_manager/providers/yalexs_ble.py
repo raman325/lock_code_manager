@@ -21,7 +21,7 @@ integration fires when the lock's activity log shows a keypad unlock
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any, override
+from typing import Any, ClassVar, override
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE
@@ -53,6 +53,14 @@ class YaleXSBLELock(BaseLock):
     """Yale Access Bluetooth lock provider (write-only PINs, slot events)."""
 
     _activity_unsub: CALLBACK_TYPE | None = field(default=None, init=False)
+
+    # One Bluetooth keycode exchange per slot. yalexs-ble retries an operation
+    # up to DEFAULT_ATTEMPTS (4) times, each a connect (bleak-retry-connector's
+    # own attempts, up to ~30 s through a proxy) plus up to 3 writes that each
+    # wait RESPONSE_TIMEOUT (10 s) -- about 4 minutes in the worst case. This
+    # sits above that, so the library's own timeouts always claim a silent
+    # slot first.
+    per_exchange_budget: ClassVar[float | None] = 300.0
 
     @property
     @override
@@ -157,6 +165,20 @@ class YaleXSBLELock(BaseLock):
         if name:
             data["name"] = name
         async with self._serialize_sequence():
+            if not name:
+                # set_lock_credential stores a slot name only when one is
+                # given, so without one the previous holder's name would stay
+                # on the slot (in changed_by and the logbook). Clearing first
+                # drops it; the set clears the slot on the lock anyway.
+                await self.async_call_service(
+                    YALEXS_BLE_DOMAIN,
+                    "clear_lock_credential",
+                    service_data={
+                        "entity_id": self.lock.entity_id,
+                        "credential_type": CREDENTIAL_TYPE_PIN,
+                        "credential_index": code_slot,
+                    },
+                )
             await self.async_call_service(
                 YALEXS_BLE_DOMAIN,
                 "set_lock_credential",
@@ -189,13 +211,19 @@ class YaleXSBLELock(BaseLock):
     async def async_hard_refresh_codes(
         self, slots: Collection[int] | None = None
     ) -> dict[int, SlotCredential]:
-        """Every read goes to the lock, so a hard refresh is a normal read."""
-        return await self.async_get_usercodes()
+        """Every read goes to the lock, so a hard refresh is a normal read of these slots."""
+        return await self.async_get_usercodes(self.managed_slots | set(slots or ()))
 
     @callback
     def _async_on_activity(self, event: Event) -> None:
         data = event.data
-        if data.get("entity_id") != self.lock.entity_id:
+        # The integration fires the event for its main lock entity, also when
+        # this provider manages the secure-mode lock entity of the same lock,
+        # so match on the device; the entity id is the fallback without one.
+        if self.lock.device_id is not None:
+            if data.get("device_id") != self.lock.device_id:
+                return
+        elif data.get("entity_id") != self.lock.entity_id:
             return
         if data.get("source") != SOURCE_PIN or data.get("master_code"):
             return
