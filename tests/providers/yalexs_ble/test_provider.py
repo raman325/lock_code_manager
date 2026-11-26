@@ -503,3 +503,29 @@ async def test_activity_for_the_main_entity_reaches_the_secure_mode_entity(
         await hass.async_block_till_done()
     fire.assert_called_once_with(3, to_locked=False, credential_type=CredentialType.PIN)
     await lock.async_unload(False)
+
+
+async def test_smart_code_handle_has_99_pin_slots(
+    hass: HomeAssistant, yalexs_ble_config_entry: MockConfigEntry
+) -> None:
+    """The Smart Code Handle (CERES) refuses slot 100 and up, so it has 99 slots."""
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=yalexs_ble_config_entry.entry_id,
+        connections={(dr.CONNECTION_BLUETOOTH, "AA:BB:CC:DD:EE:02")},
+        model="CERES",
+    )
+    entity_reg = er.async_get(hass)
+    entity = entity_reg.async_get_or_create(
+        "lock",
+        YALEXS_BLE_DOMAIN,
+        "handle",
+        config_entry=yalexs_ble_config_entry,
+        device_id=device.id,
+    )
+    lock = YaleXSBLELock(
+        hass, dr.async_get(hass), entity_reg, yalexs_ble_config_entry, entity
+    )
+
+    capabilities = await lock.async_get_capabilities()
+
+    assert capabilities.credential_types[CredentialType.PIN].num_slots == 99

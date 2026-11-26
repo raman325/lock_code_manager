@@ -46,6 +46,9 @@ YALEXS_BLE_DOMAIN = "yalexs_ble"
 EVENT_LOCK_ACTIVITY = "yalexs_ble_lock_activity"
 CREDENTIAL_TYPE_PIN = "pin"
 SOURCE_PIN = "pin"
+MAX_PIN_SLOTS = 250
+CERES_MODEL = "CERES"  # Yale Smart Code Handle
+CERES_PIN_SLOTS = 99
 
 
 @dataclass(repr=False, eq=False)
@@ -80,15 +83,30 @@ class YaleXSBLELock(BaseLock):
         """Each slot read is one Bluetooth round trip; keep the scan modest."""
         return timedelta(minutes=15)
 
+    def _num_pin_slots(self) -> int:
+        """
+        Return how many keypad PIN slots the lock's model has.
+
+        The Smart Code Handle (``CERES``) keeps user PINs in slots 1-99 (its
+        master code is slot 0) and refuses KEYCODE_COMMIT for slot 100 and up
+        (NACK 0x3B). Other models take what the integration validates, 1-250.
+        """
+        device = (
+            self.dev_reg.async_get(self.lock.device_id) if self.lock.device_id else None
+        )
+        if device is not None and (device.model or "").startswith(CERES_MODEL):
+            return CERES_PIN_SLOTS
+        return MAX_PIN_SLOTS
+
     @override
     async def async_get_capabilities(self) -> LockCapabilities:
-        """PIN only, slots 1-250 and 4-8 digits, as the yalexs_ble actions validate."""
+        """PIN only, the model's slots and 4-8 digits, as the yalexs_ble actions validate."""
         return LockCapabilities(
             supports_user_management=False,
             max_users=0,
             credential_types={
                 CredentialType.PIN: CredentialTypeCapability(
-                    num_slots=250,
+                    num_slots=self._num_pin_slots(),
                     min_length=4,
                     max_length=8,
                     supports_learn=False,
